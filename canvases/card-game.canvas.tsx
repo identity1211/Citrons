@@ -1921,7 +1921,7 @@ function Table({
       style={{
         width: "100%",
         minHeight: "100vh",
-        background: theme.bg.editor,
+        background: "#145230",
         display: "flex",
         flexDirection: "column",
         alignItems: "center",

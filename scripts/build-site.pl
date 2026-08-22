@@ -4,7 +4,7 @@ use warnings;
 use utf8;
 use Encode qw(decode encode);
 
-my $src = "/Users/denis/.cursor/projects/Users-denis-Downloads-projects-c-Users-Deniss-Desktop-Citron/canvases/card-game.canvas.tsx";
+my $src = "/Users/denis/Downloads/projects/c-Users-Deniss-Desktop-Citron/canvases/card-game.canvas.tsx";
 open my $in, "<:raw", $src or die $!;
 local $/;
 my $game = decode("UTF-8", <$in>);
@@ -20,6 +20,7 @@ type ReactNode = React.ReactNode;
 
 function useHostTheme() {
   return {
+    bg: { editor: "#145230" },
     text: {
       primary: "#f5f0e6",
       secondary: "rgba(255,255,255,0.72)",
