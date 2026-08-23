@@ -2,14 +2,20 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
   <title>Citrons — TwoCircles Edition</title>
   <meta name="description" content="Карточная игра Citrons. Соло против ботов." />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%231a6b3c'/><text x='16' y='22' text-anchor='middle' font-size='16' fill='%23f5f0e6'>C</text></svg>" />
   <style>
-    html, body, #root { margin: 0; height: 100%; background: #145230; }
-    body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; }
-    button { font-family: inherit; }
+    html, body { margin: 0; height: 100%; height: 100dvh; background: #145230; overflow: hidden; }
+    #root { height: 100%; overflow: auto; -webkit-overflow-scrolling: touch; }
+    body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; -webkit-text-size-adjust: 100%; }
+    button { font-family: inherit; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+    @media (orientation: landscape) and (max-height: 520px) {
+      .lobby-fan-wrap { height: 72px !important; margin: 2px 0 10px !important; }
+      .lobby-fan-wrap .lobby-fan-card { top: 4px !important; }
+      .lobby-play-btn, .lobby-ghost-btn { height: 42px !important; }
+    }
   </style>
 </head>
 <body>
@@ -1325,9 +1331,10 @@ function FeltShell({
   return (
     <div
       style={{
-        minHeight: "100vh",
+        minHeight: "100dvh",
         position: "relative",
-        overflow: "hidden",
+        overflowX: "hidden",
+        overflowY: "auto",
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
@@ -1361,6 +1368,7 @@ function FeltShell({
 function LobbyCardFan() {
   return (
     <div
+      className="lobby-fan-wrap"
       style={{
         position: "relative",
         width: "min(320px, 86vw)",
@@ -1563,7 +1571,7 @@ function Lobby({ onStart, onRules }: { onStart: (count: number) => void; onRules
   }
 
   return (
-    <FeltShell center style={{ padding: "32px 20px" }}>
+    <FeltShell center style={{ padding: "min(32px, 5vh) 16px" }}>
       <div
         style={{
           width: "100%",
@@ -1579,7 +1587,7 @@ function Lobby({ onStart, onRules }: { onStart: (count: number) => void; onRules
           <div
             style={{
               fontFamily: 'Georgia, "Times New Roman", serif',
-              fontSize: "clamp(48px, 12vw, 72px)",
+              fontSize: "clamp(36px, 11vh, 72px)",
               fontWeight: 700,
               color: "#f5f0e6",
               letterSpacing: 1,
@@ -1818,6 +1826,47 @@ function swapPlayerCards(player: PlayerState, handIdx: number, faceUpIdx: number
   return { ...player, hand: sortHand(hand), faceUp };
 }
 
+function useFitScale(baseW: number, baseH: number, extraX: number, extraY: number) {
+  const [scale, setScale] = useState(1);
+  useEffect(() => {
+    const fit = () => {
+      const vv = window.visualViewport;
+      const vw = vv?.width ?? window.innerWidth;
+      const vh = vv?.height ?? window.innerHeight;
+      const w = Math.max(220, vw - extraX);
+      const h = Math.max(140, vh - extraY);
+      setScale(Math.max(0.28, Math.min(w / baseW, h / baseH, 1.15)));
+    };
+    fit();
+    window.addEventListener("resize", fit);
+    window.addEventListener("orientationchange", fit);
+    window.visualViewport?.addEventListener("resize", fit);
+    window.visualViewport?.addEventListener("scroll", fit);
+    return () => {
+      window.removeEventListener("resize", fit);
+      window.removeEventListener("orientationchange", fit);
+      window.visualViewport?.removeEventListener("resize", fit);
+      window.visualViewport?.removeEventListener("scroll", fit);
+    };
+  }, [baseW, baseH, extraX, extraY]);
+  return scale;
+}
+
+const SIDE_BTN: CSSProperties = {
+  width: 118,
+  minHeight: 44,
+  padding: "10px 8px",
+  borderRadius: 10,
+  fontSize: 13,
+  fontWeight: 700,
+  cursor: "pointer",
+  touchAction: "manipulation",
+  lineHeight: 1.25,
+  userSelect: "none",
+  WebkitUserSelect: "none",
+  WebkitTapHighlightColor: "transparent",
+};
+
 // ─── Table ───────────────────────────────────────────────────────────────────
 
 function Table({
@@ -1966,82 +2015,103 @@ function Table({
         ? discard.slice(0, discard.length - flyAnim.cards.length)
         : discard;
 
-  const hasAnyLegal =
-    isHumanTurn &&
-    ((humanZone === "hand" && (handLegal?.some(Boolean) || faceUpLegal?.some(Boolean))) ||
-      (humanZone === "faceUp" && faceUpLegal?.some(Boolean)) ||
-      humanZone === "faceDown");
+  const showSide = isSwap || isHumanTurn;
+  const hasStandings = finishOrder.length > 0 || phase === "finished";
+  const scale = useFitScale(840, 560, showSide ? 156 : 28, hasStandings ? 84 : 52);
+
+  const hint = isSwap
+    ? humanReady
+      ? ""
+      : "Кликни карту в руке, затем открытую на столе"
+    : isHumanTurn
+      ? pickupAwaitTable
+        ? humanZone === "faceDown"
+          ? "Кликни закрытую карту со стола"
+          : "Кликни открытую карту того же ранга"
+        : humanZone === "faceDown"
+          ? "Кликни закрытую карту"
+          : selectionCount(playSelected) === 0
+            ? humanZone === "hand"
+              ? combineOk
+                ? "Можно добавить открытые того же ранга"
+                : "Выбери карты одного ранга"
+              : "Выбери открытые одного ранга"
+            : `Выбрано: ${selectionCount(playSelected)} × ${selRank}`
+      : "";
 
   return (
     <div
       style={{
         width: "100%",
-        minHeight: "100vh",
+        height: "100%",
+        maxHeight: "100dvh",
         background: "#145230",
         display: "flex",
         flexDirection: "column",
-        alignItems: "center",
-        padding: "16px 0 8px",
+        overflow: "hidden",
+        boxSizing: "border-box",
+        padding:
+          "max(4px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(6px, env(safe-area-inset-bottom)) max(6px, env(safe-area-inset-left))",
       }}
     >
       <div
         style={{
           width: "100%",
-          maxWidth: 900,
           display: "flex",
           alignItems: "center",
-          padding: "0 20px",
-          marginBottom: 12,
+          gap: 8,
+          padding: "2px 4px",
+          flexShrink: 0,
         }}
       >
         <button
           onClick={onReset}
           style={{
-            padding: "4px 14px",
+            padding: "6px 12px",
             borderRadius: 6,
             border: `1px solid ${theme.stroke.secondary}`,
             background: theme.fill.tertiary,
             color: theme.text.primary,
             cursor: "pointer",
             fontSize: 12,
+            touchAction: "manipulation",
           }}
         >
           ← Lobby
         </button>
         <Spacer />
-        <Text style={{ color: theme.text.secondary, fontSize: 12 }}>{statusMsg}</Text>
+        <Text style={{ color: theme.text.secondary, fontSize: 11 }}>{statusMsg}</Text>
       </div>
 
       {(finishOrder.length > 0 || phase === "finished") && (
         <div
           style={{
-            marginBottom: 12,
-            padding: "10px 20px",
+            margin: "2px 4px 4px",
+            padding: "4px 10px",
             borderRadius: 8,
             background: theme.fill.secondary,
             border: `1px solid ${theme.stroke.focused}`,
             color: theme.text.primary,
-            fontSize: 13,
-            maxWidth: 840,
+            fontSize: 11,
             width: "100%",
             boxSizing: "border-box",
+            flexShrink: 0,
           }}
         >
           {phase === "finished" ? (
-            <div style={{ fontWeight: 700, marginBottom: 6 }}>Итоги</div>
+            <div style={{ fontWeight: 700, marginBottom: 2 }}>Итоги</div>
           ) : (
-            <div style={{ fontWeight: 600, marginBottom: 4, color: theme.text.secondary }}>
+            <div style={{ fontWeight: 600, marginBottom: 2, color: theme.text.secondary }}>
               Вышли из игры — остальные продолжают
             </div>
           )}
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
             {finishOrder.map((pIdx, i) => {
               const place = i + 1;
               const isLast = phase === "finished" && place === finishOrder.length && finishOrder.length > 1;
               return (
                 <span key={pIdx} style={{ fontWeight: pIdx === 0 || place === 1 ? 700 : 500 }}>
                   {isLast ? "Последний" : `${place} место`}: {players[pIdx].name}
-                  {i < finishOrder.length - 1 ? "" : ""}
                   {i < finishOrder.length - 1 ? <span style={{ opacity: 0.4 }}> · </span> : null}
                 </span>
               );
@@ -2052,9 +2122,31 @@ function Table({
 
       <div
         style={{
+          flex: 1,
+          minHeight: 0,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 8,
+        }}
+      >
+      <div
+        style={{
+          width: 840 * scale,
+          height: 560 * scale,
           position: "relative",
+          flexShrink: 0,
+        }}
+      >
+      <div
+        style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
           width: 840,
           height: 560,
+          transform: `scale(${scale})`,
+          transformOrigin: "top left",
           borderRadius: 80,
           background: "#1a6b3c",
           border: "10px solid #145230",
@@ -2062,8 +2154,9 @@ function Table({
           flexDirection: "column",
           alignItems: "center",
           justifyContent: "space-between",
-          padding: "28px 50px",
+          padding: "20px 48px 16px",
           overflow: "visible",
+          boxSizing: "border-box",
         }}
       >
         <div
@@ -2159,8 +2252,14 @@ function Table({
             display: "flex",
             flexDirection: "column",
             alignItems: "center",
-            gap: 8,
+            gap: 6,
             zIndex: 1,
+            padding: isPlaying && currentPlayer === 0 && phase === "playing" ? "4px 10px 2px" : 0,
+            borderRadius: 16,
+            boxShadow:
+              isPlaying && currentPlayer === 0 && phase === "playing"
+                ? "0 0 0 2px rgba(241,196,15,0.55)"
+                : undefined,
           }}
         >
           <TableStack
@@ -2191,13 +2290,6 @@ function Table({
             onSelectFaceDown={onSelectFaceDown}
             swapKey={swapTick}
           />
-          <SeatLabel
-            name={players[0].name}
-            isHuman
-            ready={isSwap ? humanReady : undefined}
-            isTurn={isPlaying && currentPlayer === 0 && phase === "playing"}
-            place={finishOrder.includes(0) ? finishOrder.indexOf(0) + 1 : null}
-          />
           {(playerHand(0).length > 0 || !isPlaying) && (
             <Hand
               cards={playerHand(0)}
@@ -2219,69 +2311,60 @@ function Table({
           )}
         </div>
       </div>
+      </div>
 
-      {/* Controls */}
-      {isSwap && (
-        <div style={{ marginTop: 14, display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
-          {!humanReady && (
-            <Text style={{ color: theme.text.secondary, fontSize: 12 }}>
-              Кликни карту в руке, затем открытую на столе (1–3 раза)
-            </Text>
+      {showSide && (
+        <div
+          style={{
+            width: 124,
+            flexShrink: 0,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "stretch",
+            justifyContent: "center",
+            gap: 8,
+            zIndex: 5,
+          }}
+        >
+          {hint ? (
+            <div
+              style={{
+                color: "rgba(255,255,255,0.7)",
+                fontSize: 11,
+                lineHeight: 1.35,
+                textAlign: "center",
+              }}
+            >
+              {hint}
+            </div>
+          ) : null}
+
+          {isSwap && (
+            <button
+              onClick={onReady}
+              disabled={humanReady}
+              style={{
+                ...SIDE_BTN,
+                border: "none",
+                background: humanReady ? "#27ae60" : theme.accent.control,
+                color: "#fff",
+                cursor: humanReady ? "default" : "pointer",
+              }}
+            >
+              Ready
+            </button>
           )}
-          <button
-            onClick={onReady}
-            disabled={humanReady}
-            style={{
-              padding: "10px 36px",
-              borderRadius: 8,
-              border: "none",
-              background: humanReady ? "#27ae60" : theme.accent.control,
-              color: "#fff",
-              fontSize: 15,
-              fontWeight: 700,
-              cursor: humanReady ? "default" : "pointer",
-            }}
-          >
-            Ready
-          </button>
-        </div>
-      )}
 
-      {isHumanTurn && (
-        <div style={{ marginTop: 14, display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
-          <Text style={{ color: theme.text.secondary, fontSize: 12 }}>
-            {pickupAwaitTable
-              ? humanZone === "faceDown"
-                ? "Кликни закрытую карту со стола — заберёшь её вместе со сбросом"
-                : "Кликни открытую карту — заберёшь все такого ранга вместе со сбросом"
-              : humanZone === "faceDown"
-                ? "Кликни закрытую карту — она откроется и сыграет (или заберёшь сброс)"
-                : selectionCount(playSelected) === 0
-                  ? humanZone === "hand"
-                    ? combineOk
-                      ? "Последние карты в руке — можно добавить открытые того же ранга"
-                      : "Выбери карты одного ранга из руки, затем «Ход»"
-                    : "Выбери открытые карты одного ранга, затем «Ход»"
-                  : `Выбрано: ${selectionCount(playSelected)} × ${selRank}${
-                      playSelected.faceUp.length > 0 && playSelected.hand.length > 0
-                        ? " (рука + стол)"
-                        : ""
-                    }`}
-          </Text>
-          <Row gap={10}>
-            {pickupAwaitTable ? (
+          {isHumanTurn &&
+            (pickupAwaitTable ? (
               <>
                 <button
                   onClick={onPickUpOnly}
                   style={{
-                    padding: "10px 28px",
-                    borderRadius: 8,
+                    ...SIDE_BTN,
                     border: "none",
                     background: theme.accent.control,
                     color: "#fff",
-                    fontSize: 14,
-                    fontWeight: 700,
-                    cursor: "pointer",
                   }}
                 >
                   Только сброс
@@ -2289,14 +2372,11 @@ function Table({
                 <button
                   onClick={onCancelPickupAwait}
                   style={{
-                    padding: "10px 28px",
-                    borderRadius: 8,
+                    ...SIDE_BTN,
                     border: `1px solid ${theme.stroke.secondary}`,
                     background: theme.fill.tertiary,
                     color: theme.text.primary,
-                    fontSize: 14,
                     fontWeight: 600,
-                    cursor: "pointer",
                   }}
                 >
                   Отмена
@@ -2309,13 +2389,10 @@ function Table({
                     onClick={onPlay}
                     disabled={!canPlaySelected}
                     style={{
-                      padding: "10px 28px",
-                      borderRadius: 8,
+                      ...SIDE_BTN,
                       border: "none",
-                      background: canPlaySelected ? theme.accent.control : theme.fill.tertiary,
-                      color: canPlaySelected ? "#fff" : theme.text.tertiary,
-                      fontSize: 14,
-                      fontWeight: 700,
+                      background: canPlaySelected ? "#f1c40f" : theme.fill.tertiary,
+                      color: canPlaySelected ? "#1a2e1a" : theme.text.tertiary,
                       cursor: canPlaySelected ? "pointer" : "default",
                     }}
                   >
@@ -2326,12 +2403,10 @@ function Table({
                   onClick={onPickUp}
                   disabled={discard.length === 0}
                   style={{
-                    padding: "10px 28px",
-                    borderRadius: 8,
+                    ...SIDE_BTN,
                     border: `1px solid ${theme.stroke.secondary}`,
                     background: theme.fill.tertiary,
                     color: theme.text.primary,
-                    fontSize: 14,
                     fontWeight: 600,
                     cursor: discard.length === 0 ? "default" : "pointer",
                     opacity: discard.length === 0 ? 0.5 : 1,
@@ -2340,10 +2415,10 @@ function Table({
                   Забрать сброс
                 </button>
               </>
-            )}
-          </Row>
+            ))}
         </div>
       )}
+      </div>
     </div>
   );
 }

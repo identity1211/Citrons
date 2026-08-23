@@ -63,14 +63,20 @@ my $html = <<"HTML";
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
   <title>Citrons — TwoCircles Edition</title>
   <meta name="description" content="Карточная игра Citrons. Соло против ботов." />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%231a6b3c'/><text x='16' y='22' text-anchor='middle' font-size='16' fill='%23f5f0e6'>C</text></svg>" />
   <style>
-    html, body, #root { margin: 0; height: 100%; background: #145230; }
-    body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; }
-    button { font-family: inherit; }
+    html, body { margin: 0; height: 100%; height: 100dvh; background: #145230; overflow: hidden; }
+    #root { height: 100%; overflow: auto; -webkit-overflow-scrolling: touch; }
+    body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; -webkit-text-size-adjust: 100%; }
+    button { font-family: inherit; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+    \@media (orientation: landscape) and (max-height: 520px) {
+      .lobby-fan-wrap { height: 72px !important; margin: 2px 0 10px !important; }
+      .lobby-fan-wrap .lobby-fan-card { top: 4px !important; }
+      .lobby-play-btn, .lobby-ghost-btn { height: 42px !important; }
+    }
   </style>
 </head>
 <body>
