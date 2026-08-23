@@ -2193,6 +2193,11 @@ function Table({
     vp.w - cornerReserve * 2 - tableSpread - humanGap - 12,
   );
   const seats = splitOpponentSeats(opponentCount);
+  const oppTableGap = Math.max(4, Math.round(oppW * 0.14));
+  const sideColW =
+    seats.left.length || seats.right.length
+      ? Math.round(oppW * 3 + oppTableGap * 2 + 18)
+      : 4;
 
   async function toggleFullscreen() {
     if (fsOn) {
@@ -2395,7 +2400,7 @@ function Table({
           background: "#1a6b3c",
           border: short ? "6px solid #145230" : "10px solid #145230",
           display: "grid",
-          gridTemplateColumns: `${seats.left.length ? "auto" : "4px"} minmax(0, 1fr) auto minmax(0, 1fr) ${seats.right.length ? "auto" : "4px"}`,
+          gridTemplateColumns: `${sideColW}px minmax(0, 1fr) ${sideColW}px`,
           gridTemplateRows: "auto minmax(0, 1fr) auto",
           rowGap: short ? 4 : 10,
           columnGap: short ? 4 : 12,
@@ -2429,7 +2434,8 @@ function Table({
             alignItems: "center",
             justifyContent: "center",
             gap: 10,
-            minWidth: seats.left.length ? 80 : 0,
+            width: sideColW,
+            minWidth: sideColW,
             minHeight: 0,
           }}
         >
@@ -2438,7 +2444,7 @@ function Table({
 
         <div
           style={{
-            gridColumn: "2 / 5",
+            gridColumn: 2,
             gridRow: 1,
             zIndex: 1,
             display: "flex",
@@ -2454,7 +2460,7 @@ function Table({
 
         <div
           style={{
-            gridColumn: 5,
+            gridColumn: 3,
             gridRow: "1 / -1",
             zIndex: 1,
             display: "flex",
@@ -2462,7 +2468,8 @@ function Table({
             alignItems: "center",
             justifyContent: "center",
             gap: 10,
-            minWidth: seats.right.length ? 80 : 0,
+            width: sideColW,
+            minWidth: sideColW,
             minHeight: 0,
           }}
         >
@@ -2473,54 +2480,68 @@ function Table({
           style={{
             gridColumn: 2,
             gridRow: 2,
-            zIndex: 2,
-            display: "flex",
-            justifyContent: "center",
-            alignItems: "center",
             minHeight: 0,
             width: "100%",
+            height: "100%",
+            pointerEvents: "none",
           }}
-        >
-          <DeckPile count={drawDeck.length} />
-        </div>
+        />
         <div
           style={{
-            gridColumn: 3,
-            gridRow: 2,
-            zIndex: 2,
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            gap: 8,
-            minHeight: 0,
+            position: "absolute",
+            inset: 0,
+            zIndex: 3,
+            pointerEvents: "none",
           }}
         >
-          {isSwap && (
-            <div style={{ transform: short ? "scale(0.78)" : undefined, transformOrigin: "center" }}>
-              <SwapTimer seconds={swapSeconds} />
-            </div>
-          )}
-          {isPlaying && <DiscardPile cards={displayDiscard} />}
-          {isSwap && (
-            <FeltChip onClick={onReady} disabled={humanReady} kind="ready" label="Ready" />
-          )}
-          {pickupAwaitTable && isHumanTurn && (
-            <FeltChip onClick={onCancelPickupAwait} kind="ghost" label="Отмена" />
-          )}
-        </div>
-        <div
-          style={{
-            gridColumn: 4,
-            gridRow: 2,
-            zIndex: 2,
-            display: "flex",
-            justifyContent: "center",
-            alignItems: "center",
-            minHeight: 0,
-            width: "100%",
-          }}
-        >
-          {isPlaying ? <BurnPile count={burnCount} /> : <div style={{ width: 64, height: 90 }} />}
+          <div
+            style={{
+              position: "absolute",
+              left: "34%",
+              top: short ? "40%" : "46%",
+              transform: "translate(-50%, -50%)",
+              pointerEvents: "auto",
+            }}
+          >
+            <DeckPile count={drawDeck.length} />
+          </div>
+          <div
+            style={{
+              position: "absolute",
+              left: "50%",
+              top: short ? "40%" : "46%",
+              transform: "translate(-50%, -50%)",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: 8,
+              pointerEvents: "auto",
+            }}
+          >
+            {isSwap && (
+              <div style={{ transform: short ? "scale(0.78)" : undefined, transformOrigin: "center" }}>
+                <SwapTimer seconds={swapSeconds} />
+              </div>
+            )}
+            {isPlaying && <DiscardPile cards={displayDiscard} />}
+            {isSwap && (
+              <FeltChip onClick={onReady} disabled={humanReady} kind="ready" label="Ready" />
+            )}
+            {pickupAwaitTable && isHumanTurn && (
+              <FeltChip onClick={onCancelPickupAwait} kind="ghost" label="Отмена" />
+            )}
+          </div>
+          <div
+            style={{
+              position: "absolute",
+              left: "66%",
+              top: short ? "40%" : "46%",
+              transform: "translate(-50%, -50%)",
+              pointerEvents: "auto",
+            }}
+          >
+            {isPlaying ? <BurnPile count={burnCount} /> : <div style={{ width: 64, height: 90 }} />}
+          </div>
         </div>
 
         <div
@@ -2541,7 +2562,7 @@ function Table({
 
         <div
           style={{
-            gridColumn: "2 / 5",
+            gridColumn: 2,
             gridRow: 3,
             zIndex: 2,
             display: "flex",
