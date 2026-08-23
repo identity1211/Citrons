@@ -350,10 +350,10 @@ function aiChoosePlay(
 
 // ─── CSS keyframes ───────────────────────────────────────────────────────────
 
-const STYLE_ID = "card-game-keyframes-v6";
+const STYLE_ID = "card-game-keyframes-v7";
 function ensureKeyframes() {
   if (typeof document === "undefined") return;
-  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5"]) {
+  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6"]) {
     document.getElementById(id)?.remove();
   }
   if (document.getElementById(STYLE_ID)) return;
@@ -428,6 +428,7 @@ function ensureKeyframes() {
       font-family: inherit;
     }
     .felt-chip:active:not(:disabled) { transform: translateY(1px); filter: brightness(0.92); }
+    html:fullscreen, html:-webkit-full-screen { background: #145230; width: 100%; height: 100%; }
     .card-fly { animation: cardFlyToDiscard 0.48s cubic-bezier(0.22, 1, 0.36, 1) both; pointer-events: none; }
     .card-fly-burn { animation: cardFlyToBurn 0.55s cubic-bezier(0.33, 1, 0.68, 1) both; pointer-events: none; }
     .card-fly-pickup { animation: cardFlyToPlayer 0.55s cubic-bezier(0.33, 1, 0.68, 1) both; pointer-events: none; }
@@ -493,13 +494,15 @@ function cardBox(w: number, h: number) {
 }
 
 function useViewport() {
-  const [vp, setVp] = useState({ w: 1024, h: 700 });
+  const [vp, setVp] = useState({ w: 1024, h: 700, x: 0, y: 0 });
   useEffect(() => {
     const fit = () => {
       const vv = window.visualViewport;
       setVp({
         w: Math.max(1, Math.round(vv?.width ?? window.innerWidth)),
         h: Math.max(1, Math.round(vv?.height ?? window.innerHeight)),
+        x: Math.round(vv?.offsetLeft ?? 0),
+        y: Math.round(vv?.offsetTop ?? 0),
       });
     };
     fit();
@@ -515,6 +518,98 @@ function useViewport() {
     };
   }, []);
   return vp;
+}
+
+function isStandaloneDisplay() {
+  if (typeof window === "undefined") return false;
+  return (
+    window.matchMedia("(display-mode: standalone)").matches ||
+    window.matchMedia("(display-mode: fullscreen)").matches ||
+    !!(navigator as Navigator & { standalone?: boolean }).standalone
+  );
+}
+
+function isFullscreenActive() {
+  const doc = document as Document & { webkitFullscreenElement?: Element | null };
+  return !!(document.fullscreenElement || doc.webkitFullscreenElement || isStandaloneDisplay());
+}
+
+function canRequestFullscreen() {
+  const el = document.documentElement as HTMLElement & {
+    requestFullscreen?: (opts?: FullscreenOptions) => Promise<void>;
+    webkitRequestFullscreen?: () => void;
+  };
+  return !!(el.requestFullscreen || el.webkitRequestFullscreen);
+}
+
+async function enterFullscreen(): Promise<"ok" | "unsupported" | "denied"> {
+  if (isFullscreenActive()) return "ok";
+  const el = document.documentElement as HTMLElement & {
+    requestFullscreen?: (opts?: FullscreenOptions) => Promise<void>;
+    webkitRequestFullscreen?: () => void;
+  };
+  if (!el.requestFullscreen && !el.webkitRequestFullscreen) return "unsupported";
+  try {
+    if (el.requestFullscreen) await el.requestFullscreen({ navigationUI: "hide" });
+    else el.webkitRequestFullscreen?.();
+  } catch {
+    return "denied";
+  }
+  try {
+    await (screen.orientation as ScreenOrientation & { lock?: (m: string) => Promise<void> })?.lock?.("landscape");
+  } catch {
+    /* not supported outside fullscreen on many browsers */
+  }
+  return "ok";
+}
+
+async function exitFullscreen() {
+  const doc = document as Document & { webkitExitFullscreen?: () => void };
+  try {
+    if (document.exitFullscreen) await document.exitFullscreen();
+    else doc.webkitExitFullscreen?.();
+  } catch {
+    /* already exited */
+  }
+  try {
+    screen.orientation?.unlock?.();
+  } catch {
+    /* ignore */
+  }
+}
+
+function useFullscreen() {
+  const [on, setOn] = useState(false);
+  useEffect(() => {
+    const sync = () => setOn(isFullscreenActive());
+    sync();
+    document.addEventListener("fullscreenchange", sync);
+    document.addEventListener("webkitfullscreenchange", sync);
+    return () => {
+      document.removeEventListener("fullscreenchange", sync);
+      document.removeEventListener("webkitfullscreenchange", sync);
+    };
+  }, []);
+  return on;
+}
+
+function VisualFrame({ children }: { children: ReactNode }) {
+  const vp = useViewport();
+  return (
+    <div
+      style={{
+        position: "fixed",
+        left: vp.x,
+        top: vp.y,
+        width: vp.w,
+        height: vp.h,
+        overflow: "hidden",
+        background: "#145230",
+      }}
+    >
+      {children}
+    </div>
+  );
 }
 
 // ─── Playing Card ────────────────────────────────────────────────────────────
@@ -1341,7 +1436,8 @@ function FeltShell({
   return (
     <div
       style={{
-        minHeight: "100dvh",
+        minHeight: "100%",
+        height: "100%",
         position: "relative",
         overflowX: "hidden",
         overflowY: "auto",
@@ -1667,6 +1763,32 @@ function Lobby({ onStart, onRules }: { onStart: (count: number) => void; onRules
               >
                 Мультиплеер
               </button>
+              <button
+                type="button"
+                className="lobby-ghost-btn"
+                onClick={() => void enterFullscreen()}
+                style={{
+                  ...LOBBY_MENU_BTN,
+                  height: 44,
+                  border: "1.5px solid rgba(255,255,255,0.28)",
+                  background: "transparent",
+                  color: "#f5f0e6",
+                  fontSize: 14,
+                }}
+              >
+                Полный экран
+              </button>
+              <div
+                style={{
+                  marginTop: 4,
+                  maxWidth: 300,
+                  fontSize: 11,
+                  lineHeight: 1.4,
+                  color: "rgba(255,255,255,0.55)",
+                }}
+              >
+                Скрывает панели браузера. На iPhone: Поделиться → На экран «Домой».
+              </div>
             </>
           )}
 
@@ -2053,12 +2175,29 @@ function Table({
         : discard;
 
   const vp = useViewport();
-  const short = vp.h < 520;
-  const ownerH = short ? Math.round(clamp(vp.h * 0.24, 80, 108)) : 78;
+  const fsOn = useFullscreen();
+  const [fsNote, setFsNote] = useState("");
+  const short = vp.h < 560;
+  const ownerH = short ? Math.round(clamp(vp.h * 0.26, 64, 86)) : 78;
   const ownerW = Math.round(ownerH * 0.72);
-  const oppH = short ? Math.round(clamp(vp.h * 0.135, 42, 56)) : opponentCount >= 4 ? 54 : 78;
+  const oppH = short ? Math.round(clamp(vp.h * 0.12, 34, 46)) : opponentCount >= 4 ? 54 : 78;
   const oppW = Math.round(oppH * 0.72);
-  const handMax = Math.round(vp.w * (short ? 0.58 : 0.5));
+  const handMax = Math.round(vp.w * (short ? 0.42 : 0.5));
+
+  async function toggleFullscreen() {
+    if (fsOn) {
+      await exitFullscreen();
+      setFsNote("");
+      return;
+    }
+    const res = await enterFullscreen();
+    if (res !== "ok") {
+      setFsNote("iPhone: Поделиться → На экран «Домой» — так скроется Safari");
+      window.setTimeout(() => setFsNote(""), 6000);
+    } else {
+      setFsNote("");
+    }
+  }
 
   const hint = isSwap
     ? humanReady
@@ -2085,21 +2224,19 @@ function Table({
       style={{
         width: "100%",
         height: "100%",
-        maxHeight: "100dvh",
         background: "#145230",
         position: "relative",
         overflow: "hidden",
         boxSizing: "border-box",
-        padding:
-          "max(2px, env(safe-area-inset-top)) max(6px, env(safe-area-inset-right)) max(4px, env(safe-area-inset-bottom)) max(6px, env(safe-area-inset-left))",
+        padding: 0,
       }}
     >
       <button
         onClick={onReset}
         style={{
           position: "absolute",
-          top: "max(6px, env(safe-area-inset-top))",
-          left: "max(8px, env(safe-area-inset-left))",
+          top: "max(4px, env(safe-area-inset-top))",
+          left: "max(6px, env(safe-area-inset-left))",
           zIndex: 8,
           padding: "5px 10px",
           borderRadius: 6,
@@ -2113,6 +2250,45 @@ function Table({
       >
         ← Lobby
       </button>
+      <button
+        onClick={() => void toggleFullscreen()}
+        style={{
+          position: "absolute",
+          top: "max(4px, env(safe-area-inset-top))",
+          left: "max(88px, calc(env(safe-area-inset-left) + 82px))",
+          zIndex: 8,
+          padding: "5px 10px",
+          borderRadius: 6,
+          border: `1px solid ${theme.stroke.secondary}`,
+          background: fsOn ? "rgba(241,196,15,0.9)" : "rgba(0,0,0,0.35)",
+          color: fsOn ? "#1a2e1a" : theme.text.primary,
+          cursor: "pointer",
+          fontSize: 12,
+          fontWeight: 700,
+          touchAction: "manipulation",
+        }}
+      >
+        {fsOn ? "Экран" : "Полный экран"}
+      </button>
+      {fsNote ? (
+        <div
+          style={{
+            position: "absolute",
+            top: 32,
+            left: 8,
+            zIndex: 9,
+            maxWidth: 280,
+            padding: "6px 8px",
+            borderRadius: 8,
+            background: "rgba(0,0,0,0.72)",
+            color: "#f5f0e6",
+            fontSize: 11,
+            lineHeight: 1.35,
+          }}
+        >
+          {fsNote}
+        </div>
+      ) : null}
       <div
         style={{
           position: "absolute",
@@ -2169,14 +2345,19 @@ function Table({
           background: "#1a6b3c",
           border: short ? "6px solid #145230" : "10px solid #145230",
           display: "grid",
-          gridTemplateColumns: "minmax(72px, 1fr) minmax(120px, 1.6fr) minmax(108px, 0.9fr)",
+          gridTemplateColumns: short
+            ? "minmax(56px, 1fr) minmax(90px, 1.3fr) minmax(96px, 0.85fr)"
+            : "minmax(72px, 1fr) minmax(120px, 1.6fr) minmax(108px, 0.9fr)",
           gridTemplateRows: "auto minmax(0, 1fr) auto",
+          rowGap: short ? 6 : 10,
+          columnGap: short ? 6 : 12,
           alignItems: "center",
           justifyItems: "center",
-          padding: short ? "6px 8px 8px" : "16px 28px 12px",
-          overflow: "visible",
+          padding: short ? "26px 6px 6px" : "16px 28px 12px",
+          overflow: "hidden",
           boxSizing: "border-box",
           position: "relative",
+          minHeight: 0,
         }}
       >
         <div
@@ -2196,10 +2377,11 @@ function Table({
             width: "100%",
             display: "flex",
             justifyContent: "center",
-            gap: opponentCount <= 3 ? (short ? 16 : 36) : 10,
+            gap: opponentCount <= 3 ? (short ? 10 : 36) : 8,
             flexWrap: "nowrap",
             zIndex: 1,
-            paddingTop: 18,
+            paddingTop: 0,
+            minHeight: 0,
           }}
         >
           {Array.from({ length: opponentCount }, (_, i) => {
@@ -2223,19 +2405,21 @@ function Table({
                     <div
                       style={{
                         position: "absolute",
-                        left: "50%",
-                        bottom: "72%",
-                        transform: "translateX(-50%)",
+                        left: 6,
+                        top: 8,
                         zIndex: 0,
-                        opacity: 0.95,
+                        opacity: 0.9,
+                        transform: "scale(0.72)",
+                        transformOrigin: "top left",
+                        pointerEvents: "none",
                       }}
                     >
                       <Hand
                         cards={playerHand(pIdx)}
                         isOwner={false}
-                        cardW={Math.round(oppW * 0.82)}
-                        cardH={Math.round(oppH * 0.82)}
-                        maxWidth={oppW * 2.1}
+                        cardW={oppW}
+                        cardH={oppH}
+                        maxWidth={oppW * 2.2}
                         animating={!!isAnimTarget(pIdx, "hand")}
                       />
                     </div>
@@ -2257,7 +2441,7 @@ function Table({
           })}
         </div>
 
-        <div style={{ zIndex: 1, alignSelf: "center", justifySelf: "center", gridRow: 2, transform: short ? "scale(0.9)" : undefined }}>
+        <div style={{ zIndex: 1, alignSelf: "center", justifySelf: "center", gridRow: 2, minHeight: 0 }}>
           <DeckPile count={drawDeck.length} />
         </div>
 
@@ -2269,11 +2453,10 @@ function Table({
             alignItems: "center",
             justifyContent: "center",
             minHeight: 0,
-            transform: short ? "scale(0.92)" : undefined,
           }}
         >
           {isSwap && (
-            <div style={{ transform: short ? "scale(0.82)" : undefined }}>
+            <div style={{ transform: short ? "scale(0.78)" : undefined, transformOrigin: "center" }}>
               <SwapTimer seconds={swapSeconds} />
             </div>
           )}
@@ -2283,18 +2466,37 @@ function Table({
         <div
           style={{
             gridColumn: 3,
-            gridRow: "2 / 4",
+            gridRow: 2,
             zIndex: 3,
             display: "flex",
             flexDirection: "column",
             alignItems: "center",
             justifyContent: "center",
-            gap: short ? 8 : 12,
-            alignSelf: "stretch",
-            paddingBottom: 4,
+            minHeight: 0,
+            alignSelf: "center",
           }}
         >
-          {isPlaying && <BurnPile count={burnCount} />}
+          {isPlaying && (
+            <div style={{ transform: short ? "scale(0.86)" : undefined, transformOrigin: "center" }}>
+              <BurnPile count={burnCount} />
+            </div>
+          )}
+        </div>
+
+        <div
+          style={{
+            gridColumn: 3,
+            gridRow: 3,
+            zIndex: 3,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 6,
+            paddingBottom: 2,
+            minHeight: 0,
+          }}
+        >
           {hint && !short ? (
             <div
               style={{
@@ -2370,9 +2572,11 @@ function Table({
             gridRow: 3,
             zIndex: 2,
             display: "flex",
-            flexDirection: "column",
+            flexDirection: short ? "row" : "column",
             alignItems: "center",
-            gap: short ? 4 : 8,
+            justifyContent: "center",
+            gap: short ? 10 : 8,
+            minHeight: 0,
             padding: isPlaying && currentPlayer === 0 && phase === "playing" ? "4px 10px 2px" : "2px 8px",
             borderRadius: 16,
             boxShadow:
@@ -3095,6 +3299,7 @@ export default function CardGame() {
   }, [phase, currentPlayer, finishOrder, discard, players, drawDeck, flyAnim, burnAnim, pickupAnim, revealCard]);
 
   const startGame = useCallback((playerCount: number) => {
+    void enterFullscreen();
     clearTimers();
     const deck = shuffle(buildDeck());
     let cursor = 0;
@@ -3403,13 +3608,22 @@ export default function CardGame() {
   useEffect(() => () => clearTimers(), []);
 
   if (phase === "lobby") {
-    return <Lobby onStart={startGame} onRules={() => setPhase("rules")} />;
+    return (
+      <VisualFrame>
+        <Lobby onStart={startGame} onRules={() => setPhase("rules")} />
+      </VisualFrame>
+    );
   }
   if (phase === "rules") {
-    return <RulesScreen onBack={() => setPhase("lobby")} />;
+    return (
+      <VisualFrame>
+        <RulesScreen onBack={() => setPhase("lobby")} />
+      </VisualFrame>
+    );
   }
 
   return (
+    <VisualFrame>
     <Table
       players={players}
       drawDeck={drawDeck}
@@ -3441,5 +3655,6 @@ export default function CardGame() {
       onCancelPickupAwait={handleCancelPickupAwait}
       onReset={resetToLobby}
     />
+    </VisualFrame>
   );
 }

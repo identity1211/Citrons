@@ -1,0 +1,19 @@
+{
+  "name": "Citrons",
+  "short_name": "Citrons",
+  "description": "Citrons — TwoCircles Edition",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#145230",
+  "theme_color": "#145230",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
