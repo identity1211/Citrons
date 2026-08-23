@@ -350,10 +350,10 @@ function aiChoosePlay(
 
 // ─── CSS keyframes ───────────────────────────────────────────────────────────
 
-const STYLE_ID = "card-game-keyframes-v5";
+const STYLE_ID = "card-game-keyframes-v6";
 function ensureKeyframes() {
   if (typeof document === "undefined") return;
-  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4"]) {
+  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5"]) {
     document.getElementById(id)?.remove();
   }
   if (document.getElementById(STYLE_ID)) return;
@@ -418,7 +418,16 @@ function ensureKeyframes() {
     .card-deal-faceup  { animation: cardFlipIn 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
     .card-deal-hand    { animation: cardHandIn 0.4s cubic-bezier(0.22, 1, 0.36, 1) both; }
     .card-swap-pop     { animation: swapPop 0.28s ease; }
-    .card-hoverable:hover { transform: translateY(-6px) !important; }
+    @media (hover: hover) {
+      .card-hoverable:hover { transform: translateY(-6px) !important; }
+    }
+    .felt-chip {
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+      font-family: inherit;
+    }
+    .felt-chip:active:not(:disabled) { transform: translateY(1px); filter: brightness(0.92); }
     .card-fly { animation: cardFlyToDiscard 0.48s cubic-bezier(0.22, 1, 0.36, 1) both; pointer-events: none; }
     .card-fly-burn { animation: cardFlyToBurn 0.55s cubic-bezier(0.33, 1, 0.68, 1) both; pointer-events: none; }
     .card-fly-pickup { animation: cardFlyToPlayer 0.55s cubic-bezier(0.33, 1, 0.68, 1) both; pointer-events: none; }
@@ -467,6 +476,47 @@ const CARD_BACK_PATTERN =
 const CARD_BACK_INNER =
   "radial-gradient(ellipse at center, rgba(255,255,255,0.08) 0%, transparent 70%)";
 
+function clamp(n: number, lo: number, hi: number) {
+  return Math.max(lo, Math.min(hi, n));
+}
+
+function cardBox(w: number, h: number) {
+  return {
+    w,
+    h,
+    r: Math.max(5, Math.round(w * 0.11)),
+    rank: Math.max(8, Math.round(w * 0.18)),
+    suit: Math.max(7, Math.round(w * 0.15)),
+    mid: Math.max(14, Math.round(w * 0.39)),
+    midSuit: Math.max(10, Math.round(w * 0.28)),
+  };
+}
+
+function useViewport() {
+  const [vp, setVp] = useState({ w: 1024, h: 700 });
+  useEffect(() => {
+    const fit = () => {
+      const vv = window.visualViewport;
+      setVp({
+        w: Math.max(1, Math.round(vv?.width ?? window.innerWidth)),
+        h: Math.max(1, Math.round(vv?.height ?? window.innerHeight)),
+      });
+    };
+    fit();
+    window.addEventListener("resize", fit);
+    window.addEventListener("orientationchange", fit);
+    window.visualViewport?.addEventListener("resize", fit);
+    window.visualViewport?.addEventListener("scroll", fit);
+    return () => {
+      window.removeEventListener("resize", fit);
+      window.removeEventListener("orientationchange", fit);
+      window.visualViewport?.removeEventListener("resize", fit);
+      window.visualViewport?.removeEventListener("scroll", fit);
+    };
+  }, []);
+  return vp;
+}
+
 // ─── Playing Card ────────────────────────────────────────────────────────────
 
 interface CardProps {
@@ -474,6 +524,8 @@ interface CardProps {
   faceVisible: boolean;
   style?: CSSProperties;
   small?: boolean;
+  w?: number;
+  h?: number;
   animClass?: string;
   selected?: boolean;
   selectable?: boolean;
@@ -487,6 +539,8 @@ function PlayingCard({
   faceVisible,
   style,
   small,
+  w: wProp,
+  h: hProp,
   animClass,
   selected,
   selectable,
@@ -494,13 +548,14 @@ function PlayingCard({
   dimmed,
   onClick,
 }: CardProps) {
-  const w = small ? 38 : 56;
-  const h = small ? 54 : 78;
+  const w = wProp ?? (small ? 38 : 56);
+  const h = hProp ?? (small ? 54 : 78);
+  const box = cardBox(w, h);
 
   const base: CSSProperties = {
     width: w,
     height: h,
-    borderRadius: 6,
+    borderRadius: box.r,
     display: "flex",
     flexDirection: "column",
     alignItems: "center",
@@ -508,6 +563,7 @@ function PlayingCard({
     userSelect: "none",
     position: "absolute",
     cursor: selectable && !locked ? "pointer" : "default",
+    touchAction: selectable ? "manipulation" : undefined,
     outline: selected ? "2px solid #f1c40f" : "none",
     outlineOffset: 2,
     opacity: dimmed ? 0.4 : locked && selectable ? 0.85 : 1,
@@ -552,20 +608,20 @@ function PlayingCard({
         border: selected ? "1.5px solid #f1c40f" : "1.5px solid #ccc",
       }}
     >
-      <span style={{ position: "absolute", top: 3, left: 5, fontSize: small ? 8 : 10, fontWeight: 700, color, lineHeight: 1 }}>
+      <span style={{ position: "absolute", top: 3, left: 5, fontSize: box.rank, fontWeight: 700, color, lineHeight: 1 }}>
         {rank}
       </span>
-      <span style={{ position: "absolute", top: small ? 11 : 13, left: 5, fontSize: small ? 7 : 9, color, lineHeight: 1 }}>
+      <span style={{ position: "absolute", top: 3 + box.rank + 1, left: 5, fontSize: box.suit, color, lineHeight: 1 }}>
         {suit}
       </span>
-      <span style={{ fontSize: small ? 16 : 22, fontWeight: 700, color, lineHeight: 1 }}>{rank}</span>
-      <span style={{ fontSize: small ? 12 : 16, color, lineHeight: 1, marginTop: 1 }}>{suit}</span>
+      <span style={{ fontSize: box.mid, fontWeight: 700, color, lineHeight: 1 }}>{rank}</span>
+      <span style={{ fontSize: box.midSuit, color, lineHeight: 1, marginTop: 1 }}>{suit}</span>
       <span
         style={{
           position: "absolute",
           bottom: 3,
           right: 5,
-          fontSize: small ? 8 : 10,
+          fontSize: box.rank,
           fontWeight: 700,
           color,
           lineHeight: 1,
@@ -585,6 +641,8 @@ interface TableStackProps {
   faceUp: (string | null)[];
   revealed: boolean;
   small?: boolean;
+  cardW?: number;
+  cardH?: number;
   animating?: boolean;
   fuAnimSlots?: number;
   selectableFaceUp?: boolean;
@@ -602,6 +660,8 @@ function TableStack({
   faceUp,
   revealed,
   small,
+  cardW,
+  cardH,
   animating,
   fuAnimSlots = 0,
   selectableFaceUp,
@@ -613,12 +673,13 @@ function TableStack({
   onSelectFaceDown,
   swapKey = 0,
 }: TableStackProps) {
-  const w = small ? 38 : 56;
-  const h = small ? 54 : 78;
+  const w = cardW ?? (small ? 38 : 56);
+  const h = cardH ?? (small ? 54 : 78);
+  const lift = Math.max(8, Math.round(h * 0.12));
   const slotCount = Math.max(faceDown.length, faceUp.length, 3);
 
   return (
-    <div style={{ display: "flex", gap: small ? 4 : 8 }}>
+    <div style={{ display: "flex", gap: Math.max(4, Math.round(w * 0.12)) }}>
       {Array.from({ length: slotCount }, (_, i) => {
         const down = faceDown[i] ?? null;
         const up = faceUp[i] ?? null;
@@ -631,7 +692,7 @@ function TableStack({
             style={{
               position: "relative",
               width: w,
-              height: showFaceUp && showFaceDown ? h + 10 : h,
+              height: showFaceUp && showFaceDown ? h + lift : h,
             }}
           >
             {showFaceDown && (
@@ -639,7 +700,8 @@ function TableStack({
                 card={down}
                 faceVisible={false}
                 style={{ top: 0, left: 0 }}
-                small={small}
+                w={w}
+                h={h}
                 selectable={!!selectableFaceDown && !showFaceUp}
                 locked={locked}
                 onClick={() => onSelectFaceDown?.(i)}
@@ -650,8 +712,9 @@ function TableStack({
               <PlayingCard
                 card={up!}
                 faceVisible
-                style={{ top: showFaceDown ? 10 : 0, left: 0 }}
-                small={small}
+                style={{ top: showFaceDown ? lift : 0, left: 0 }}
+                w={w}
+                h={h}
                 selected={selectedFaceUp.includes(i)}
                 selectable={selectableFaceUp}
                 locked={locked}
@@ -679,6 +742,9 @@ interface HandProps {
   cards: string[];
   isOwner: boolean;
   small?: boolean;
+  cardW?: number;
+  cardH?: number;
+  maxWidth?: number;
   animating?: boolean;
   selectable?: boolean;
   locked?: boolean;
@@ -692,6 +758,9 @@ function Hand({
   cards,
   isOwner,
   small,
+  cardW,
+  cardH,
+  maxWidth,
   animating,
   selectable,
   locked,
@@ -700,15 +769,17 @@ function Hand({
   onSelect,
   swapKey = 0,
 }: HandProps) {
-  const w = small ? 38 : 56;
-  const h = small ? 54 : 78;
-  const overlap = small ? 22 : 30;
+  const w = cardW ?? (small ? 38 : 56);
+  const h = cardH ?? (small ? 54 : 78);
+  const overlap = Math.round(w * (isOwner ? 0.3 : 0.58));
   const n = cards.length;
   const comfortableStep = w - overlap;
-  const maxW = w + 2 * comfortableStep;
-  const pack = !isOwner && n > 3;
-  const step = n <= 1 ? 0 : pack ? (maxW - w) / (n - 1) : comfortableStep;
-  const totalW = n === 0 ? 0 : n === 1 ? w : pack ? maxW : w + (n - 1) * step;
+  const threeW = w + 2 * comfortableStep;
+  const naturalW = n <= 1 ? w : w + (n - 1) * comfortableStep;
+  const cap = maxWidth ?? (isOwner ? Infinity : threeW);
+  const pack = n > 1 && naturalW > cap;
+  const step = n <= 1 ? 0 : pack ? (Math.min(cap, naturalW) - w) / (n - 1) : comfortableStep;
+  const totalW = n === 0 ? 0 : n === 1 ? w : w + (n - 1) * step;
 
   return (
     <div style={{ position: "relative", width: totalW || 1, height: h }}>
@@ -719,7 +790,7 @@ function Hand({
           style={{
             position: "absolute",
             left: i * step,
-            top: selectedIndices.includes(i) ? -10 : 0,
+            top: selectedIndices.includes(i) ? -Math.round(h * 0.12) : 0,
             zIndex: selectedIndices.includes(i) ? 100 : i,
             transition: "top 0.15s ease, left 0.15s ease",
           }}
@@ -728,7 +799,8 @@ function Hand({
             card={card}
             faceVisible={isOwner}
             style={{ top: 0, left: 0 }}
-            small={small}
+            w={w}
+            h={h}
             selected={selectedIndices.includes(i)}
             selectable={selectable && isOwner}
             locked={locked}
@@ -825,13 +897,12 @@ interface PickupAnim {
   hideFaces: boolean;
 }
 
-function flyOrigin(playerIndex: number, playerCount: number): { x: number; y: number; rot: number } {
-  if (playerIndex === 0) return { x: 0, y: 200, rot: -10 };
+function flyOrigin(playerIndex: number, playerCount: number): { x: string; y: string; rot: number } {
+  if (playerIndex === 0) return { x: "0px", y: "34%", rot: -10 };
   const opponents = playerCount - 1;
   const oi = playerIndex - 1;
-  const spread = opponents <= 1 ? 0 : Math.min(340, (opponents - 1) * 110);
-  const x = opponents <= 1 ? 0 : -spread / 2 + (spread / (opponents - 1)) * oi;
-  return { x, y: -175, rot: 6 + oi * 4 };
+  const xPct = opponents <= 1 ? 0 : -28 + (56 / Math.max(1, opponents - 1)) * oi;
+  return { x: `${xPct}%`, y: "-34%", rot: 6 + oi * 4 };
 }
 
 function BurnPile({ count }: { count: number }) {
@@ -877,13 +948,14 @@ function BurnPile({ count }: { count: number }) {
       <div
         style={{
           position: "absolute",
-          bottom: -22,
+          top: -18,
           left: 0,
           right: 0,
           textAlign: "center",
-          fontSize: 11,
-          fontWeight: 600,
-          color: "rgba(255,255,255,0.6)",
+          fontSize: 10,
+          fontWeight: 700,
+          letterSpacing: 0.4,
+          color: "rgba(255,255,255,0.55)",
         }}
       >
         {count > 0 ? `${count} отбой` : ""}
@@ -1021,8 +1093,8 @@ function FlyOverlay({ anim }: { anim: FlyAnim }) {
           key={`${anim.id}-${i}-${card}`}
           className="card-fly"
           style={{
-            ["--fx" as string]: `${origin.x + (i - (anim.cards.length - 1) / 2) * 14}px`,
-            ["--fy" as string]: `${origin.y}px`,
+            ["--fx" as string]: `calc(${origin.x} + ${(i - (anim.cards.length - 1) / 2) * 14}px)`,
+            ["--fy" as string]: origin.y,
             ["--fr" as string]: `${origin.rot + i * 4}deg`,
             position: "absolute",
             width: 56,
@@ -1057,7 +1129,7 @@ function BurnOverlay({ anim }: { anim: BurnAnim }) {
           key={`${anim.id}-burn-${i}-${card}`}
           className="card-fly-burn"
           style={{
-            ["--bx" as string]: `${340 + i * 3}px`,
+            ["--bx" as string]: `calc(32% + ${i * 3}px)`,
             ["--by" as string]: `${-6 + i * 2}px`,
             position: "absolute",
             width: 56,
@@ -1093,8 +1165,8 @@ function PickupOverlay({ anim }: { anim: PickupAnim }) {
           key={`${anim.id}-pick-${i}-${card}`}
           className="card-fly-pickup"
           style={{
-            ["--px" as string]: `${dest.x + (i - visible.length / 2) * 8}px`,
-            ["--py" as string]: `${dest.y}px`,
+            ["--px" as string]: `calc(${dest.x} + ${(i - visible.length / 2) * 8}px)`,
+            ["--py" as string]: dest.y,
             ["--pr" as string]: `${dest.rot}deg`,
             position: "absolute",
             width: 56,
@@ -1764,46 +1836,73 @@ function swapPlayerCards(player: PlayerState, handIdx: number, faceUpIdx: number
   return { ...player, hand: sortHand(hand), faceUp };
 }
 
-function useFitScale(baseW: number, baseH: number, extraX: number, extraY: number) {
-  const [scale, setScale] = useState(1);
-  useEffect(() => {
-    const fit = () => {
-      const vv = window.visualViewport;
-      const vw = vv?.width ?? window.innerWidth;
-      const vh = vv?.height ?? window.innerHeight;
-      const w = Math.max(220, vw - extraX);
-      const h = Math.max(140, vh - extraY);
-      setScale(Math.max(0.28, Math.min(w / baseW, h / baseH, 1.15)));
-    };
-    fit();
-    window.addEventListener("resize", fit);
-    window.addEventListener("orientationchange", fit);
-    window.visualViewport?.addEventListener("resize", fit);
-    window.visualViewport?.addEventListener("scroll", fit);
-    return () => {
-      window.removeEventListener("resize", fit);
-      window.removeEventListener("orientationchange", fit);
-      window.visualViewport?.removeEventListener("resize", fit);
-      window.visualViewport?.removeEventListener("scroll", fit);
-    };
-  }, [baseW, baseH, extraX, extraY]);
-  return scale;
+function FeltChip({
+  label,
+  onClick,
+  disabled,
+  kind,
+}: {
+  label: ReactNode;
+  onClick: () => void;
+  disabled?: boolean;
+  kind: "play" | "take" | "ready" | "ghost";
+}) {
+  const palettes = {
+    play: {
+      background: disabled
+        ? "radial-gradient(circle at 50% 30%, rgba(80,90,50,0.5), rgba(30,40,20,0.55))"
+        : "radial-gradient(circle at 50% 28%, #f7dc6f, #c9a227 62%, #9a7b12)",
+      color: disabled ? "rgba(255,255,255,0.38)" : "#1d1404",
+      border: disabled ? "1.5px solid rgba(255,255,255,0.16)" : "1.5px solid #f8e6a0",
+    },
+    take: {
+      background: disabled
+        ? "radial-gradient(circle at 50% 30%, rgba(70,50,40,0.4), rgba(30,20,16,0.5))"
+        : "radial-gradient(circle at 50% 28%, #8d6e63, #5d4037 70%, #3e2723)",
+      color: disabled ? "rgba(255,255,255,0.32)" : "#f5e6d3",
+      border: "1.5px solid rgba(62,39,35,0.95)",
+    },
+    ready: {
+      background: disabled
+        ? "radial-gradient(circle at 50% 28%, #27ae60, #1e8449)"
+        : "radial-gradient(circle at 50% 28%, #58d68d, #1e8449 70%, #145a32)",
+      color: "#fff",
+      border: "1.5px solid rgba(171,235,198,0.55)",
+    },
+    ghost: {
+      background: "rgba(0,0,0,0.28)",
+      color: "rgba(255,255,255,0.82)",
+      border: "1.5px solid rgba(255,255,255,0.28)",
+    },
+  } as const;
+  const pal = palettes[kind];
+  return (
+    <button
+      type="button"
+      className="felt-chip"
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        width: 92,
+        minHeight: 38,
+        padding: "7px 8px",
+        borderRadius: 999,
+        border: pal.border,
+        background: pal.background,
+        color: pal.color,
+        fontSize: 11,
+        fontWeight: 800,
+        letterSpacing: 0.7,
+        textTransform: "uppercase",
+        lineHeight: 1.15,
+        cursor: disabled ? "default" : "pointer",
+        opacity: disabled ? 0.72 : 1,
+      }}
+    >
+      {label}
+    </button>
+  );
 }
-
-const SIDE_BTN: CSSProperties = {
-  width: 118,
-  minHeight: 44,
-  padding: "10px 8px",
-  borderRadius: 10,
-  fontSize: 13,
-  fontWeight: 700,
-  cursor: "pointer",
-  touchAction: "manipulation",
-  lineHeight: 1.25,
-  userSelect: "none",
-  WebkitUserSelect: "none",
-  WebkitTapHighlightColor: "transparent",
-};
 
 // ─── Table ───────────────────────────────────────────────────────────────────
 
@@ -1953,9 +2052,13 @@ function Table({
         ? discard.slice(0, discard.length - flyAnim.cards.length)
         : discard;
 
-  const showSide = isSwap || isHumanTurn;
-  const hasStandings = finishOrder.length > 0 || phase === "finished";
-  const scale = useFitScale(840, 560, showSide ? 156 : 28, hasStandings ? 84 : 52);
+  const vp = useViewport();
+  const short = vp.h < 520;
+  const ownerH = short ? Math.round(clamp(vp.h * 0.24, 80, 108)) : 78;
+  const ownerW = Math.round(ownerH * 0.72);
+  const oppH = short ? Math.round(clamp(vp.h * 0.135, 42, 56)) : opponentCount >= 4 ? 54 : 78;
+  const oppW = Math.round(oppH * 0.72);
+  const handMax = Math.round(vp.w * (short ? 0.58 : 0.5));
 
   const hint = isSwap
     ? humanReady
@@ -1984,155 +2087,127 @@ function Table({
         height: "100%",
         maxHeight: "100dvh",
         background: "#145230",
-        display: "flex",
-        flexDirection: "column",
+        position: "relative",
         overflow: "hidden",
         boxSizing: "border-box",
         padding:
-          "max(4px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(6px, env(safe-area-inset-bottom)) max(6px, env(safe-area-inset-left))",
+          "max(2px, env(safe-area-inset-top)) max(6px, env(safe-area-inset-right)) max(4px, env(safe-area-inset-bottom)) max(6px, env(safe-area-inset-left))",
       }}
     >
-      <div
+      <button
+        onClick={onReset}
         style={{
-          width: "100%",
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          padding: "2px 4px",
-          flexShrink: 0,
+          position: "absolute",
+          top: "max(6px, env(safe-area-inset-top))",
+          left: "max(8px, env(safe-area-inset-left))",
+          zIndex: 8,
+          padding: "5px 10px",
+          borderRadius: 6,
+          border: `1px solid ${theme.stroke.secondary}`,
+          background: "rgba(0,0,0,0.35)",
+          color: theme.text.primary,
+          cursor: "pointer",
+          fontSize: 12,
+          touchAction: "manipulation",
         }}
       >
-        <button
-          onClick={onReset}
-          style={{
-            padding: "6px 12px",
-            borderRadius: 6,
-            border: `1px solid ${theme.stroke.secondary}`,
-            background: theme.fill.tertiary,
-            color: theme.text.primary,
-            cursor: "pointer",
-            fontSize: 12,
-            touchAction: "manipulation",
-          }}
-        >
-          ← Lobby
-        </button>
-        <Spacer />
-        <Text style={{ color: theme.text.secondary, fontSize: 11 }}>{statusMsg}</Text>
+        ← Lobby
+      </button>
+      <div
+        style={{
+          position: "absolute",
+          top: "max(8px, env(safe-area-inset-top))",
+          right: "max(10px, env(safe-area-inset-right))",
+          zIndex: 8,
+          maxWidth: "46%",
+          color: theme.text.secondary,
+          fontSize: 11,
+          textAlign: "right",
+          lineHeight: 1.25,
+        }}
+      >
+        {statusMsg}
       </div>
 
       {(finishOrder.length > 0 || phase === "finished") && (
         <div
           style={{
-            margin: "2px 4px 4px",
-            padding: "4px 10px",
+            position: "absolute",
+            top: 34,
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 8,
+            padding: "3px 10px",
             borderRadius: 8,
-            background: theme.fill.secondary,
+            background: "rgba(0,0,0,0.45)",
             border: `1px solid ${theme.stroke.focused}`,
             color: theme.text.primary,
             fontSize: 11,
-            width: "100%",
-            boxSizing: "border-box",
-            flexShrink: 0,
+            maxWidth: "70%",
+            textAlign: "center",
           }}
         >
-          {phase === "finished" ? (
-            <div style={{ fontWeight: 700, marginBottom: 2 }}>Итоги</div>
-          ) : (
-            <div style={{ fontWeight: 600, marginBottom: 2, color: theme.text.secondary }}>
-              Вышли из игры — остальные продолжают
-            </div>
-          )}
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-            {finishOrder.map((pIdx, i) => {
-              const place = i + 1;
-              const isLast = phase === "finished" && place === finishOrder.length && finishOrder.length > 1;
-              return (
-                <span key={pIdx} style={{ fontWeight: pIdx === 0 || place === 1 ? 700 : 500 }}>
-                  {isLast ? "Последний" : `${place} место`}: {players[pIdx].name}
-                  {i < finishOrder.length - 1 ? <span style={{ opacity: 0.4 }}> · </span> : null}
-                </span>
-              );
-            })}
-          </div>
+          {phase === "finished" ? "Итоги · " : ""}
+          {finishOrder.map((pIdx, i) => {
+            const place = i + 1;
+            const isLast = phase === "finished" && place === finishOrder.length && finishOrder.length > 1;
+            return (
+              <span key={pIdx} style={{ fontWeight: pIdx === 0 || place === 1 ? 700 : 500 }}>
+                {isLast ? "Последний" : `${place}`} {players[pIdx].name}
+                {i < finishOrder.length - 1 ? " · " : ""}
+              </span>
+            );
+          })}
         </div>
       )}
 
       <div
         style={{
-          flex: 1,
-          minHeight: 0,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: 8,
-        }}
-      >
-      <div
-        style={{
-          width: 840 * scale,
-          height: 560 * scale,
-          position: "relative",
-          flexShrink: 0,
-        }}
-      >
-      <div
-        style={{
-          position: "absolute",
-          top: 0,
-          left: 0,
-          width: 840,
-          height: 560,
-          transform: `scale(${scale})`,
-          transformOrigin: "top left",
-          borderRadius: 80,
+          width: "100%",
+          height: "100%",
+          borderRadius: short ? 18 : 48,
           background: "#1a6b3c",
-          border: "10px solid #145230",
-          display: "flex",
-          flexDirection: "column",
+          border: short ? "6px solid #145230" : "10px solid #145230",
+          display: "grid",
+          gridTemplateColumns: "minmax(72px, 1fr) minmax(120px, 1.6fr) minmax(108px, 0.9fr)",
+          gridTemplateRows: "auto minmax(0, 1fr) auto",
           alignItems: "center",
-          justifyContent: "space-between",
-          padding: "20px 48px 16px",
+          justifyItems: "center",
+          padding: short ? "6px 8px 8px" : "16px 28px 12px",
           overflow: "visible",
           boxSizing: "border-box",
+          position: "relative",
         }}
       >
         <div
           style={{
             position: "absolute",
             inset: 0,
-            borderRadius: 70,
+            borderRadius: short ? 12 : 38,
             backgroundImage:
               "radial-gradient(ellipse at 50% 40%, rgba(255,255,255,0.04) 0%, transparent 60%)",
             pointerEvents: "none",
           }}
         />
 
-        <div style={{ position: "absolute", left: 28, top: "50%", transform: "translateY(-50%)" }}>
-          <DeckPile count={drawDeck.length} />
-        </div>
-        <div style={{ position: "absolute", right: 28, top: "50%", transform: "translateY(-50%)", zIndex: 1 }}>
-          {isPlaying && <BurnPile count={burnCount} />}
-        </div>
-
-        {/* Opponents */}
         <div
           style={{
+            gridColumn: "1 / -1",
             width: "100%",
             display: "flex",
             justifyContent: "center",
-            gap: opponentCount <= 3 ? 36 : 18,
-            flexWrap: "wrap",
+            gap: opponentCount <= 3 ? (short ? 16 : 36) : 10,
+            flexWrap: "nowrap",
             zIndex: 1,
+            paddingTop: 18,
           }}
         >
           {Array.from({ length: opponentCount }, (_, i) => {
             const pIdx = i + 1;
-            const isSmall = opponentCount >= 4;
             return (
               <div
                 key={pIdx}
-                style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}
+                style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}
               >
                 <SeatLabel
                   name={players[pIdx].name}
@@ -2143,56 +2218,162 @@ function Table({
                     finishOrder.includes(pIdx) ? finishOrder.indexOf(pIdx) + 1 : null
                   }
                 />
-                {playerHand(pIdx).length > 0 && (
-                  <Hand
-                    cards={playerHand(pIdx)}
-                    isOwner={false}
-                    small={isSmall}
-                    animating={!!isAnimTarget(pIdx, "hand")}
-                  />
-                )}
-                <TableStack
-                  faceDown={playerFaceDown(pIdx)}
-                  faceUp={playerFaceUp(pIdx)}
-                  revealed={isPlaying || (dealProgress.faceUp[pIdx] || 0) > 0}
-                  small={isSmall}
-                  animating={dealing}
-                  fuAnimSlots={dealProgress.faceUp[pIdx] || 0}
-                />
+                <div style={{ position: "relative" }}>
+                  {playerHand(pIdx).length > 0 && (
+                    <div
+                      style={{
+                        position: "absolute",
+                        left: "50%",
+                        bottom: "72%",
+                        transform: "translateX(-50%)",
+                        zIndex: 0,
+                        opacity: 0.95,
+                      }}
+                    >
+                      <Hand
+                        cards={playerHand(pIdx)}
+                        isOwner={false}
+                        cardW={Math.round(oppW * 0.82)}
+                        cardH={Math.round(oppH * 0.82)}
+                        maxWidth={oppW * 2.1}
+                        animating={!!isAnimTarget(pIdx, "hand")}
+                      />
+                    </div>
+                  )}
+                  <div style={{ position: "relative", zIndex: 1 }}>
+                    <TableStack
+                      faceDown={playerFaceDown(pIdx)}
+                      faceUp={playerFaceUp(pIdx)}
+                      revealed={isPlaying || (dealProgress.faceUp[pIdx] || 0) > 0}
+                      cardW={oppW}
+                      cardH={oppH}
+                      animating={dealing}
+                      fuAnimSlots={dealProgress.faceUp[pIdx] || 0}
+                    />
+                  </div>
+                </div>
               </div>
             );
           })}
         </div>
 
-        {/* Center */}
+        <div style={{ zIndex: 1, alignSelf: "center", justifySelf: "center", gridRow: 2, transform: short ? "scale(0.9)" : undefined }}>
+          <DeckPile count={drawDeck.length} />
+        </div>
+
         <div
           style={{
-            flex: 1,
+            zIndex: 2,
+            gridRow: 2,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            gap: 40,
-            zIndex: 2,
+            minHeight: 0,
+            transform: short ? "scale(0.92)" : undefined,
           }}
         >
-          {isSwap && <SwapTimer seconds={swapSeconds} />}
+          {isSwap && (
+            <div style={{ transform: short ? "scale(0.82)" : undefined }}>
+              <SwapTimer seconds={swapSeconds} />
+            </div>
+          )}
           {isPlaying && <DiscardPile cards={displayDiscard} />}
         </div>
 
-        {isPlaying && flyAnim && <FlyOverlay anim={flyAnim} />}
-        {isPlaying && burnAnim && <BurnOverlay anim={burnAnim} />}
-        {isPlaying && pickupAnim && <PickupOverlay anim={pickupAnim} />}
-        {isPlaying && revealCard && <RevealOverlay card={revealCard} />}
-
-        {/* Human */}
         <div
           style={{
+            gridColumn: 3,
+            gridRow: "2 / 4",
+            zIndex: 3,
             display: "flex",
             flexDirection: "column",
             alignItems: "center",
-            gap: 6,
-            zIndex: 1,
-            padding: isPlaying && currentPlayer === 0 && phase === "playing" ? "4px 10px 2px" : 0,
+            justifyContent: "center",
+            gap: short ? 8 : 12,
+            alignSelf: "stretch",
+            paddingBottom: 4,
+          }}
+        >
+          {isPlaying && <BurnPile count={burnCount} />}
+          {hint && !short ? (
+            <div
+              style={{
+                color: "rgba(255,255,255,0.62)",
+                fontSize: 10,
+                lineHeight: 1.25,
+                textAlign: "center",
+                maxWidth: 100,
+              }}
+            >
+              {hint}
+            </div>
+          ) : null}
+          {isSwap && (
+            <FeltChip onClick={onReady} disabled={humanReady} kind="ready" label={humanReady ? "Ready" : "Ready"} />
+          )}
+          {isHumanTurn &&
+            (pickupAwaitTable ? (
+              <>
+                <FeltChip
+                  onClick={onPickUpOnly}
+                  kind="take"
+                  label={
+                    <>
+                      Только
+                      <br />
+                      сброс
+                    </>
+                  }
+                />
+                <FeltChip onClick={onCancelPickupAwait} kind="ghost" label="Отмена" />
+              </>
+            ) : (
+              <>
+                {humanZone !== "faceDown" && (
+                  <FeltChip onClick={onPlay} disabled={!canPlaySelected} kind="play" label="Ход" />
+                )}
+                <FeltChip
+                  onClick={onPickUp}
+                  disabled={discard.length === 0}
+                  kind="take"
+                  label={
+                    <>
+                      Забрать
+                      <br />
+                      сброс
+                    </>
+                  }
+                />
+              </>
+            ))}
+        </div>
+
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            pointerEvents: "none",
+            zIndex: 50,
+            gridColumn: "1 / -1",
+            gridRow: "1 / -1",
+          }}
+        >
+          {isPlaying && flyAnim && <FlyOverlay anim={flyAnim} />}
+          {isPlaying && burnAnim && <BurnOverlay anim={burnAnim} />}
+          {isPlaying && pickupAnim && <PickupOverlay anim={pickupAnim} />}
+          {isPlaying && revealCard && <RevealOverlay card={revealCard} />}
+        </div>
+
+        <div
+          style={{
+            gridColumn: "1 / 3",
+            gridRow: 3,
+            zIndex: 2,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: short ? 4 : 8,
+            padding: isPlaying && currentPlayer === 0 && phase === "playing" ? "4px 10px 2px" : "2px 8px",
             borderRadius: 16,
             boxShadow:
               isPlaying && currentPlayer === 0 && phase === "playing"
@@ -2206,6 +2387,8 @@ function Table({
             revealed={isPlaying || (dealProgress.faceUp[0] || 0) > 0}
             animating={dealing}
             fuAnimSlots={dealProgress.faceUp[0] || 0}
+            cardW={ownerW}
+            cardH={ownerH}
             selectableFaceUp={
               (isSwap && !humanReady) || (isHumanTurn && canSelectFaceUp)
             }
@@ -2232,6 +2415,9 @@ function Table({
             <Hand
               cards={playerHand(0)}
               isOwner
+              cardW={ownerW}
+              cardH={ownerH}
+              maxWidth={handMax}
               animating={!!isAnimTarget(0, "hand")}
               selectable={(isSwap && !humanReady) || (isHumanTurn && humanZone === "hand")}
               locked={isSwap ? humanReady : !isHumanTurn}
@@ -2248,114 +2434,6 @@ function Table({
             />
           )}
         </div>
-      </div>
-      </div>
-
-      {showSide && (
-        <div
-          style={{
-            width: 124,
-            flexShrink: 0,
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "stretch",
-            justifyContent: "center",
-            gap: 8,
-            zIndex: 5,
-          }}
-        >
-          {hint ? (
-            <div
-              style={{
-                color: "rgba(255,255,255,0.7)",
-                fontSize: 11,
-                lineHeight: 1.35,
-                textAlign: "center",
-              }}
-            >
-              {hint}
-            </div>
-          ) : null}
-
-          {isSwap && (
-            <button
-              onClick={onReady}
-              disabled={humanReady}
-              style={{
-                ...SIDE_BTN,
-                border: "none",
-                background: humanReady ? "#27ae60" : theme.accent.control,
-                color: "#fff",
-                cursor: humanReady ? "default" : "pointer",
-              }}
-            >
-              Ready
-            </button>
-          )}
-
-          {isHumanTurn &&
-            (pickupAwaitTable ? (
-              <>
-                <button
-                  onClick={onPickUpOnly}
-                  style={{
-                    ...SIDE_BTN,
-                    border: "none",
-                    background: theme.accent.control,
-                    color: "#fff",
-                  }}
-                >
-                  Только сброс
-                </button>
-                <button
-                  onClick={onCancelPickupAwait}
-                  style={{
-                    ...SIDE_BTN,
-                    border: `1px solid ${theme.stroke.secondary}`,
-                    background: theme.fill.tertiary,
-                    color: theme.text.primary,
-                    fontWeight: 600,
-                  }}
-                >
-                  Отмена
-                </button>
-              </>
-            ) : (
-              <>
-                {humanZone !== "faceDown" && (
-                  <button
-                    onClick={onPlay}
-                    disabled={!canPlaySelected}
-                    style={{
-                      ...SIDE_BTN,
-                      border: "none",
-                      background: canPlaySelected ? "#f1c40f" : theme.fill.tertiary,
-                      color: canPlaySelected ? "#1a2e1a" : theme.text.tertiary,
-                      cursor: canPlaySelected ? "pointer" : "default",
-                    }}
-                  >
-                    Ход
-                  </button>
-                )}
-                <button
-                  onClick={onPickUp}
-                  disabled={discard.length === 0}
-                  style={{
-                    ...SIDE_BTN,
-                    border: `1px solid ${theme.stroke.secondary}`,
-                    background: theme.fill.tertiary,
-                    color: theme.text.primary,
-                    fontWeight: 600,
-                    cursor: discard.length === 0 ? "default" : "pointer",
-                    opacity: discard.length === 0 ? 0.5 : 1,
-                  }}
-                >
-                  Забрать сброс
-                </button>
-              </>
-            ))}
-        </div>
-      )}
       </div>
     </div>
   );
