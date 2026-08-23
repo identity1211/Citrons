@@ -818,6 +818,7 @@ interface TableStackProps {
   onSelectFaceUp?: (index: number) => void;
   onSelectFaceDown?: (index: number) => void;
   swapKey?: number;
+  compact?: boolean;
 }
 
 function TableStack({
@@ -837,25 +838,40 @@ function TableStack({
   onSelectFaceUp,
   onSelectFaceDown,
   swapKey = 0,
+  compact,
 }: TableStackProps) {
   const w = cardW ?? (small ? 38 : 56);
   const h = cardH ?? (small ? 54 : 78);
   const lift = Math.max(8, Math.round(h * 0.12));
   const slotCount = Math.max(faceDown.length, faceUp.length, 3);
+  const slots = Array.from({ length: slotCount }, (_, i) => i).filter((i) => faceDown[i] || faceUp[i]);
+  const n = slots.length;
+  const packStep = Math.max(8, Math.round(w * 0.34));
+  const packW = n <= 1 ? (n === 1 ? w : 0) : w + (n - 1) * packStep;
 
   return (
-    <div style={{ display: "flex", gap: Math.max(4, Math.round(w * 0.12)) }}>
+    <div
+      style={
+        compact
+          ? { position: "relative", width: packW || w, height: h + lift }
+          : { display: "flex", gap: Math.max(4, Math.round(w * 0.12)) }
+      }
+    >
       {Array.from({ length: slotCount }, (_, i) => {
         const down = faceDown[i] ?? null;
         const up = faceUp[i] ?? null;
         if (!down && !up) return null;
         const showFaceUp = revealed && !!up;
         const showFaceDown = !!down;
+        const packIndex = slots.indexOf(i);
         return (
           <div
             key={i}
             style={{
-              position: "relative",
+              position: compact ? "absolute" : "relative",
+              left: compact ? packIndex * packStep : undefined,
+              top: compact ? 0 : undefined,
+              zIndex: compact ? packIndex : undefined,
               width: w,
               height: showFaceUp && showFaceDown ? h + lift : h,
             }}
@@ -938,14 +954,13 @@ function Hand({
 }: HandProps) {
   const w = cardW ?? (small ? 38 : 56);
   const h = cardH ?? (small ? 54 : 78);
-  const overlap = Math.round(w * (isOwner ? 0.3 : 0.42));
+  const overlap = Math.round(w * (isOwner ? 0.3 : 0.78));
   const n = cards.length;
-  const comfortableStep = w - overlap;
-  const minPeek = peek ?? (isOwner ? comfortableStep : Math.max(11, Math.round(w * 0.3)));
-  const naturalW = n <= 1 ? w : w + (n - 1) * comfortableStep;
-  const cap = maxWidth ?? (isOwner ? Infinity : w + Math.max(0, n - 1) * Math.max(minPeek, comfortableStep));
-  const packedStep = n <= 1 ? 0 : (Math.min(cap, Math.max(naturalW, w + (n - 1) * minPeek)) - w) / (n - 1);
-  const step = n <= 1 ? 0 : Math.max(minPeek, n > 3 || naturalW > cap ? packedStep : comfortableStep);
+  const comfortableStep = Math.max(6, w - overlap);
+  const threeW = w + 2 * comfortableStep;
+  const cap = maxWidth ?? (isOwner ? Infinity : threeW);
+  const pack = !isOwner;
+  const step = n <= 1 ? 0 : pack ? (Math.min(cap, threeW) - w) / Math.max(1, n - 1) : comfortableStep;
   const totalW = n === 0 ? 0 : n === 1 ? w : w + (n - 1) * step;
 
   return (
@@ -2031,11 +2046,13 @@ function FeltChip({
   onClick,
   disabled,
   kind,
+  style,
 }: {
   label: ReactNode;
   onClick: () => void;
   disabled?: boolean;
   kind: "play" | "take" | "ready" | "ghost";
+  style?: CSSProperties;
 }) {
   const palettes = {
     play: {
@@ -2087,6 +2104,7 @@ function FeltChip({
         lineHeight: 1.15,
         cursor: disabled ? "default" : "pointer",
         opacity: disabled ? 0.72 : 1,
+        ...style,
       }}
     >
       {label}
@@ -2248,7 +2266,7 @@ function Table({
   const short = vp.h < 560;
   const ownerH = short ? Math.round(clamp(vp.h * 0.26, 64, 86)) : 78;
   const ownerW = Math.round(ownerH * 0.72);
-  const oppH = short ? Math.round(clamp(vp.h * 0.15, 40, 54)) : 58;
+  const oppH = short ? Math.round(clamp(vp.h * 0.11, 32, 42)) : 48;
   const oppW = Math.round(oppH * 0.72);
   const handMax = Math.round(vp.w * (short ? 0.36 : 0.5));
   const seats = splitOpponentSeats(opponentCount);
@@ -2268,30 +2286,9 @@ function Table({
     }
   }
 
-  const hint = isSwap
-    ? humanReady
-      ? ""
-      : "Кликни карту в руке, затем открытую на столе"
-    : isHumanTurn
-      ? pickupAwaitTable
-        ? humanZone === "faceDown"
-          ? "Кликни закрытую карту со стола"
-          : "Кликни открытую карту того же ранга"
-        : humanZone === "faceDown"
-          ? "Кликни закрытую карту"
-          : selectionCount(playSelected) === 0
-            ? humanZone === "hand"
-              ? combineOk
-                ? "Можно добавить открытые того же ранга"
-                : "Выбери карты одного ранга"
-              : "Выбери открытые одного ранга"
-            : `Выбрано: ${selectionCount(playSelected)} × ${selRank}`
-      : "";
-
   function renderOpp(pIdx: number, side: "left" | "right" | "top") {
     const hand = playerHand(pIdx);
-    const peek = Math.max(side === "top" ? 10 : 12, Math.round(oppW * 0.3));
-    const maxW = oppW + Math.max(0, hand.length - 1) * peek;
+    const across = side === "top";
     return (
       <div
         key={pIdx}
@@ -2300,7 +2297,7 @@ function Table({
           flexDirection: "column",
           alignItems: "center",
           gap: 3,
-          padding: side === "top" ? "0 8px" : "2px 4px",
+          padding: across ? "0 6px" : "2px 2px",
         }}
       >
         <SeatLabel
@@ -2310,29 +2307,45 @@ function Table({
           isTurn={isPlaying && currentPlayer === pIdx && phase === "playing"}
           place={finishOrder.includes(pIdx) ? finishOrder.indexOf(pIdx) + 1 : null}
         />
-        {hand.length > 0 && (
-          <Hand
-            cards={hand}
-            isOwner={false}
+        <div
+          style={{
+            display: "flex",
+            flexDirection: across ? "row" : "column",
+            alignItems: "center",
+            justifyContent: "center",
+            flexWrap: "nowrap",
+            gap: across ? 6 : 2,
+          }}
+        >
+          <TableStack
+            faceDown={playerFaceDown(pIdx)}
+            faceUp={playerFaceUp(pIdx)}
+            revealed={isPlaying || (dealProgress.faceUp[pIdx] || 0) > 0}
             cardW={oppW}
             cardH={oppH}
-            peek={peek}
-            maxWidth={maxW}
-            animating={!!isAnimTarget(pIdx, "hand")}
+            animating={dealing}
+            fuAnimSlots={dealProgress.faceUp[pIdx] || 0}
+            compact
           />
-        )}
-        <TableStack
-          faceDown={playerFaceDown(pIdx)}
-          faceUp={playerFaceUp(pIdx)}
-          revealed={isPlaying || (dealProgress.faceUp[pIdx] || 0) > 0}
-          cardW={oppW}
-          cardH={oppH}
-          animating={dealing}
-          fuAnimSlots={dealProgress.faceUp[pIdx] || 0}
-        />
+          {hand.length > 0 && (
+            <Hand
+              cards={hand}
+              isOwner={false}
+              cardW={oppW}
+              cardH={oppH}
+              maxWidth={oppW + 2 * Math.max(6, Math.round(oppW * 0.22))}
+              animating={!!isAnimTarget(pIdx, "hand")}
+            />
+          )}
+        </div>
       </div>
     );
   }
+
+  const myTurn = isPlaying && currentPlayer === 0 && phase === "playing";
+  const playClickable =
+    isHumanTurn && !pickupAwaitTable && humanZone !== "faceDown" && canPlaySelected;
+  const pickupClickable = isHumanTurn && (pickupAwaitTable || discard.length > 0);
 
   return (
     <div
@@ -2466,7 +2479,7 @@ function Table({
           columnGap: short ? 4 : 12,
           alignItems: "center",
           justifyItems: "center",
-          padding: short ? "26px 6px 6px" : "16px 28px 12px",
+          padding: short ? "26px 6px 58px" : "16px 28px 58px",
           overflow: "hidden",
           boxSizing: "border-box",
           position: "relative",
@@ -2494,7 +2507,7 @@ function Table({
             alignItems: "center",
             justifyContent: "center",
             gap: 10,
-            minWidth: seats.left.length ? 96 : 0,
+            minWidth: seats.left.length ? 64 : 0,
             minHeight: 0,
           }}
         >
@@ -2527,7 +2540,7 @@ function Table({
             alignItems: "center",
             justifyContent: "center",
             gap: 10,
-            minWidth: seats.right.length ? 96 : 0,
+            minWidth: seats.right.length ? 64 : 0,
             minHeight: 0,
           }}
         >
@@ -2542,79 +2555,31 @@ function Table({
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            gap: short ? 10 : 18,
             minHeight: 0,
             width: "100%",
+            padding: 0,
+            boxSizing: "border-box",
           }}
         >
-          <DeckPile count={drawDeck.length} />
-          {isSwap && (
-            <div style={{ transform: short ? "scale(0.78)" : undefined, transformOrigin: "center" }}>
-              <SwapTimer seconds={swapSeconds} />
-            </div>
-          )}
-          {isPlaying && <DiscardPile cards={displayDiscard} />}
-          {isPlaying && <BurnPile count={burnCount} />}
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 6,
-            }}
-          >
-            {hint && !short ? (
-              <div
-                style={{
-                  color: "rgba(255,255,255,0.62)",
-                  fontSize: 10,
-                  lineHeight: 1.25,
-                  textAlign: "center",
-                  maxWidth: 100,
-                }}
-              >
-                {hint}
+          <div style={{ flex: "0 0 auto", marginRight: "auto", paddingLeft: short ? 2 : 8 }}>
+            <DeckPile count={drawDeck.length} />
+          </div>
+          <div style={{ flex: "0 0 auto", display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+            {isSwap && (
+              <div style={{ transform: short ? "scale(0.78)" : undefined, transformOrigin: "center" }}>
+                <SwapTimer seconds={swapSeconds} />
               </div>
-            ) : null}
+            )}
+            {isPlaying && <DiscardPile cards={displayDiscard} />}
             {isSwap && (
               <FeltChip onClick={onReady} disabled={humanReady} kind="ready" label="Ready" />
             )}
-            {isHumanTurn &&
-              (pickupAwaitTable ? (
-                <>
-                  <FeltChip
-                    onClick={onPickUpOnly}
-                    kind="take"
-                    label={
-                      <>
-                        Только
-                        <br />
-                        сброс
-                      </>
-                    }
-                  />
-                  <FeltChip onClick={onCancelPickupAwait} kind="ghost" label="Отмена" />
-                </>
-              ) : (
-                <>
-                  {humanZone !== "faceDown" && (
-                    <FeltChip onClick={onPlay} disabled={!canPlaySelected} kind="play" label="Ход" />
-                  )}
-                  <FeltChip
-                    onClick={onPickUp}
-                    disabled={discard.length === 0}
-                    kind="take"
-                    label={
-                      <>
-                        Забрать
-                        <br />
-                        сброс
-                      </>
-                    }
-                  />
-                </>
-              ))}
+            {pickupAwaitTable && isHumanTurn && (
+              <FeltChip onClick={onCancelPickupAwait} kind="ghost" label="Отмена" />
+            )}
+          </div>
+          <div style={{ flex: "0 0 auto", marginLeft: "auto", paddingRight: short ? 2 : 8 }}>
+            {isPlaying ? <BurnPile count={burnCount} /> : <div style={{ width: 64, height: 90 }} />}
           </div>
         </div>
 
@@ -2707,6 +2672,51 @@ function Table({
           )}
         </div>
       </div>
+
+      <FeltChip
+        kind={myTurn ? "play" : "ghost"}
+        disabled={!myTurn}
+        label="Ход"
+        onClick={() => {
+          if (playClickable) onPlay();
+        }}
+        style={{
+          position: "absolute",
+          left: "max(8px, env(safe-area-inset-left))",
+          bottom: "max(8px, env(safe-area-inset-bottom))",
+          zIndex: 80,
+          width: 108,
+          minHeight: 48,
+          fontSize: 14,
+          pointerEvents: "auto",
+        }}
+      />
+      <FeltChip
+        kind={myTurn ? "take" : "ghost"}
+        disabled={!myTurn}
+        label={
+          <>
+            Забрать
+            <br />
+            сброс
+          </>
+        }
+        onClick={() => {
+          if (!pickupClickable) return;
+          if (pickupAwaitTable) onPickUpOnly();
+          else onPickUp();
+        }}
+        style={{
+          position: "absolute",
+          right: "max(8px, env(safe-area-inset-right))",
+          bottom: "max(8px, env(safe-area-inset-bottom))",
+          zIndex: 80,
+          width: 108,
+          minHeight: 48,
+          fontSize: 13,
+          pointerEvents: "auto",
+        }}
+      />
     </div>
   );
 }
