@@ -774,7 +774,7 @@ function TableStack({
   const slotCount = Math.max(faceDown.length, faceUp.length, 3);
 
   return (
-    <div style={{ display: "flex", gap: Math.max(8, Math.round(w * 0.28)) }}>
+    <div style={{ display: "flex", gap: Math.max(4, Math.round(w * 0.14)) }}>
       {Array.from({ length: slotCount }, (_, i) => {
         const down = faceDown[i] ?? null;
         const up = faceUp[i] ?? null;
@@ -872,9 +872,11 @@ function Hand({
   const n = cards.length;
   const comfortableStep = Math.max(6, w - overlap);
   const threeW = w + 2 * comfortableStep;
+  const naturalW = n <= 1 ? (n === 1 ? w : 0) : w + (n - 1) * comfortableStep;
   const cap = maxWidth ?? (isOwner ? Infinity : threeW);
-  const pack = !isOwner;
-  const step = n <= 1 ? 0 : pack ? (Math.min(cap, threeW) - w) / Math.max(1, n - 1) : comfortableStep;
+  const packed = n > 1 && naturalW > cap;
+  const packedStep = packed ? (Math.min(cap, naturalW) - w) / Math.max(1, n - 1) : comfortableStep;
+  const step = n <= 1 ? 0 : packed ? Math.max(10, packedStep) : comfortableStep;
   const totalW = n === 0 ? 0 : n === 1 ? w : w + (n - 1) * step;
 
   return (
@@ -2180,9 +2182,16 @@ function Table({
   const short = vp.h < 560;
   const ownerH = short ? Math.round(clamp(vp.h * 0.26, 64, 86)) : 78;
   const ownerW = Math.round(ownerH * 0.72);
-  const oppH = short ? Math.round(clamp(vp.h * 0.18, 48, 65)) : 70;
+  const oppH = short ? Math.round(clamp(vp.h * 0.162, 43, 59)) : 63;
   const oppW = Math.round(oppH * 0.72);
-  const handMax = Math.round(vp.w * (short ? 0.36 : 0.5));
+  const tableGap = Math.max(4, Math.round(ownerW * 0.14));
+  const tableSpread = ownerW * 3 + tableGap * 2;
+  const humanGap = short ? 36 : 24;
+  const cornerReserve = 116;
+  const handMax = Math.max(
+    ownerW,
+    vp.w - cornerReserve * 2 - tableSpread - humanGap - 12,
+  );
   const seats = splitOpponentSeats(opponentCount);
 
   async function toggleFullscreen() {
@@ -2392,7 +2401,7 @@ function Table({
           columnGap: short ? 4 : 12,
           alignItems: "center",
           justifyItems: "center",
-          padding: short ? "26px 6px 58px" : "16px 28px 58px",
+          padding: short ? "26px 6px 28px" : "16px 28px 28px",
           overflow: "hidden",
           boxSizing: "border-box",
           position: "relative",
@@ -2539,8 +2548,9 @@ function Table({
             flexDirection: short ? "row" : "column",
             alignItems: "center",
             justifyContent: "center",
-            gap: short ? 36 : 24,
+            gap: humanGap,
             minHeight: 0,
+            alignSelf: "end",
             padding: isPlaying && currentPlayer === 0 && phase === "playing" ? "4px 10px 2px" : "2px 8px",
             borderRadius: 16,
             boxShadow:
