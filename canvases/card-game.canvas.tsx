@@ -748,7 +748,6 @@ interface TableStackProps {
   onSelectFaceUp?: (index: number) => void;
   onSelectFaceDown?: (index: number) => void;
   swapKey?: number;
-  compact?: boolean;
 }
 
 function TableStack({
@@ -768,40 +767,25 @@ function TableStack({
   onSelectFaceUp,
   onSelectFaceDown,
   swapKey = 0,
-  compact,
 }: TableStackProps) {
   const w = cardW ?? (small ? 38 : 56);
   const h = cardH ?? (small ? 54 : 78);
   const lift = Math.max(8, Math.round(h * 0.12));
   const slotCount = Math.max(faceDown.length, faceUp.length, 3);
-  const slots = Array.from({ length: slotCount }, (_, i) => i).filter((i) => faceDown[i] || faceUp[i]);
-  const n = slots.length;
-  const packStep = Math.max(8, Math.round(w * 0.34));
-  const packW = n <= 1 ? (n === 1 ? w : 0) : w + (n - 1) * packStep;
 
   return (
-    <div
-      style={
-        compact
-          ? { position: "relative", width: packW || w, height: h + lift }
-          : { display: "flex", gap: Math.max(4, Math.round(w * 0.12)) }
-      }
-    >
+    <div style={{ display: "flex", gap: Math.max(8, Math.round(w * 0.28)) }}>
       {Array.from({ length: slotCount }, (_, i) => {
         const down = faceDown[i] ?? null;
         const up = faceUp[i] ?? null;
         if (!down && !up) return null;
         const showFaceUp = revealed && !!up;
         const showFaceDown = !!down;
-        const packIndex = slots.indexOf(i);
         return (
           <div
             key={i}
             style={{
-              position: compact ? "absolute" : "relative",
-              left: compact ? packIndex * packStep : undefined,
-              top: compact ? 0 : undefined,
-              zIndex: compact ? packIndex : undefined,
+              position: "relative",
               width: w,
               height: showFaceUp && showFaceDown ? h + lift : h,
             }}
@@ -2196,7 +2180,7 @@ function Table({
   const short = vp.h < 560;
   const ownerH = short ? Math.round(clamp(vp.h * 0.26, 64, 86)) : 78;
   const ownerW = Math.round(ownerH * 0.72);
-  const oppH = short ? Math.round(clamp(vp.h * 0.11, 32, 42)) : 48;
+  const oppH = short ? Math.round(clamp(vp.h * 0.18, 48, 65)) : 70;
   const oppW = Math.round(oppH * 0.72);
   const handMax = Math.round(vp.w * (short ? 0.36 : 0.5));
   const seats = splitOpponentSeats(opponentCount);
@@ -2255,7 +2239,6 @@ function Table({
             cardH={oppH}
             animating={dealing}
             fuAnimSlots={dealProgress.faceUp[pIdx] || 0}
-            compact
           />
           {hand.length > 0 && (
             <Hand
@@ -2403,7 +2386,7 @@ function Table({
           background: "#1a6b3c",
           border: short ? "6px solid #145230" : "10px solid #145230",
           display: "grid",
-          gridTemplateColumns: `${seats.left.length ? "auto" : "4px"} minmax(0, 1fr) ${seats.right.length ? "auto" : "4px"}`,
+          gridTemplateColumns: `${seats.left.length ? "auto" : "4px"} minmax(0, 1fr) auto minmax(0, 1fr) ${seats.right.length ? "auto" : "4px"}`,
           gridTemplateRows: "auto minmax(0, 1fr) auto",
           rowGap: short ? 4 : 10,
           columnGap: short ? 4 : 12,
@@ -2437,7 +2420,7 @@ function Table({
             alignItems: "center",
             justifyContent: "center",
             gap: 10,
-            minWidth: seats.left.length ? 64 : 0,
+            minWidth: seats.left.length ? 80 : 0,
             minHeight: 0,
           }}
         >
@@ -2446,7 +2429,7 @@ function Table({
 
         <div
           style={{
-            gridColumn: 2,
+            gridColumn: "2 / 5",
             gridRow: 1,
             zIndex: 1,
             display: "flex",
@@ -2462,7 +2445,7 @@ function Table({
 
         <div
           style={{
-            gridColumn: 3,
+            gridColumn: 5,
             gridRow: "1 / -1",
             zIndex: 1,
             display: "flex",
@@ -2470,7 +2453,7 @@ function Table({
             alignItems: "center",
             justifyContent: "center",
             gap: 10,
-            minWidth: seats.right.length ? 64 : 0,
+            minWidth: seats.right.length ? 80 : 0,
             minHeight: 0,
           }}
         >
@@ -2483,34 +2466,52 @@ function Table({
             gridRow: 2,
             zIndex: 2,
             display: "flex",
-            alignItems: "center",
             justifyContent: "center",
+            alignItems: "center",
             minHeight: 0,
             width: "100%",
-            padding: 0,
-            boxSizing: "border-box",
           }}
         >
-          <div style={{ flex: "0 0 auto", marginRight: "auto", paddingLeft: short ? 2 : 8 }}>
-            <DeckPile count={drawDeck.length} />
-          </div>
-          <div style={{ flex: "0 0 auto", display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
-            {isSwap && (
-              <div style={{ transform: short ? "scale(0.78)" : undefined, transformOrigin: "center" }}>
-                <SwapTimer seconds={swapSeconds} />
-              </div>
-            )}
-            {isPlaying && <DiscardPile cards={displayDiscard} />}
-            {isSwap && (
-              <FeltChip onClick={onReady} disabled={humanReady} kind="ready" label="Ready" />
-            )}
-            {pickupAwaitTable && isHumanTurn && (
-              <FeltChip onClick={onCancelPickupAwait} kind="ghost" label="Отмена" />
-            )}
-          </div>
-          <div style={{ flex: "0 0 auto", marginLeft: "auto", paddingRight: short ? 2 : 8 }}>
-            {isPlaying ? <BurnPile count={burnCount} /> : <div style={{ width: 64, height: 90 }} />}
-          </div>
+          <DeckPile count={drawDeck.length} />
+        </div>
+        <div
+          style={{
+            gridColumn: 3,
+            gridRow: 2,
+            zIndex: 2,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 8,
+            minHeight: 0,
+          }}
+        >
+          {isSwap && (
+            <div style={{ transform: short ? "scale(0.78)" : undefined, transformOrigin: "center" }}>
+              <SwapTimer seconds={swapSeconds} />
+            </div>
+          )}
+          {isPlaying && <DiscardPile cards={displayDiscard} />}
+          {isSwap && (
+            <FeltChip onClick={onReady} disabled={humanReady} kind="ready" label="Ready" />
+          )}
+          {pickupAwaitTable && isHumanTurn && (
+            <FeltChip onClick={onCancelPickupAwait} kind="ghost" label="Отмена" />
+          )}
+        </div>
+        <div
+          style={{
+            gridColumn: 4,
+            gridRow: 2,
+            zIndex: 2,
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "center",
+            minHeight: 0,
+            width: "100%",
+          }}
+        >
+          {isPlaying ? <BurnPile count={burnCount} /> : <div style={{ width: 64, height: 90 }} />}
         </div>
 
         <div
@@ -2531,14 +2532,14 @@ function Table({
 
         <div
           style={{
-            gridColumn: 2,
+            gridColumn: "2 / 5",
             gridRow: 3,
             zIndex: 2,
             display: "flex",
             flexDirection: short ? "row" : "column",
             alignItems: "center",
             justifyContent: "center",
-            gap: short ? 10 : 8,
+            gap: short ? 36 : 24,
             minHeight: 0,
             padding: isPlaying && currentPlayer === 0 && phase === "playing" ? "4px 10px 2px" : "2px 8px",
             borderRadius: 16,
