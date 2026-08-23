@@ -2406,7 +2406,7 @@ function Table({
           columnGap: short ? 4 : 12,
           alignItems: "center",
           justifyItems: "center",
-          padding: short ? "26px 6px 28px" : "16px 28px 28px",
+          padding: short ? "13px 6px 28px" : "8px 28px 28px",
           overflow: "hidden",
           boxSizing: "border-box",
           position: "relative",
@@ -2450,6 +2450,7 @@ function Table({
             display: "flex",
             justifyContent: "center",
             alignItems: "flex-start",
+            alignSelf: "start",
             gap: short ? 16 : 28,
             minHeight: 0,
             width: "100%",
@@ -2478,27 +2479,23 @@ function Table({
 
         <div
           style={{
-            gridColumn: 2,
+            gridColumn: "1 / -1",
             gridRow: 2,
-            minHeight: 0,
+            position: "relative",
             width: "100%",
             height: "100%",
-            pointerEvents: "none",
-          }}
-        />
-        <div
-          style={{
-            position: "absolute",
-            inset: 0,
+            minHeight: 0,
             zIndex: 3,
             pointerEvents: "none",
+            alignSelf: "stretch",
+            justifySelf: "stretch",
           }}
         >
           <div
             style={{
               position: "absolute",
               left: "34%",
-              top: short ? "40%" : "46%",
+              top: "50%",
               transform: "translate(-50%, -50%)",
               pointerEvents: "auto",
             }}
@@ -2509,7 +2506,7 @@ function Table({
             style={{
               position: "absolute",
               left: "50%",
-              top: short ? "40%" : "46%",
+              top: "50%",
               transform: "translate(-50%, -50%)",
               display: "flex",
               flexDirection: "column",
@@ -2535,7 +2532,7 @@ function Table({
             style={{
               position: "absolute",
               left: "66%",
-              top: short ? "40%" : "46%",
+              top: "50%",
               transform: "translate(-50%, -50%)",
               pointerEvents: "auto",
             }}
