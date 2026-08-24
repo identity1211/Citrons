@@ -631,7 +631,7 @@ function VisualFrame({ children }: { children: ReactNode }) {
         background: "#145230",
       }}
     >
-      <div id="clerk-captcha" />
+      <div id="clerk-captcha" style={{ position: "fixed", left: 0, bottom: 0, zIndex: 50 }} />
       {children}
     </div>
   );
@@ -1627,9 +1627,7 @@ async function ensureClerk(): Promise<any> {
     const callbackHref = window.location.href;
     if (w.Clerk && typeof w.Clerk.load === "function" && typeof w.Clerk !== "function") {
       if (!w.Clerk.loaded) {
-        await w.Clerk.load({
-          ui: w.__internal_ClerkUICtor ? { ClerkUI: w.__internal_ClerkUICtor } : undefined,
-        });
+        await w.Clerk.load();
       }
       const fromCallback = isClerkCallbackUrl(callbackHref);
       if (fromCallback || !w.Clerk.user) {
@@ -1638,13 +1636,6 @@ async function ensureClerk(): Promise<any> {
       return w.Clerk;
     }
     const host = clerkFrontendHost(pk);
-    if (host) {
-      try {
-        await loadScriptOnce(`https://${host}/npm/@clerk/ui@1/dist/ui.browser.js`);
-      } catch {
-        /* UI bundle optional */
-      }
-    }
     const clerkSrc = host
       ? `https://${host}/npm/@clerk/clerk-js@5/dist/clerk.browser.js`
       : "https://cdn.jsdelivr.net/npm/@clerk/clerk-js@5/dist/clerk.browser.js";
@@ -1652,9 +1643,7 @@ async function ensureClerk(): Promise<any> {
     let clerk = w.Clerk;
     if (typeof clerk === "function") clerk = new clerk(pk);
     if (!clerk || typeof clerk.load !== "function") throw new Error("Clerk не загрузился");
-    await clerk.load({
-      ui: w.__internal_ClerkUICtor ? { ClerkUI: w.__internal_ClerkUICtor } : undefined,
-    });
+    await clerk.load();
     w.Clerk = clerk;
     const fromCallback = isClerkCallbackUrl(callbackHref);
     if (fromCallback || !clerk.user) {
@@ -1696,33 +1685,20 @@ function clerkErrorText(err: any): string {
 async function signInWithGoogle(): Promise<void> {
   const clerk = await ensureClerk();
   const redirectUrl = appUrl();
+  if (typeof clerk.redirectToSignIn === "function") {
+    await clerk.redirectToSignIn({
+      afterSignInUrl: redirectUrl,
+      afterSignUpUrl: redirectUrl,
+      redirectUrl,
+    });
+    return;
+  }
   const signIn = clerk.client?.signIn;
   if (signIn && typeof signIn.authenticateWithRedirect === "function") {
     await signIn.authenticateWithRedirect({
       strategy: "oauth_google",
       redirectUrl,
       redirectUrlComplete: redirectUrl,
-    });
-    return;
-  }
-  if (typeof clerk.authenticateWithRedirect === "function") {
-    await clerk.authenticateWithRedirect({
-      strategy: "oauth_google",
-      redirectUrl,
-      redirectUrlComplete: redirectUrl,
-    });
-    return;
-  }
-  if (typeof clerk.openSignIn === "function") {
-    clerk.openSignIn({
-      forceRedirectUrl: redirectUrl,
-      appearance: {
-        variables: {
-          colorPrimary: "#f1c40f",
-          colorBackground: "#145230",
-          colorText: "#f5f0e6",
-        },
-      },
     });
     return;
   }
@@ -1870,7 +1846,7 @@ function ProfileButton() {
           style={{
             position: "fixed",
             inset: 0,
-            zIndex: 40,
+            zIndex: 80,
             background: "rgba(0,0,0,0.48)",
             display: "flex",
             alignItems: "center",
