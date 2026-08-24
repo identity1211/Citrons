@@ -2891,21 +2891,23 @@ function normalizeWsUrl(raw: string): string {
   return u.replace(/\/$/, "");
 }
 
+const DEFAULT_WS = "wss://web-production-b9cc89.up.railway.app";
+
 function defaultWsUrl(): string {
-  if (typeof window === "undefined") return "ws://127.0.0.1:8787";
+  if (typeof window === "undefined") return DEFAULT_WS;
   const q = new URLSearchParams(window.location.search).get("ws");
   if (q) return normalizeWsUrl(q);
+  const builtin = (window as unknown as { CITRONS_WS?: string }).CITRONS_WS;
+  if (builtin) return normalizeWsUrl(builtin);
   try {
     const saved = localStorage.getItem(WS_KEY);
     if (saved) return saved;
   } catch {
     /* ignore */
   }
-  const builtin = (window as unknown as { CITRONS_WS?: string }).CITRONS_WS;
-  if (builtin) return normalizeWsUrl(builtin);
   const host = window.location.hostname;
   if (host === "localhost" || host === "127.0.0.1") return `ws://${host}:8787`;
-  return "wss://citrons-production.up.railway.app";
+  return DEFAULT_WS;
 }
 
 function readSavedName(): string {
