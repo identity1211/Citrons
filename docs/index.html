@@ -1935,26 +1935,32 @@ function useClerkAuth() {
 }
 
 const PROFILE_PANEL: CSSProperties = {
-  width: "min(360px, calc(100vw - 28px))",
-  borderRadius: 16,
+  width: "min(320px, 100%)",
+  maxHeight: "100%",
+  boxSizing: "border-box",
+  margin: "auto",
+  borderRadius: 14,
   background: "#145230",
   border: "1.5px solid rgba(255,255,255,0.22)",
   boxShadow: "0 18px 48px rgba(0,0,0,0.45)",
-  padding: "20px 18px 16px",
+  padding: "12px 14px 10px",
   color: "#f5f0e6",
   textAlign: "center",
+  overflowY: "auto",
+  WebkitOverflowScrolling: "touch",
 };
 
 const PROFILE_GHOST: CSSProperties = {
   width: "100%",
-  height: 42,
-  borderRadius: 10,
+  height: 36,
+  borderRadius: 8,
   border: "1.5px solid rgba(255,255,255,0.35)",
   background: "transparent",
   color: "#f5f0e6",
-  fontSize: 14,
+  fontSize: 13,
   fontWeight: 600,
   cursor: "pointer",
+  flexShrink: 0,
 };
 
 function ProfileButton() {
@@ -2025,29 +2031,31 @@ function ProfileButton() {
             pointerEvents: "auto",
             background: "rgba(0,0,0,0.48)",
             display: "flex",
-            alignItems: "center",
+            alignItems: "stretch",
             justifyContent: "center",
-            padding: 16,
+            overflow: "auto",
+            padding: "max(8px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left))",
+            boxSizing: "border-box",
           }}
         >
           <div
             onClick={(e) => e.stopPropagation()}
             style={PROFILE_PANEL}
           >
-            <div style={{ fontFamily: 'Georgia, "Times New Roman", serif', fontSize: 22, fontWeight: 700, marginBottom: 14 }}>
+            <div style={{ fontFamily: 'Georgia, "Times New Roman", serif', fontSize: 18, fontWeight: 700, marginBottom: 8 }}>
               Profile
             </div>
             {user ? (
               <>
-                <div style={{ display: "flex", justifyContent: "center", marginBottom: 12 }}>
-                  <AvatarBubble src={user.imageUrl} name={nickName} size={84} />
+                <div style={{ display: "flex", justifyContent: "center", marginBottom: 8 }}>
+                  <AvatarBubble src={user.imageUrl} name={nickName} size={56} />
                 </div>
                 <input
                   value={nick}
                   onChange={(e) => setNick(e.target.value.slice(0, 18))}
                   placeholder="Nickname"
                   maxLength={18}
-                  style={{ ...LOBBY_INPUT, margin: "0 auto 10px" }}
+                  style={{ ...LOBBY_INPUT, maxWidth: "100%", height: 38, margin: "0 auto 6px", fontSize: 16 }}
                 />
                 <button
                   type="button"
@@ -2067,88 +2075,59 @@ function ProfileButton() {
                       setMsg("Nickname saved");
                     })
                   }
-                  style={{ ...LOBBY_GOLD_BTN, maxWidth: "100%", height: 42, marginBottom: 8 }}
+                  style={{ ...LOBBY_GOLD_BTN, maxWidth: "100%", height: 36, fontSize: 14, marginBottom: 8 }}
                 >
                   {busy ? "Saving…" : "Save nickname"}
                 </button>
-                <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 4 }}>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() =>
-                      run(async () => {
-                        try {
-                          await user.setProfileImage({ file: null });
-                        } catch {
-                          const google = (user.externalAccounts || []).find(
-                            (a: any) => a.provider === "google" || a.provider === "oauth_google"
-                          );
-                          const url = google?.imageUrl || google?.avatarUrl;
-                          if (!url) throw new Error("No Gmail photo");
-                          const blob = await fetch(url).then((r) => {
-                            if (!r.ok) throw new Error("Couldn't fetch the Gmail photo");
-                            return r.blob();
-                          });
-                          const file = new File([blob], "gmail.jpg", { type: blob.type || "image/jpeg" });
-                          await user.setProfileImage({ file });
-                        }
-                        setMsg("Gmail avatar set");
-                      })
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => fileRef.current?.click()}
+                  style={PROFILE_GHOST}
+                >
+                  Upload photo
+                </button>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="image/*"
+                  style={{ display: "none" }}
+                  onChange={(e) => {
+                    const file = e.target.files && e.target.files[0];
+                    e.target.value = "";
+                    if (!file) return;
+                    if (file.size > 8 * 1024 * 1024) {
+                      setMsg("File is larger than 8 MB");
+                      return;
                     }
-                    style={PROFILE_GHOST}
-                  >
-                    Use Gmail photo
-                  </button>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => fileRef.current?.click()}
-                    style={PROFILE_GHOST}
-                  >
-                    Upload photo
-                  </button>
-                  <input
-                    ref={fileRef}
-                    type="file"
-                    accept="image/*"
-                    style={{ display: "none" }}
-                    onChange={(e) => {
-                      const file = e.target.files && e.target.files[0];
-                      e.target.value = "";
-                      if (!file) return;
-                      if (file.size > 8 * 1024 * 1024) {
-                        setMsg("File is larger than 8 MB");
-                        return;
+                    void run(async () => {
+                      await user.setProfileImage({ file });
+                      setMsg("Avatar updated");
+                    });
+                  }}
+                />
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() =>
+                    run(async () => {
+                      const clerk = await ensureClerk();
+                      const after = appUrl();
+                      await clerk.signOut({ redirectUrl: after });
+                      setOpen(false);
+                      if (!window.location.href.startsWith(after)) {
+                        window.location.replace(after);
                       }
-                      void run(async () => {
-                        await user.setProfileImage({ file });
-                        setMsg("Avatar updated");
-                      });
-                    }}
-                  />
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() =>
-                      run(async () => {
-                        const clerk = await ensureClerk();
-                        const after = appUrl();
-                        await clerk.signOut({ redirectUrl: after });
-                        setOpen(false);
-                        if (!window.location.href.startsWith(after)) {
-                          window.location.replace(after);
-                        }
-                      })
-                    }
-                    style={{ ...PROFILE_GHOST, marginTop: 6, opacity: 0.85 }}
-                  >
-                    Sign out
-                  </button>
-                </div>
+                    })
+                  }
+                  style={{ ...PROFILE_GHOST, marginTop: 6, opacity: 0.85 }}
+                >
+                  Sign out
+                </button>
               </>
             ) : (
               <>
-                <div style={{ fontSize: 14, lineHeight: 1.45, color: "rgba(255,255,255,0.72)", marginBottom: 16 }}>
+                <div style={{ fontSize: 13, lineHeight: 1.4, color: "rgba(255,255,255,0.72)", marginBottom: 12 }}>
                   Sign in with Google to save your nickname and avatar.
                 </div>
                 <button
@@ -2159,21 +2138,21 @@ function ProfileButton() {
                       await signInWithGoogle();
                     })
                   }
-                  style={{ ...LOBBY_GOLD_BTN, maxWidth: "100%", height: 46 }}
+                  style={{ ...LOBBY_GOLD_BTN, maxWidth: "100%", height: 40, fontSize: 15 }}
                 >
                   {busy ? "Opening Google…" : "Sign in with Google"}
                 </button>
               </>
             )}
             {(msg || (!user && error)) && (
-              <div style={{ marginTop: 12, fontSize: 12, lineHeight: 1.4, color: msg ? "#d5f5e3" : "#f5b7b1" }}>
+              <div style={{ marginTop: 8, fontSize: 12, lineHeight: 1.35, color: msg ? "#d5f5e3" : "#f5b7b1" }}>
                 {msg || error}
               </div>
             )}
             <button
               type="button"
               onClick={() => setOpen(false)}
-              style={{ ...PROFILE_GHOST, marginTop: 12, height: 36, fontSize: 13 }}
+              style={{ ...PROFILE_GHOST, marginTop: 8, height: 32, fontSize: 13 }}
             >
               Close
             </button>
