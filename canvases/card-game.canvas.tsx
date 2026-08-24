@@ -195,13 +195,16 @@ function placeLabel(place: number, total: number): string {
 function refillHand(
   hand: string[],
   deck: string[]
-): { hand: string[]; deck: string[] } {
+): { hand: string[]; deck: string[]; drawn: string[] } {
   const h = [...hand];
   const d = [...deck];
+  const drawn: string[] = [];
   while (h.length < HAND_SIZE && d.length > 0) {
-    h.push(d.shift()!);
+    const card = d.shift()!;
+    drawn.push(card);
+    h.push(card);
   }
-  return { hand: sortHand(h), deck: d };
+  return { hand: sortHand(h), deck: d, drawn };
 }
 
 function removeIndices(arr: string[], indices: number[]): { kept: string[]; removed: string[] } {
@@ -350,10 +353,10 @@ function aiChoosePlay(
 
 // ─── CSS keyframes ───────────────────────────────────────────────────────────
 
-const STYLE_ID = "card-game-keyframes-v7";
+const STYLE_ID = "card-game-keyframes-v8";
 function ensureKeyframes() {
   if (typeof document === "undefined") return;
-  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6"]) {
+  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7"]) {
     document.getElementById(id)?.remove();
   }
   if (document.getElementById(STYLE_ID)) return;
@@ -396,6 +399,10 @@ function ensureKeyframes() {
       0% { opacity: 1; transform: translate(0, 0) scale(1) rotate(0deg); }
       100% { opacity: 0.8; transform: translate(var(--px), var(--py)) scale(0.68) rotate(var(--pr)); }
     }
+    @keyframes cardFlyFromDeck {
+      0% { opacity: 1; transform: translate(var(--dx), var(--dy)) scale(0.9) rotate(-10deg); }
+      100% { opacity: 0.92; transform: translate(var(--px), var(--py)) scale(0.72) rotate(var(--pr)); }
+    }
     @keyframes revealPop {
       0% { opacity: 0; transform: scale(0.45) rotate(-14deg); }
       45% { opacity: 1; transform: scale(1.1) rotate(3deg); }
@@ -432,6 +439,7 @@ function ensureKeyframes() {
     .card-fly { animation: cardFlyToDiscard 0.48s cubic-bezier(0.22, 1, 0.36, 1) both; pointer-events: none; }
     .card-fly-burn { animation: cardFlyToBurn 0.55s cubic-bezier(0.33, 1, 0.68, 1) both; pointer-events: none; }
     .card-fly-pickup { animation: cardFlyToPlayer 0.55s cubic-bezier(0.33, 1, 0.68, 1) both; pointer-events: none; }
+    .card-fly-draw { animation: cardFlyFromDeck 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; pointer-events: none; }
     .card-reveal { animation: revealPop 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
     .timer-urgent { animation: timerPulse 0.8s ease-in-out infinite; }
     .lobby-felt-glow {
@@ -974,6 +982,7 @@ const FLY_MS = 520;
 const BURN_MS = 600;
 const PICKUP_MS = 600;
 const REVEAL_MS = 900;
+const DRAW_MS = 520;
 
 interface FlyAnim {
   id: number;
@@ -993,6 +1002,13 @@ interface PickupAnim {
   toPlayer: number;
   playerCount: number;
   hideFaces: boolean;
+}
+
+interface DrawAnim {
+  id: number;
+  cards: string[];
+  toPlayer: number;
+  playerCount: number;
 }
 
 function splitOpponentSeats(opponentCount: number): { left: number[]; top: number[]; right: number[] } {
@@ -1274,6 +1290,44 @@ function PickupOverlay({ anim }: { anim: PickupAnim }) {
             faceVisible={!anim.hideFaces}
             style={{ top: 0, left: 0 }}
           />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function DrawOverlay({ anim }: { anim: DrawAnim }) {
+  const dest = flyOrigin(anim.toPlayer, anim.playerCount);
+  return (
+    <div
+      style={{
+        position: "absolute",
+        inset: 0,
+        pointerEvents: "none",
+        zIndex: 54,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      {anim.cards.map((card, i) => (
+        <div
+          key={`${anim.id}-draw-${i}-${card}`}
+          className="card-fly-draw"
+          style={{
+            ["--dx" as string]: `calc(-16% + ${i * 4}px)`,
+            ["--dy" as string]: "-10%",
+            ["--px" as string]: dest.x,
+            ["--py" as string]: dest.y,
+            ["--pr" as string]: `${dest.rot + i * 3}deg`,
+            position: "absolute",
+            width: 56,
+            height: 78,
+            animationDelay: `${i * 70}ms`,
+            zIndex: 54 + i,
+          }}
+        >
+          <PlayingCard card={card} faceVisible={false} style={{ top: 0, left: 0 }} />
         </div>
       ))}
     </div>
@@ -1642,24 +1696,33 @@ const LOBBY_MENU_BTN: CSSProperties = {
   cursor: "pointer",
 };
 
+const LOBBY_GOLD_BTN: CSSProperties = {
+  ...LOBBY_MENU_BTN,
+  border: "none",
+  background: "#f1c40f",
+  color: "#1a2e1a",
+  boxShadow: "0 6px 16px rgba(0,0,0,0.28)",
+};
+
+const LOBBY_CORNER_BTN: CSSProperties = {
+  position: "absolute",
+  top: "max(4px, env(safe-area-inset-top))",
+  left: "max(6px, env(safe-area-inset-left))",
+  zIndex: 8,
+  padding: "5px 10px",
+  borderRadius: 6,
+  border: "1px solid rgba(255,255,255,0.28)",
+  background: "rgba(0,0,0,0.35)",
+  color: "#f5f0e6",
+  cursor: "pointer",
+  fontSize: 12,
+  fontWeight: 700,
+  touchAction: "manipulation",
+};
+
 function LobbyBack({ onClick }: { onClick: () => void }) {
   return (
-    <button
-      type="button"
-      className="lobby-ghost-btn"
-      onClick={onClick}
-      style={{
-        padding: "8px 14px",
-        borderRadius: 8,
-        border: "1px solid rgba(255,255,255,0.28)",
-        background: "rgba(0,0,0,0.22)",
-        color: "#f5f0e6",
-        cursor: "pointer",
-        fontSize: 13,
-        fontWeight: 600,
-        alignSelf: "flex-start",
-      }}
-    >
+    <button type="button" onClick={onClick} style={LOBBY_CORNER_BTN}>
       ← Главное меню
     </button>
   );
@@ -1669,14 +1732,51 @@ function Lobby({ onStart, onRules }: { onStart: (count: number) => void; onRules
   const [view, setView] = useState<LobbyView>("main");
   const [selected, setSelected] = useState(4);
   const [popKey, setPopKey] = useState(0);
+  const fsOn = useFullscreen();
 
   function pickCount(n: number) {
     setSelected(n);
     setPopKey((k) => k + 1);
   }
 
+  async function toggleFullscreen() {
+    if (fsOn) await exitFullscreen();
+    else await enterFullscreen();
+  }
+
   return (
     <FeltShell center style={{ padding: "min(32px, 5vh) 16px" }}>
+      {view === "main" && (
+        <>
+          <button
+            type="button"
+            onClick={() => void toggleFullscreen()}
+            style={{
+              ...LOBBY_CORNER_BTN,
+              background: fsOn ? "rgba(241,196,15,0.9)" : "rgba(0,0,0,0.35)",
+              color: fsOn ? "#1a2e1a" : "#f5f0e6",
+            }}
+          >
+            {fsOn ? "Экран" : "Полный экран"}
+          </button>
+          <div
+            style={{
+              position: "absolute",
+              top: "max(32px, calc(env(safe-area-inset-top) + 28px))",
+              left: "max(6px, env(safe-area-inset-left))",
+              zIndex: 8,
+              maxWidth: 260,
+              fontSize: 11,
+              lineHeight: 1.35,
+              color: "rgba(255,255,255,0.55)",
+              textAlign: "left",
+            }}
+          >
+            Скрывает панели браузера. На iPhone: Поделиться → На экран «Домой».
+          </div>
+        </>
+      )}
+      {view !== "main" && <LobbyBack onClick={() => setView("main")} />}
       <div
         style={{
           width: "100%",
@@ -1731,63 +1831,24 @@ function Lobby({ onStart, onRules }: { onStart: (count: number) => void; onRules
             gap: 12,
           }}
         >
-          {view !== "main" && <LobbyBack onClick={() => setView("main")} />}
-
           {view === "main" && (
             <>
               <button
                 type="button"
                 className="lobby-play-btn"
                 onClick={() => setView("solo")}
-                style={{
-                  ...LOBBY_MENU_BTN,
-                  border: "none",
-                  background: "#f1c40f",
-                  color: "#1a2e1a",
-                  boxShadow: "0 6px 16px rgba(0,0,0,0.28)",
-                }}
+                style={LOBBY_GOLD_BTN}
               >
                 Одиночная игра
               </button>
               <button
                 type="button"
-                className="lobby-ghost-btn"
+                className="lobby-play-btn"
                 onClick={() => setView("multi")}
-                style={{
-                  ...LOBBY_MENU_BTN,
-                  border: "1.5px solid rgba(255,255,255,0.35)",
-                  background: "transparent",
-                  color: "#f5f0e6",
-                }}
+                style={LOBBY_GOLD_BTN}
               >
                 Мультиплеер
               </button>
-              <button
-                type="button"
-                className="lobby-ghost-btn"
-                onClick={() => void enterFullscreen()}
-                style={{
-                  ...LOBBY_MENU_BTN,
-                  height: 44,
-                  border: "1.5px solid rgba(255,255,255,0.28)",
-                  background: "transparent",
-                  color: "#f5f0e6",
-                  fontSize: 14,
-                }}
-              >
-                Полный экран
-              </button>
-              <div
-                style={{
-                  marginTop: 4,
-                  maxWidth: 300,
-                  fontSize: 11,
-                  lineHeight: 1.4,
-                  color: "rgba(255,255,255,0.55)",
-                }}
-              >
-                Скрывает панели браузера. На iPhone: Поделиться → На экран «Домой».
-              </div>
             </>
           )}
 
@@ -1891,29 +1952,10 @@ function Lobby({ onStart, onRules }: { onStart: (count: number) => void; onRules
 
           {view === "multi" && (
             <>
-              <button
-                type="button"
-                className="lobby-play-btn"
-                style={{
-                  ...LOBBY_MENU_BTN,
-                  border: "none",
-                  background: "#f1c40f",
-                  color: "#1a2e1a",
-                  boxShadow: "0 6px 16px rgba(0,0,0,0.28)",
-                }}
-              >
+              <button type="button" className="lobby-play-btn" style={LOBBY_GOLD_BTN}>
                 Создать лобби
               </button>
-              <button
-                type="button"
-                className="lobby-ghost-btn"
-                style={{
-                  ...LOBBY_MENU_BTN,
-                  border: "1.5px solid rgba(255,255,255,0.35)",
-                  background: "transparent",
-                  color: "#f5f0e6",
-                }}
-              >
+              <button type="button" className="lobby-play-btn" style={LOBBY_GOLD_BTN}>
                 Присоединиться к лобби
               </button>
             </>
@@ -2049,6 +2091,7 @@ function Table({
   burnCount,
   burnAnim,
   pickupAnim,
+  drawAnim,
   revealCard,
   pickupAwaitTable,
   onSelectHand,
@@ -2079,6 +2122,7 @@ function Table({
   burnCount: number;
   burnAnim: BurnAnim | null;
   pickupAnim: PickupAnim | null;
+  drawAnim: DrawAnim | null;
   revealCard: string | null;
   pickupAwaitTable: boolean;
   onSelectHand: (index: number) => void;
@@ -2098,7 +2142,7 @@ function Table({
   const isPlaying = phase === "playing" || phase === "finished";
   const humanReady = players[0]?.ready ?? false;
   const isHumanTurn =
-    isPlaying && currentPlayer === 0 && phase === "playing" && !flyAnim && !burnAnim && !pickupAnim && !revealCard;
+    isPlaying && currentPlayer === 0 && phase === "playing" && !flyAnim && !burnAnim && !pickupAnim && !revealCard && !drawAnim;
   const humanZone = players[0] ? activePlayZone(players[0], drawDeck.length) : null;
   const selRank = players[0] ? playSelectionRank(players[0], playSelected) : null;
 
@@ -2554,6 +2598,7 @@ function Table({
           {isPlaying && flyAnim && <FlyOverlay anim={flyAnim} />}
           {isPlaying && burnAnim && <BurnOverlay anim={burnAnim} />}
           {isPlaying && pickupAnim && <PickupOverlay anim={pickupAnim} />}
+          {isPlaying && drawAnim && <DrawOverlay anim={drawAnim} />}
           {isPlaying && revealCard && <RevealOverlay card={revealCard} />}
         </div>
 
@@ -2705,6 +2750,7 @@ export default function CardGame() {
   const [burnCount, setBurnCount] = useState(0);
   const [burnAnim, setBurnAnim] = useState<BurnAnim | null>(null);
   const [pickupAnim, setPickupAnim] = useState<PickupAnim | null>(null);
+  const [drawAnim, setDrawAnim] = useState<DrawAnim | null>(null);
   const [revealCard, setRevealCard] = useState<string | null>(null);
   const [pickupAwaitTable, setPickupAwaitTable] = useState(false);
 
@@ -2743,6 +2789,7 @@ export default function CardGame() {
     setFlyAnim(null);
     setBurnAnim(null);
     setPickupAnim(null);
+    setDrawAnim(null);
     setRevealCard(null);
   }
 
@@ -2806,6 +2853,15 @@ export default function CardGame() {
     return playersNext;
   }
 
+  function commitDrawToHand(playerIndex: number, cards: string[], pls: PlayerState[]) {
+    if (cards.length === 0) return pls;
+    const playersNext = pls.map((p, i) =>
+      i === playerIndex ? { ...p, hand: sortHand([...p.hand, ...cards]) } : p
+    );
+    setPlayers(playersNext);
+    return playersNext;
+  }
+
   function runPlayResult(
     playerIndex: number,
     result: {
@@ -2820,6 +2876,7 @@ export default function CardGame() {
       burnCards: string[];
       pickup: { cards: string[]; toPlayer: number; hideFaces: boolean } | null;
       privateReveal: string | null;
+      drawn: string[];
     },
     animate: boolean
   ) {
@@ -2830,6 +2887,33 @@ export default function CardGame() {
     setStatusMsg(result.message);
     playLockRef.current = true;
 
+    const finishPlay = (pls: PlayerState[]) => {
+      finalizeAfterPlay(playerIndex, { ...result, players: pls });
+    };
+
+    const startDrawIfNeeded = (pls: PlayerState[] = result.players) => {
+      if (result.drawn.length === 0) {
+        finishPlay(pls);
+        return;
+      }
+      if (!animate) {
+        finishPlay(commitDrawToHand(playerIndex, result.drawn, pls));
+        return;
+      }
+      flyIdRef.current += 1;
+      setDrawAnim({
+        id: flyIdRef.current,
+        cards: result.drawn,
+        toPlayer: playerIndex,
+        playerCount: pls.length,
+      });
+      const t = setTimeout(() => {
+        setDrawAnim(null);
+        finishPlay(commitDrawToHand(playerIndex, result.drawn, pls));
+      }, DRAW_MS + result.drawn.length * 70);
+      aiTimersRef.current.push(t);
+    };
+
     const afterPlayOrBurn = () => {
       if (result.willBurn && result.burnCards.length > 0) {
         flyIdRef.current += 1;
@@ -2839,12 +2923,12 @@ export default function CardGame() {
           setBurnAnim(null);
           setDiscard([]);
           setBurnCount((c) => c + result.burnCards.length);
-          finalizeAfterPlay(playerIndex, result);
+          startDrawIfNeeded();
         }, burnDelay);
         aiTimersRef.current.push(t);
         return;
       }
-      finalizeAfterPlay(playerIndex, result);
+      startDrawIfNeeded();
     };
 
     const startPickupIfNeeded = () => {
@@ -3034,6 +3118,7 @@ export default function CardGame() {
     burnCards: string[];
     pickup: { cards: string[]; toPlayer: number; hideFaces: boolean } | null;
     privateReveal: string | null;
+    drawn: string[];
   } {
     let playersNext = pls.map((p) => ({
       ...p,
@@ -3063,6 +3148,7 @@ export default function CardGame() {
           burnCards: [],
           pickup: null,
           privateReveal: null,
+          drawn: [],
         };
       }
       const faceDown = [...pl.faceDown];
@@ -3090,6 +3176,7 @@ export default function CardGame() {
           burnCards: [],
           pickup: { cards: taken, toPlayer: playerIndex, hideFaces: !isHuman },
           privateReveal: isHuman ? card : null,
+          drawn: [],
         };
       }
       played = [card];
@@ -3108,6 +3195,7 @@ export default function CardGame() {
         burnCards: [] as string[],
         pickup: null,
         privateReveal: null,
+        drawn: [] as string[],
       });
       if (handIdx.length === 0 && faceIdx.length === 0) {
         return fail("Так ходить нельзя");
@@ -3168,16 +3256,16 @@ export default function CardGame() {
       message += " — сброс в отбой!";
     }
 
+    let drawn: string[] = [];
     if (deckNext.length > 0) {
       const refilled = refillHand(pl.hand, deckNext);
-      pl.hand = refilled.hand;
+      drawn = refilled.drawn;
       deckNext = refilled.deck;
-    } else {
-      pl.hand = sortHand(pl.hand);
     }
+    pl.hand = sortHand(pl.hand);
 
     playersNext[playerIndex] = pl;
-    const won = playerFinished(pl);
+    const won = playerFinished({ ...pl, hand: sortHand([...pl.hand, ...drawn]) });
     if (won) message = `${pl.name} выходит!`;
 
     return {
@@ -3192,6 +3280,7 @@ export default function CardGame() {
       burnCards,
       pickup: null,
       privateReveal: null,
+      drawn,
     };
   }
 
@@ -3299,7 +3388,7 @@ export default function CardGame() {
   useEffect(() => {
     if (phase !== "playing") return;
     if (currentPlayer === 0) return;
-    if (flyAnim || burnAnim || pickupAnim || revealCard) return;
+    if (flyAnim || burnAnim || pickupAnim || revealCard || drawAnim) return;
     if (playerFinished(players[currentPlayer])) return;
 
     const t = setTimeout(() => {
@@ -3333,7 +3422,7 @@ export default function CardGame() {
     }, 700 + Math.random() * 500);
 
     return () => clearTimeout(t);
-  }, [phase, currentPlayer, finishOrder, discard, players, drawDeck, flyAnim, burnAnim, pickupAnim, revealCard]);
+  }, [phase, currentPlayer, finishOrder, discard, players, drawDeck, flyAnim, burnAnim, pickupAnim, revealCard, drawAnim]);
 
   const startGame = useCallback((playerCount: number) => {
     void enterFullscreen();
@@ -3680,6 +3769,7 @@ export default function CardGame() {
       burnCount={burnCount}
       burnAnim={burnAnim}
       pickupAnim={pickupAnim}
+      drawAnim={drawAnim}
       revealCard={revealCard}
       pickupAwaitTable={pickupAwaitTable}
       onSelectHand={handleSelectHand}
