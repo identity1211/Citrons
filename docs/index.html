@@ -1850,11 +1850,33 @@ function clerkErrorText(err: any): string {
   return String(clerkMsg || err.message || err);
 }
 
+function clerkPortalHref(path: "sign-in" | "sign-up"): string {
+  const origin = clerkPortalOrigin(clerkPublishableKey());
+  if (!origin) return "";
+  const dest = encodeURIComponent(appUrl());
+  const qs = `redirect_url=${dest}&after_sign_in_url=${dest}&after_sign_up_url=${dest}`;
+  return `${origin}/${path}?${qs}#/?${qs}`;
+}
+
 async function signInWithGoogle(): Promise<void> {
-  const after = encodeURIComponent(appUrl());
-  const signIn = clerkSignInUrl();
-  if (!signIn) throw new Error("Google sign-in is unavailable");
-  window.location.assign(`${signIn}?redirect_url=${after}`);
+  const dest = appUrl();
+  try {
+    const clerk = await ensureClerk();
+    const signIn = clerk.client?.signIn;
+    if (signIn && typeof signIn.authenticateWithRedirect === "function") {
+      await signIn.authenticateWithRedirect({
+        strategy: "oauth_google",
+        redirectUrl: dest,
+        redirectUrlComplete: dest,
+      });
+      return;
+    }
+  } catch {
+    /* hosted Account Portal */
+  }
+  const href = clerkPortalHref("sign-in");
+  if (!href) throw new Error("Google sign-in is unavailable");
+  window.location.assign(href);
 }
 
 function useClerkAuth() {
@@ -2305,6 +2327,7 @@ function FeltShell({
       }}
     >
       <div className="lobby-felt-glow" />
+      <div id="clerk-captcha" style={{ position: "fixed", left: 0, bottom: 0, zIndex: 50 }} />
       <div
         style={{
           position: "relative",
