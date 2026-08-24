@@ -1651,6 +1651,7 @@ async function ensureClerk(): Promise<any> {
           signUpUrl: clerkSignUpUrl() || undefined,
           afterSignInUrl: appUrl(),
           afterSignUpUrl: appUrl(),
+          afterSignOutUrl: appUrl(),
           allowedRedirectOrigins: ["https://identity1211.github.io"],
         });
       }
@@ -1673,6 +1674,7 @@ async function ensureClerk(): Promise<any> {
       signUpUrl: clerkSignUpUrl() || undefined,
       afterSignInUrl: appUrl(),
       afterSignUpUrl: appUrl(),
+      afterSignOutUrl: appUrl(),
       allowedRedirectOrigins: ["https://identity1211.github.io"],
     });
     w.Clerk = clerk;
@@ -1971,8 +1973,12 @@ function ProfileButton() {
                     onClick={() =>
                       run(async () => {
                         const clerk = await ensureClerk();
-                        await clerk.signOut();
+                        const after = appUrl();
+                        await clerk.signOut({ redirectUrl: after });
                         setOpen(false);
+                        if (!window.location.href.startsWith(after)) {
+                          window.location.replace(after);
+                        }
                       })
                     }
                     style={{ ...PROFILE_GHOST, marginTop: 6, opacity: 0.85 }}
