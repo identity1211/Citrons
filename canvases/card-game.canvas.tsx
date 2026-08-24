@@ -3545,6 +3545,116 @@ type LobbyInfo = {
   max: number;
 };
 
+function OpenLobbyList({
+  lobbies,
+  busy,
+  onJoin,
+}: {
+  lobbies: LobbyInfo[];
+  busy: boolean;
+  onJoin: (code: string) => void;
+}) {
+  return (
+    <div style={{ width: "100%", maxWidth: 340, textAlign: "left" }}>
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: 1.4,
+          textTransform: "uppercase",
+          color: "rgba(255,255,255,0.55)",
+          marginBottom: 8,
+          textAlign: "center",
+        }}
+      >
+        Open lobbies
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: "38vh", overflowY: "auto" }}>
+        {lobbies.length === 0 ? (
+          <div
+            style={{
+              padding: "16px 12px",
+              borderRadius: 10,
+              background: "rgba(0,0,0,0.28)",
+              color: "rgba(255,255,255,0.62)",
+              fontSize: 13,
+              textAlign: "center",
+              lineHeight: 1.4,
+            }}
+          >
+            Searching for open lobbies…
+          </div>
+        ) : (
+          lobbies.map((lobby) => {
+            const full = lobby.count >= lobby.max;
+            const names = lobby.players.map((p) => p.name).join(", ");
+            return (
+              <div
+                key={lobby.code}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  padding: "10px 10px 10px 12px",
+                  borderRadius: 10,
+                  background: "rgba(0,0,0,0.32)",
+                  border: "1px solid rgba(255,255,255,0.12)",
+                }}
+              >
+                <AvatarBubble src={lobby.hostAvatar} name={lobby.host} size={32} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div
+                    style={{
+                      color: "#f5f0e6",
+                      fontWeight: 700,
+                      fontSize: 14,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {lobby.host}
+                  </div>
+                  <div
+                    style={{
+                      color: "rgba(255,255,255,0.55)",
+                      fontSize: 11,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {lobby.count}/{lobby.max} · {names || lobby.code}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  disabled={busy || full}
+                  onClick={() => onJoin(lobby.code)}
+                  style={{
+                    flexShrink: 0,
+                    height: 32,
+                    padding: "0 12px",
+                    borderRadius: 8,
+                    border: "none",
+                    background: full ? "rgba(255,255,255,0.12)" : "#f1c40f",
+                    color: full ? "rgba(255,255,255,0.45)" : "#1a2e1a",
+                    fontSize: 12,
+                    fontWeight: 700,
+                    cursor: busy || full ? "default" : "pointer",
+                  }}
+                >
+                  {full ? "Full" : "Join"}
+                </button>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
 type NetAnim = {
   kind?: string;
   fromPlayer: number;
@@ -3582,6 +3692,13 @@ function normalizeWsUrl(raw: string): string {
     u = proto + u.replace(/^\/\//, "");
   }
   return u.replace(/\/$/, "");
+}
+
+function httpUrlFromWs(wsUrl: string, path: string): string {
+  let u = normalizeWsUrl(wsUrl);
+  if (u.startsWith("wss://")) u = `https://${u.slice(6)}`;
+  else if (u.startsWith("ws://")) u = `http://${u.slice(5)}`;
+  return u.replace(/\/$/, "") + (path.startsWith("/") ? path : `/${path}`);
 }
 
 const DEFAULT_WS = "wss://web-production-b9cc89.up.railway.app";
@@ -4030,7 +4147,18 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       ws.send(JSON.stringify({ type: "browse" }));
       return;
     }
+    if (ws && ws.readyState === 0) return;
     connect((sock) => sock.send(JSON.stringify({ type: "browse" })), { silent: true });
+  }
+
+  async function fetchLobbies() {
+    try {
+      const res = await fetch(httpUrlFromWs(wsUrl, "/lobbies"));
+      const data = await res.json();
+      if (data && Array.isArray(data.lobbies)) setLobbies(data.lobbies);
+    } catch {
+      /* WS browse may still fill the list */
+    }
   }
 
   function leaveOnline() {
@@ -4047,9 +4175,15 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   }
 
   useEffect(() => {
-    if (screen !== "join") return;
+    if (screen !== "pick" && screen !== "join") return;
     startBrowse();
-  }, [screen]);
+    void fetchLobbies();
+    const t = window.setInterval(() => {
+      startBrowse();
+      void fetchLobbies();
+    }, 2000);
+    return () => window.clearInterval(t);
+  }, [screen, wsUrl]);
 
   useEffect(() => {
     if (!view || view.phase !== "dealing") {
@@ -4279,6 +4413,17 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         >
           Join lobby
         </button>
+        <OpenLobbyList
+          lobbies={lobbies}
+          busy={busy}
+          onJoin={(c) => {
+            if (!auth.user) {
+              setError("Sign in with Google first");
+              return;
+            }
+            joinByCode(c);
+          }}
+        />
       </>
     );
   }
@@ -4336,94 +4481,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
             style={LOBBY_INPUT}
           />
         )}
-        <div style={{ width: "100%", maxWidth: 340, textAlign: "left" }}>
-          <div
-            style={{
-              fontSize: 11,
-              fontWeight: 700,
-              letterSpacing: 1.4,
-              textTransform: "uppercase",
-              color: "rgba(255,255,255,0.55)",
-              marginBottom: 8,
-              textAlign: "center",
-            }}
-          >
-            Open lobbies
-          </div>
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              gap: 8,
-              maxHeight: "38vh",
-              overflowY: "auto",
-            }}
-          >
-            {lobbies.length === 0 ? (
-              <div
-                style={{
-                  padding: "16px 12px",
-                  borderRadius: 10,
-                  background: "rgba(0,0,0,0.28)",
-                  color: "rgba(255,255,255,0.62)",
-                  fontSize: 13,
-                  textAlign: "center",
-                  lineHeight: 1.4,
-                }}
-              >
-                No open lobbies yet. Create one, or join with a code.
-              </div>
-            ) : (
-              lobbies.map((lobby) => {
-                const full = lobby.count >= lobby.max;
-                const names = lobby.players.map((p) => p.name).join(", ");
-                return (
-                  <div
-                    key={lobby.code}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 10,
-                      padding: "10px 10px 10px 12px",
-                      borderRadius: 10,
-                      background: "rgba(0,0,0,0.32)",
-                      border: "1px solid rgba(255,255,255,0.12)",
-                    }}
-                  >
-                    <AvatarBubble src={lobby.hostAvatar} name={lobby.host} size={32} />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ color: "#f5f0e6", fontWeight: 700, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {lobby.host}
-                      </div>
-                      <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {lobby.count}/{lobby.max} · {names || lobby.code}
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      disabled={busy || full}
-                      onClick={() => joinByCode(lobby.code)}
-                      style={{
-                        flexShrink: 0,
-                        height: 32,
-                        padding: "0 12px",
-                        borderRadius: 8,
-                        border: "none",
-                        background: full ? "rgba(255,255,255,0.12)" : "#f1c40f",
-                        color: full ? "rgba(255,255,255,0.45)" : "#1a2e1a",
-                        fontSize: 12,
-                        fontWeight: 700,
-                        cursor: busy || full ? "default" : "pointer",
-                      }}
-                    >
-                      {full ? "Full" : "Join"}
-                    </button>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </div>
+        <OpenLobbyList lobbies={lobbies} busy={busy} onJoin={joinByCode} />
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.4, textTransform: "uppercase", color: "rgba(255,255,255,0.55)" }}>
           Or enter a code
         </div>

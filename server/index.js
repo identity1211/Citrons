@@ -629,6 +629,7 @@ const server = http.createServer((req, res) => {
         ok: true,
         service: "citrons",
         rooms: rooms.size,
+        waiting: publicLobbies().length,
         clerk: clerk.clerkConfigured(),
       })
     );
@@ -640,6 +641,7 @@ const server = http.createServer((req, res) => {
 
 const wss = new WebSocketServer({ server });
 wss.on("connection", (ws) => {
+  addBrowser(ws);
   ws.on("message", (data) => onMessage(ws, data));
   ws.on("close", () => leave(ws));
   ws.on("error", () => leave(ws));
