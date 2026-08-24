@@ -1523,6 +1523,25 @@ function clerkFrontendHost(pk: string): string {
   }
 }
 
+function clerkPortalOrigin(pk: string): string {
+  const host = clerkFrontendHost(pk);
+  if (!host) return "";
+  if (host.endsWith(".clerk.accounts.dev")) {
+    return `https://${host.replace(".clerk.accounts.dev", ".accounts.dev")}`;
+  }
+  return host.startsWith("http") ? host.replace(/\/$/, "") : `https://${host}`;
+}
+
+function clerkSignInUrl(): string {
+  const origin = clerkPortalOrigin(clerkPublishableKey());
+  return origin ? `${origin}/sign-in` : "";
+}
+
+function clerkSignUpUrl(): string {
+  const origin = clerkPortalOrigin(clerkPublishableKey());
+  return origin ? `${origin}/sign-up` : "";
+}
+
 function appUrl(): string {
   if (typeof window === "undefined") return "";
   const u = new URL(window.location.href);
@@ -1627,7 +1646,13 @@ async function ensureClerk(): Promise<any> {
     const callbackHref = window.location.href;
     if (w.Clerk && typeof w.Clerk.load === "function" && typeof w.Clerk !== "function") {
       if (!w.Clerk.loaded) {
-        await w.Clerk.load();
+        await w.Clerk.load({
+          signInUrl: clerkSignInUrl() || undefined,
+          signUpUrl: clerkSignUpUrl() || undefined,
+          afterSignInUrl: appUrl(),
+          afterSignUpUrl: appUrl(),
+          allowedRedirectOrigins: ["https://identity1211.github.io"],
+        });
       }
       const fromCallback = isClerkCallbackUrl(callbackHref);
       if (fromCallback || !w.Clerk.user) {
@@ -1643,7 +1668,13 @@ async function ensureClerk(): Promise<any> {
     let clerk = w.Clerk;
     if (typeof clerk === "function") clerk = new clerk(pk);
     if (!clerk || typeof clerk.load !== "function") throw new Error("Clerk не загрузился");
-    await clerk.load();
+    await clerk.load({
+      signInUrl: clerkSignInUrl() || undefined,
+      signUpUrl: clerkSignUpUrl() || undefined,
+      afterSignInUrl: appUrl(),
+      afterSignUpUrl: appUrl(),
+      allowedRedirectOrigins: ["https://identity1211.github.io"],
+    });
     w.Clerk = clerk;
     const fromCallback = isClerkCallbackUrl(callbackHref);
     if (fromCallback || !clerk.user) {
@@ -1683,26 +1714,10 @@ function clerkErrorText(err: any): string {
 }
 
 async function signInWithGoogle(): Promise<void> {
-  const clerk = await ensureClerk();
-  const redirectUrl = appUrl();
-  if (typeof clerk.redirectToSignIn === "function") {
-    await clerk.redirectToSignIn({
-      afterSignInUrl: redirectUrl,
-      afterSignUpUrl: redirectUrl,
-      redirectUrl,
-    });
-    return;
-  }
-  const signIn = clerk.client?.signIn;
-  if (signIn && typeof signIn.authenticateWithRedirect === "function") {
-    await signIn.authenticateWithRedirect({
-      strategy: "oauth_google",
-      redirectUrl,
-      redirectUrlComplete: redirectUrl,
-    });
-    return;
-  }
-  throw new Error("Вход через Google недоступен");
+  const after = encodeURIComponent(appUrl());
+  const signIn = clerkSignInUrl();
+  if (!signIn) throw new Error("Вход через Google недоступен");
+  window.location.assign(`${signIn}?redirect_url=${after}`);
 }
 
 function useClerkAuth() {
