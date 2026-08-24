@@ -353,7 +353,7 @@ function aiChoosePlay(
 
 // ─── CSS keyframes ───────────────────────────────────────────────────────────
 
-const STYLE_ID = "card-game-keyframes-v8";
+const STYLE_ID = "card-game-keyframes-v9";
 function ensureKeyframes() {
   if (typeof document === "undefined") return;
   for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7"]) {
@@ -455,11 +455,14 @@ function ensureKeyframes() {
     .lobby-brand-in {
       animation: lobbyBrandIn 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
     }
+    @media (max-width: 640px) {
+      .lobby-fs-hint { display: none !important; }
+    }
     @media (orientation: landscape) and (max-height: 520px) {
-      .lobby-title { font-size: 28px !important; }
-      .lobby-subtitle { margin-top: 4px !important; font-size: 12px !important; }
-      .lobby-fan-wrap { height: 56px !important; margin: 0 0 4px !important; transform: scale(0.72); transform-origin: top center; }
+      .lobby-title { font-size: 30px !important; }
+      .lobby-fan-wrap { height: 52px !important; margin: 0 0 0 !important; transform: scale(0.68); transform-origin: top center; }
       .lobby-fan-wrap .lobby-fan-card { top: 0 !important; }
+      .lobby-fs-hint { display: none !important; }
     }
     .lobby-play-btn {
       transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
@@ -1497,6 +1500,7 @@ function FeltShell({
       style={{
         minHeight: "100%",
         height: "100%",
+        boxSizing: "border-box",
         position: "relative",
         overflowX: "hidden",
         overflowY: "auto",
@@ -1537,8 +1541,8 @@ function LobbyCardFan() {
       style={{
         position: "relative",
         width: "min(320px, 86vw)",
-        height: 120,
-        margin: "4px 0 8px",
+        height: 108,
+        margin: "2px 0 0",
         flexShrink: 0,
       }}
       aria-hidden
@@ -1550,7 +1554,7 @@ function LobbyCardFan() {
           style={{
             position: "absolute",
             left: "50%",
-            top: 18,
+            top: 6,
             width: 56,
             height: 78,
             marginLeft: -28,
@@ -1752,7 +1756,10 @@ function Lobby({ onStart, onRules }: { onStart: (count: number) => void; onRules
   }
 
   return (
-    <FeltShell center style={{ padding: "max(48px, calc(env(safe-area-inset-top) + 40px)) 16px 20px" }}>
+    <FeltShell
+      center
+      style={{ padding: "max(8px, env(safe-area-inset-top)) 16px max(28px, calc(env(safe-area-inset-bottom) + 10px))" }}
+    >
       {view === "main" && (
         <>
           <button
@@ -1767,12 +1774,13 @@ function Lobby({ onStart, onRules }: { onStart: (count: number) => void; onRules
             {fsOn ? "Экран" : "Полный экран"}
           </button>
           <div
+            className="lobby-fs-hint"
             style={{
               position: "absolute",
               top: "max(32px, calc(env(safe-area-inset-top) + 28px))",
               left: "max(6px, env(safe-area-inset-left))",
               zIndex: 8,
-              maxWidth: 260,
+              maxWidth: 148,
               fontSize: 11,
               lineHeight: 1.35,
               color: "rgba(255,255,255,0.55)",
@@ -1784,6 +1792,23 @@ function Lobby({ onStart, onRules }: { onStart: (count: number) => void; onRules
         </>
       )}
       {view !== "main" && <LobbyBack onClick={() => setView("main")} />}
+      <div
+        className="lobby-edition"
+        style={{
+          position: "fixed",
+          right: "max(16px, env(safe-area-inset-right))",
+          bottom: "max(12px, env(safe-area-inset-bottom))",
+          zIndex: 2,
+          fontSize: 11,
+          fontWeight: 500,
+          letterSpacing: 0.5,
+          color: "rgba(255,255,255,0.26)",
+          pointerEvents: "none",
+          whiteSpace: "nowrap",
+        }}
+      >
+        TwoCircles Edition
+      </div>
       <div
         style={{
           width: "100%",
@@ -1797,12 +1822,21 @@ function Lobby({ onStart, onRules }: { onStart: (count: number) => void; onRules
           padding: "0 8px",
         }}
       >
-        <div className="lobby-brand-in" style={{ animationDelay: "0.05s", flexShrink: 0 }}>
+        <div
+          className="lobby-brand-in"
+          style={{
+            animationDelay: "0.05s",
+            flexShrink: 0,
+            paddingTop: 2,
+            position: "relative",
+            zIndex: 1,
+          }}
+        >
           <div
             className="lobby-title"
             style={{
               fontFamily: 'Georgia, "Times New Roman", serif',
-              fontSize: "clamp(32px, 8vh, 64px)",
+              fontSize: "clamp(34px, 7.5vh, 64px)",
               fontWeight: 700,
               color: "#f5f0e6",
               letterSpacing: 1,
@@ -1812,25 +1846,11 @@ function Lobby({ onStart, onRules }: { onStart: (count: number) => void; onRules
           >
             Citrons
           </div>
-          <div
-            className="lobby-subtitle"
-            style={{
-              marginTop: 8,
-              fontSize: 15,
-              color: "rgba(255,255,255,0.72)",
-              fontWeight: 500,
-              letterSpacing: 0.2,
-              maxWidth: 320,
-              lineHeight: 1.4,
-            }}
-          >
-            TwoCircles Edition
-          </div>
         </div>
 
         <LobbyCardFan />
 
-        <div style={{ flex: 1, minHeight: 16, width: "100%" }} />
+        <div style={{ flex: 1, minHeight: 12, width: "100%" }} />
 
         <div
           key={view}
@@ -1845,6 +1865,7 @@ function Lobby({ onStart, onRules }: { onStart: (count: number) => void; onRules
             flexShrink: 0,
             position: "relative",
             zIndex: 3,
+            marginTop: "auto",
             paddingBottom: 4,
           }}
         >
