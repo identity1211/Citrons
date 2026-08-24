@@ -14,7 +14,7 @@ $game =~ s/^import .*?;\r?\n//mg;
 $game =~ s/export default function CardGame/function CardGame/;
 
 my $shims = <<'SHIMS';
-const { useState, useEffect, useRef, useCallback } = React;
+const { useState, useEffect, useLayoutEffect, useRef, useCallback } = React;
 type CSSProperties = React.CSSProperties;
 type ReactNode = React.ReactNode;
 

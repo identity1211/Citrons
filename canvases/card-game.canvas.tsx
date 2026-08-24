@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, type CSSProperties, type ReactNode } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, type CSSProperties, type ReactNode } from "react";
 import { useHostTheme, Text, Row, Spacer } from "cursor/canvas";
 
 // ─── Card definitions ───────────────────────────────────────────────────────
@@ -353,10 +353,10 @@ function aiChoosePlay(
 
 // ─── CSS keyframes ───────────────────────────────────────────────────────────
 
-const STYLE_ID = "card-game-keyframes-v9";
+const STYLE_ID = "card-game-keyframes-v10";
 function ensureKeyframes() {
   if (typeof document === "undefined") return;
-  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7"]) {
+  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7", "card-game-keyframes-v8", "card-game-keyframes-v9"]) {
     document.getElementById(id)?.remove();
   }
   if (document.getElementById(STYLE_ID)) return;
@@ -400,8 +400,12 @@ function ensureKeyframes() {
       100% { opacity: 0.8; transform: translate(var(--px), var(--py)) scale(0.68) rotate(var(--pr)); }
     }
     @keyframes cardFlyFromDeck {
-      0% { opacity: 1; transform: translate(var(--dx), var(--dy)) scale(0.9) rotate(-10deg); }
-      100% { opacity: 0.92; transform: translate(var(--px), var(--py)) scale(0.72) rotate(var(--pr)); }
+      0% { opacity: 1; transform: translate(var(--dx), var(--dy)) scale(0.92) rotate(-10deg); }
+      100% { opacity: 1; transform: translate(var(--px), var(--py)) scale(0.86) rotate(var(--pr)); }
+    }
+    @keyframes cardDrawReveal {
+      0%, 68% { transform: rotateY(180deg); }
+      100% { transform: rotateY(360deg); }
     }
     @keyframes revealPop {
       0% { opacity: 0; transform: scale(0.45) rotate(-14deg); }
@@ -439,7 +443,8 @@ function ensureKeyframes() {
     .card-fly { animation: cardFlyToDiscard 0.48s cubic-bezier(0.22, 1, 0.36, 1) both; pointer-events: none; }
     .card-fly-burn { animation: cardFlyToBurn 0.55s cubic-bezier(0.33, 1, 0.68, 1) both; pointer-events: none; }
     .card-fly-pickup { animation: cardFlyToPlayer 0.55s cubic-bezier(0.33, 1, 0.68, 1) both; pointer-events: none; }
-    .card-fly-draw { animation: cardFlyFromDeck 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; pointer-events: none; }
+    .card-fly-draw { animation: cardFlyFromDeck 0.62s cubic-bezier(0.22, 1, 0.36, 1) both; pointer-events: none; transform-style: preserve-3d; }
+    .card-draw-reveal { animation: cardDrawReveal 0.62s cubic-bezier(0.22, 1, 0.36, 1) both; transform-style: preserve-3d; }
     .card-reveal { animation: revealPop 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
     .timer-urgent { animation: timerPulse 0.8s ease-in-out infinite; }
     .lobby-felt-glow {
@@ -865,6 +870,7 @@ interface HandProps {
   legalMask?: boolean[];
   onSelect?: (index: number) => void;
   swapKey?: number;
+  seatId?: number;
 }
 
 function Hand({
@@ -882,6 +888,7 @@ function Hand({
   legalMask,
   onSelect,
   swapKey = 0,
+  seatId,
 }: HandProps) {
   const w = cardW ?? (small ? 38 : 56);
   const h = cardH ?? (small ? 54 : 78);
@@ -897,7 +904,7 @@ function Hand({
   const totalW = n === 0 ? 0 : n === 1 ? w : w + (n - 1) * step;
 
   return (
-    <div style={{ position: "relative", width: totalW || 1, height: h }}>
+    <div data-hand-fan={seatId} style={{ position: "relative", width: totalW || 1, height: h }}>
       {cards.map((card, i) => (
         <div
           key={`${card}-${i}-${swapKey}`}
@@ -991,7 +998,8 @@ const FLY_MS = 520;
 const BURN_MS = 600;
 const PICKUP_MS = 600;
 const REVEAL_MS = 900;
-const DRAW_MS = 520;
+const DRAW_MS = 680;
+const DRAW_STAGGER_MS = 80;
 
 interface FlyAnim {
   id: number;
@@ -1305,10 +1313,44 @@ function PickupOverlay({ anim }: { anim: PickupAnim }) {
   );
 }
 
+function measureDrawPath(overlay: HTMLElement, toPlayer: number) {
+  const box = overlay.getBoundingClientRect();
+  const cx = box.left + box.width / 2;
+  const cy = box.top + box.height / 2;
+  const deck = document.querySelector("[data-deck-pile]")?.getBoundingClientRect();
+  const dest =
+    document.querySelector(`[data-hand-fan="${toPlayer}"]`)?.getBoundingClientRect() ??
+    document.querySelector(`[data-player-hand="${toPlayer}"]`)?.getBoundingClientRect();
+  const fromX = deck ? deck.left + deck.width / 2 - cx : -box.width * 0.16;
+  const fromY = deck ? deck.top + deck.height / 2 - cy : 0;
+  const toX = dest ? dest.left + dest.width / 2 - cx : 0;
+  const toY = dest
+    ? dest.top + dest.height / 2 - cy
+    : toPlayer === 0
+      ? box.height * 0.4
+      : -box.height * 0.28;
+  return {
+    dx: `${Math.round(fromX)}px`,
+    dy: `${Math.round(fromY)}px`,
+    px: `${Math.round(toX)}px`,
+    py: `${Math.round(toY)}px`,
+  };
+}
+
 function DrawOverlay({ anim }: { anim: DrawAnim }) {
-  const dest = flyOrigin(anim.toPlayer, anim.playerCount);
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const [path, setPath] = useState<{ dx: string; dy: string; px: string; py: string } | null>(null);
+  const flip = anim.toPlayer === 0;
+
+  useLayoutEffect(() => {
+    const overlay = overlayRef.current;
+    if (!overlay) return;
+    setPath(measureDrawPath(overlay, anim.toPlayer));
+  }, [anim.id, anim.toPlayer]);
+
   return (
     <div
+      ref={overlayRef}
       style={{
         position: "absolute",
         inset: 0,
@@ -1319,26 +1361,61 @@ function DrawOverlay({ anim }: { anim: DrawAnim }) {
         justifyContent: "center",
       }}
     >
-      {anim.cards.map((card, i) => (
-        <div
-          key={`${anim.id}-draw-${i}-${card}`}
-          className="card-fly-draw"
-          style={{
-            ["--dx" as string]: `calc(-16% + ${i * 4}px)`,
-            ["--dy" as string]: "-10%",
-            ["--px" as string]: dest.x,
-            ["--py" as string]: dest.y,
-            ["--pr" as string]: `${dest.rot + i * 3}deg`,
-            position: "absolute",
-            width: 56,
-            height: 78,
-            animationDelay: `${i * 70}ms`,
-            zIndex: 54 + i,
-          }}
-        >
-          <PlayingCard card={card} faceVisible={false} style={{ top: 0, left: 0 }} />
-        </div>
-      ))}
+      {path &&
+        anim.cards.map((card, i) => (
+          <div
+            key={`${anim.id}-draw-${i}-${card}`}
+            className="card-fly-draw"
+            style={{
+              ["--dx" as string]: path.dx,
+              ["--dy" as string]: path.dy,
+              ["--px" as string]: `calc(${path.px} + ${(i - (anim.cards.length - 1) / 2) * 12}px)`,
+              ["--py" as string]: path.py,
+              ["--pr" as string]: `${(flip ? -8 : 10) + i * 4}deg`,
+              position: "absolute",
+              width: 56,
+              height: 78,
+              perspective: 800,
+              animationDelay: `${i * DRAW_STAGGER_MS}ms`,
+              zIndex: 54 + i,
+            }}
+          >
+            {flip ? (
+              <div
+                className="card-draw-reveal"
+                style={{
+                  width: "100%",
+                  height: "100%",
+                  animationDelay: `${i * DRAW_STAGGER_MS}ms`,
+                }}
+              >
+                <div
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    backfaceVisibility: "hidden",
+                    WebkitBackfaceVisibility: "hidden",
+                  }}
+                >
+                  <PlayingCard card={card} faceVisible style={{ top: 0, left: 0 }} />
+                </div>
+                <div
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    backfaceVisibility: "hidden",
+                    WebkitBackfaceVisibility: "hidden",
+                    transform: "rotateY(180deg)",
+                  }}
+                >
+                  <PlayingCard card={card} faceVisible={false} style={{ top: 0, left: 0 }} />
+                </div>
+              </div>
+            ) : (
+              <PlayingCard card={card} faceVisible={false} style={{ top: 0, left: 0 }} />
+            )}
+          </div>
+        ))}
     </div>
   );
 }
@@ -2302,6 +2379,7 @@ function Table({
     return (
       <div
         key={pIdx}
+        data-player-hand={pIdx}
         style={{
           display: "flex",
           flexDirection: "column",
@@ -2344,6 +2422,7 @@ function Table({
               cardH={oppH}
               maxWidth={oppW + 2 * Math.max(6, Math.round(oppW * 0.22))}
               animating={!!isAnimTarget(pIdx, "hand")}
+              seatId={pIdx}
             />
           )}
         </div>
@@ -2574,6 +2653,7 @@ function Table({
           }}
         >
           <div
+            data-deck-pile=""
             style={{
               position: "absolute",
               left: "34%",
@@ -2641,6 +2721,7 @@ function Table({
         </div>
 
         <div
+          data-player-hand={0}
           style={{
             gridColumn: 2,
             gridRow: 3,
@@ -2710,6 +2791,7 @@ function Table({
               legalMask={handLegal}
               onSelect={onSelectHand}
               swapKey={swapTick}
+              seatId={0}
             />
           )}
         </div>
@@ -2948,7 +3030,7 @@ export default function CardGame() {
       const t = setTimeout(() => {
         setDrawAnim(null);
         finishPlay(commitDrawToHand(playerIndex, result.drawn, pls));
-      }, DRAW_MS + result.drawn.length * 70);
+      }, DRAW_MS + Math.max(0, result.drawn.length - 1) * DRAW_STAGGER_MS);
       aiTimersRef.current.push(t);
     };
 
