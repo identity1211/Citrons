@@ -4,6 +4,7 @@ const http = require("http");
 const crypto = require("crypto");
 const { WebSocketServer } = require("ws");
 const engine = require("./engine");
+const clerk = require("./clerk");
 
 const PORT = Number(process.env.PORT) || 8787;
 const SWAP_SECONDS = 20;
@@ -45,6 +46,7 @@ function dummyCard() {
 function maskPlayer(p, isSelf) {
   return {
     name: isSelf ? "Ты" : p.name,
+    avatar: p.avatar || "",
     ready: !!p.ready,
     connected: !!p.connected,
     hand: isSelf ? [...p.hand] : p.hand.map(() => dummyCard()),
@@ -80,6 +82,7 @@ function viewFor(room, playerId) {
     lobby: room.seats.map((p) => ({
       id: p.id,
       name: p.id === playerId ? `${p.name} (ты)` : p.name,
+      avatar: p.avatar || "",
       ready: !!p.ready,
       connected: !!p.connected,
       host: p.id === room.hostId,
@@ -123,13 +126,28 @@ function attach(ws, room, player) {
   broadcast(room);
 }
 
-function createRoom(ws, name) {
-  leave(ws, true);
-  const code = uniqueCode();
-  const player = {
+function sanitizeName(name) {
+  const n = String(name || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 18);
+  return n || "Игрок";
+}
+
+function sanitizeAvatar(url) {
+  const u = String(url || "").trim();
+  if (!u || u.length > 800) return "";
+  if (!/^https:\/\//i.test(u)) return "";
+  return u;
+}
+
+function makePlayer(ws, name, avatar, clerkUserId) {
+  return {
     id: id(),
     token: id(),
     name: sanitizeName(name),
+    avatar: sanitizeAvatar(avatar),
+    clerkUserId: clerkUserId || null,
     ws,
     connected: true,
     ready: false,
@@ -138,6 +156,60 @@ function createRoom(ws, name) {
     faceDown: [],
     leaveTimer: null,
   };
+}
+
+function findClerkSeat(clerkUserId) {
+  if (!clerkUserId) return null;
+  for (const room of rooms.values()) {
+    const player = room.seats.find((p) => p.clerkUserId === clerkUserId);
+    if (player) return { room, player };
+  }
+  return null;
+}
+
+function kickClerkFromWaiting(clerkUserId, exceptCode) {
+  if (!clerkUserId) return;
+  for (const room of [...rooms.values()]) {
+    if (exceptCode && room.code === exceptCode) continue;
+    if (room.phase !== "waiting") continue;
+    const player = room.seats.find((p) => p.clerkUserId === clerkUserId);
+    if (!player) continue;
+    if (player.ws) {
+      send(player.ws, { type: "left" });
+      player.ws.roomCode = null;
+      player.ws.playerId = null;
+    }
+    if (removeSeat(room, player) && rooms.has(room.code)) broadcast(room);
+  }
+}
+
+async function identifyClerk(ws, clerkToken, { required }) {
+  if (!clerk.clerkConfigured()) return { userId: null };
+  const result = await clerk.verifyClerkToken(clerkToken);
+  if (!result.ok) {
+    if (!required && result.reason === "no-token") return { userId: null };
+    const map = {
+      "no-token": "Сначала войди через Google",
+      exp: "Сессия истекла — войди снова",
+    };
+    error(ws, map[result.reason] || "Не удалось проверить вход");
+    return null;
+  }
+  return { userId: result.userId };
+}
+
+async function createRoom(ws, name, avatar, clerkToken) {
+  const auth = await identifyClerk(ws, clerkToken, { required: true });
+  if (!auth) return;
+  const clerkUserId = auth.userId;
+  const busy = findClerkSeat(clerkUserId);
+  if (busy && busy.room.phase !== "waiting") {
+    return error(ws, `Ты уже в игре ${busy.room.code}`);
+  }
+  kickClerkFromWaiting(clerkUserId, null);
+  leave(ws, true);
+  const code = uniqueCode();
+  const player = makePlayer(ws, name, avatar, clerkUserId);
   const room = {
     code,
     hostId: player.id,
@@ -157,42 +229,45 @@ function createRoom(ws, name) {
   attach(ws, room, player);
 }
 
-function sanitizeName(name) {
-  const n = String(name || "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 18);
-  return n || "Игрок";
-}
-
-function joinRoom(ws, code, name, token) {
+async function joinRoom(ws, code, name, token, avatar, clerkToken) {
   const room = rooms.get(String(code || "").trim().toUpperCase());
   if (!room) return error(ws, "Лобби не найдено");
+  const auth = await identifyClerk(ws, clerkToken, { required: !token });
+  if (!auth) return;
+  const clerkUserId = auth.userId;
+
   if (ws.roomCode && ws.roomCode !== room.code) leave(ws, true);
 
   if (token) {
     const existing = room.seats.find((p) => p.token === token);
     if (existing) {
+      if (clerkUserId) existing.clerkUserId = clerkUserId;
+      if (name) existing.name = sanitizeName(name);
+      if (avatar) existing.avatar = sanitizeAvatar(avatar);
       attach(ws, room, existing);
       return;
     }
   }
 
+  if (clerkUserId) {
+    const existing = room.seats.find((p) => p.clerkUserId === clerkUserId);
+    if (existing) {
+      if (name) existing.name = sanitizeName(name);
+      if (avatar) existing.avatar = sanitizeAvatar(avatar);
+      attach(ws, room, existing);
+      return;
+    }
+    const busy = findClerkSeat(clerkUserId);
+    if (busy && busy.room.phase !== "waiting") {
+      return error(ws, `Ты уже в игре ${busy.room.code}`);
+    }
+    kickClerkFromWaiting(clerkUserId, room.code);
+  }
+
   if (room.phase !== "waiting") return error(ws, "Игра уже началась");
   if (room.seats.length >= MAX_PLAYERS) return error(ws, "Лобби заполнено");
 
-  const player = {
-    id: id(),
-    token: id(),
-    name: sanitizeName(name),
-    ws,
-    connected: true,
-    ready: false,
-    hand: [],
-    faceUp: [],
-    faceDown: [],
-    leaveTimer: null,
-  };
+  const player = makePlayer(ws, name, avatar, clerkUserId);
   room.seats.push(player);
   attach(ws, room, player);
 }
@@ -401,9 +476,18 @@ function onMessage(ws, data) {
   const room = rooms.get(ws.roomCode);
   const player = room && room.seats.find((p) => p.id === ws.playerId);
 
-  if (type === "create") return createRoom(ws, msg.name);
-  if (type === "join") return joinRoom(ws, msg.code, msg.name, null);
-  if (type === "rejoin") return joinRoom(ws, msg.code, msg.name, msg.token);
+  if (type === "create") {
+    void createRoom(ws, msg.name, msg.avatar, msg.clerkToken);
+    return;
+  }
+  if (type === "join") {
+    void joinRoom(ws, msg.code, msg.name, null, msg.avatar, msg.clerkToken);
+    return;
+  }
+  if (type === "rejoin") {
+    void joinRoom(ws, msg.code, msg.name, msg.token, msg.avatar, msg.clerkToken);
+    return;
+  }
   if (type === "ping") return send(ws, { type: "pong" });
 
   if (!room || !player) return error(ws, "Сначала зайди в лобби");
@@ -444,7 +528,14 @@ const server = http.createServer((req, res) => {
   }
   if (req.url === "/health" || req.url === "/") {
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify({ ok: true, service: "citrons", rooms: rooms.size }));
+    res.end(
+      JSON.stringify({
+        ok: true,
+        service: "citrons",
+        rooms: rooms.size,
+        clerk: clerk.clerkConfigured(),
+      })
+    );
     return;
   }
   res.writeHead(404);

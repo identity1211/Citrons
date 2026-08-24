@@ -43,6 +43,7 @@ function rankValue(rank: string): number {
 
 interface PlayerState {
   name: string;
+  avatar?: string;
   faceDown: (string | null)[];
   faceUp: (string | null)[];
   hand: string[];
@@ -1455,8 +1456,551 @@ function RevealOverlay({ card }: { card: string }) {
   );
 }
 
+function AvatarBubble({
+  src,
+  name,
+  size = 36,
+  onClick,
+}: {
+  src?: string;
+  name?: string;
+  size?: number;
+  onClick?: () => void;
+}) {
+  const letter = (name || "?").trim().charAt(0).toUpperCase() || "?";
+  const inner = src ? (
+    <img src={src} alt="" referrerPolicy="no-referrer" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+  ) : (
+    <span style={{ fontWeight: 800, fontSize: Math.round(size * 0.42), color: "#1a2e1a", lineHeight: 1 }}>{letter}</span>
+  );
+  const style: CSSProperties = {
+    width: size,
+    height: size,
+    borderRadius: size / 2,
+    overflow: "hidden",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    background: src ? "#145230" : "#f1c40f",
+    border: "1.5px solid rgba(255,255,255,0.4)",
+    padding: 0,
+    flexShrink: 0,
+    cursor: onClick ? "pointer" : "default",
+    boxShadow: "0 2px 8px rgba(0,0,0,0.28)",
+  };
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} style={style} aria-label="Профиль">
+        {inner}
+      </button>
+    );
+  }
+  return <div style={style}>{inner}</div>;
+}
+
+// Publishable key is public. Bake it as window.CLERK_PK in docs/index.html.
+const DEFAULT_CLERK_PK = "";
+
+function clerkPublishableKey(): string {
+  if (typeof window === "undefined") return DEFAULT_CLERK_PK;
+  const w = window as unknown as { CLERK_PK?: string };
+  const q = new URLSearchParams(window.location.search).get("clerk");
+  if (q && q.startsWith("pk_")) return q;
+  if (typeof w.CLERK_PK === "string" && w.CLERK_PK.startsWith("pk_")) return w.CLERK_PK;
+  try {
+    const saved = localStorage.getItem("citrons-clerk-pk");
+    if (saved && saved.startsWith("pk_")) return saved;
+  } catch {
+    /* ignore */
+  }
+  return DEFAULT_CLERK_PK;
+}
+
+function clerkFrontendHost(pk: string): string {
+  try {
+    const part = pk.split("_")[2] || "";
+    return atob(part).replace(/\$+$/g, "");
+  } catch {
+    return "";
+  }
+}
+
+function appUrl(): string {
+  if (typeof window === "undefined") return "";
+  const u = new URL(window.location.href);
+  return `${u.origin}${u.pathname}`;
+}
+
+function loadScriptOnce(src: string, attrs?: Record<string, string>): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const found = [...document.scripts].find((s) => s.src === src);
+    if (found) {
+      if ((found as HTMLScriptElement & { _citronsLoaded?: boolean })._citronsLoaded) {
+        resolve();
+        return;
+      }
+      found.addEventListener("load", () => resolve());
+      found.addEventListener("error", () => reject(new Error("script")));
+      return;
+    }
+    const s = document.createElement("script");
+    s.src = src;
+    s.async = true;
+    s.crossOrigin = "anonymous";
+    if (attrs) for (const [k, v] of Object.entries(attrs)) s.setAttribute(k, v);
+    s.onload = () => {
+      (s as HTMLScriptElement & { _citronsLoaded?: boolean })._citronsLoaded = true;
+      resolve();
+    };
+    s.onerror = () => reject(new Error(`Не загрузился Clerk (${src})`));
+    document.head.appendChild(s);
+  });
+}
+
+let clerkPromise: Promise<any> | null = null;
+
+async function ensureClerk(): Promise<any> {
+  if (clerkPromise) return clerkPromise;
+  clerkPromise = (async () => {
+    const pk = clerkPublishableKey();
+    if (!pk) {
+      const err = new Error("NO_PK");
+      throw err;
+    }
+    const w = window as any;
+    if (w.Clerk && typeof w.Clerk.load === "function" && typeof w.Clerk !== "function") {
+      if (!w.Clerk.loaded) {
+        await w.Clerk.load({
+          ui: w.__internal_ClerkUICtor ? { ClerkUI: w.__internal_ClerkUICtor } : undefined,
+        });
+      }
+      return w.Clerk;
+    }
+    const host = clerkFrontendHost(pk);
+    if (host) {
+      try {
+        await loadScriptOnce(`https://${host}/npm/@clerk/ui@1/dist/ui.browser.js`);
+      } catch {
+        /* UI bundle optional */
+      }
+    }
+    const clerkSrc = host
+      ? `https://${host}/npm/@clerk/clerk-js@5/dist/clerk.browser.js`
+      : "https://cdn.jsdelivr.net/npm/@clerk/clerk-js@5/dist/clerk.browser.js";
+    await loadScriptOnce(clerkSrc, { "data-clerk-publishable-key": pk });
+    let clerk = w.Clerk;
+    if (typeof clerk === "function") clerk = new clerk(pk);
+    if (!clerk || typeof clerk.load !== "function") throw new Error("Clerk не загрузился");
+    await clerk.load({
+      ui: w.__internal_ClerkUICtor ? { ClerkUI: w.__internal_ClerkUICtor } : undefined,
+    });
+    w.Clerk = clerk;
+    const href = window.location.href;
+    if (typeof clerk.handleRedirectCallback === "function" && /__clerk|rotating_token_nonce|clerk_status/.test(href)) {
+      try {
+        await clerk.handleRedirectCallback({
+          afterSignInUrl: appUrl(),
+          afterSignUpUrl: appUrl(),
+          signInFallbackRedirectUrl: appUrl(),
+          signUpFallbackRedirectUrl: appUrl(),
+        });
+      } catch {
+        /* load() may already consume the callback */
+      }
+    }
+    return clerk;
+  })().catch((err) => {
+    clerkPromise = null;
+    throw err;
+  });
+  return clerkPromise;
+}
+
+function clerkNickname(user: any): string {
+  const meta = (user && user.unsafeMetadata) || {};
+  const email =
+    user?.primaryEmailAddress?.emailAddress || user?.emailAddresses?.[0]?.emailAddress || "";
+  const local = String(email).includes("@") ? String(email).split("@")[0] : "";
+  const raw = meta.nickname || user?.firstName || user?.username || local || "Игрок";
+  return String(raw).replace(/\s+/g, " ").trim().slice(0, 18) || "Игрок";
+}
+
+function clerkErrorText(err: any): string {
+  if (!err) return "Ошибка Clerk";
+  if (err.message === "NO_PK") {
+    return "Нет ключа Clerk. Вставь Publishable Key из dashboard.clerk.com → API keys.";
+  }
+  const clerkMsg = err.errors?.[0]?.longMessage || err.errors?.[0]?.message;
+  return String(clerkMsg || err.message || err);
+}
+
+async function signInWithGoogle(): Promise<void> {
+  const clerk = await ensureClerk();
+  const redirectUrl = appUrl();
+  const signIn = clerk.client?.signIn;
+  if (signIn && typeof signIn.authenticateWithRedirect === "function") {
+    await signIn.authenticateWithRedirect({
+      strategy: "oauth_google",
+      redirectUrl,
+      redirectUrlComplete: redirectUrl,
+    });
+    return;
+  }
+  if (typeof clerk.authenticateWithRedirect === "function") {
+    await clerk.authenticateWithRedirect({
+      strategy: "oauth_google",
+      redirectUrl,
+      redirectUrlComplete: redirectUrl,
+    });
+    return;
+  }
+  if (typeof clerk.openSignIn === "function") {
+    clerk.openSignIn({
+      forceRedirectUrl: redirectUrl,
+      appearance: {
+        variables: {
+          colorPrimary: "#f1c40f",
+          colorBackground: "#145230",
+          colorText: "#f5f0e6",
+        },
+      },
+    });
+    return;
+  }
+  throw new Error("Вход через Google недоступен");
+}
+
+function useClerkAuth() {
+  const [loaded, setLoaded] = useState(() => !clerkPublishableKey());
+  const [user, setUser] = useState<any>(null);
+  const [error, setError] = useState(() =>
+    clerkPublishableKey() ? "" : clerkErrorText(new Error("NO_PK"))
+  );
+
+  useEffect(() => {
+    let unsub: (() => void) | undefined;
+    let cancelled = false;
+    if (!clerkPublishableKey()) {
+      setLoaded(true);
+      setError(clerkErrorText(new Error("NO_PK")));
+      return;
+    }
+    void (async () => {
+      try {
+        const clerk = await ensureClerk();
+        if (cancelled) return;
+        const sync = () => {
+          const u = clerk.user || null;
+          setUser(u);
+          setLoaded(true);
+          setError("");
+          if (u) {
+            try {
+              localStorage.setItem(NAME_KEY, clerkNickname(u));
+            } catch {
+              /* ignore */
+            }
+          }
+        };
+        sync();
+        if (typeof clerk.addListener === "function") unsub = clerk.addListener(sync);
+      } catch (e) {
+        if (cancelled) return;
+        setLoaded(true);
+        setUser(null);
+        setError(clerkErrorText(e));
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (unsub) unsub();
+    };
+  }, []);
+
+  return { loaded, user, error };
+}
+
+const PROFILE_PANEL: CSSProperties = {
+  width: "min(360px, calc(100vw - 28px))",
+  borderRadius: 16,
+  background: "#145230",
+  border: "1.5px solid rgba(255,255,255,0.22)",
+  boxShadow: "0 18px 48px rgba(0,0,0,0.45)",
+  padding: "20px 18px 16px",
+  color: "#f5f0e6",
+  textAlign: "center",
+};
+
+const PROFILE_GHOST: CSSProperties = {
+  width: "100%",
+  height: 42,
+  borderRadius: 10,
+  border: "1.5px solid rgba(255,255,255,0.35)",
+  background: "transparent",
+  color: "#f5f0e6",
+  fontSize: 14,
+  fontWeight: 600,
+  cursor: "pointer",
+};
+
+function ProfileButton() {
+  const { loaded, user, error } = useClerkAuth();
+  const [open, setOpen] = useState(false);
+  const [nick, setNick] = useState("");
+  const [pkDraft, setPkDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const fileRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (user) setNick(clerkNickname(user));
+  }, [user]);
+
+  async function run(fn: () => Promise<void>) {
+    setBusy(true);
+    setMsg("");
+    try {
+      await fn();
+    } catch (e) {
+      setMsg(clerkErrorText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const nickName = user ? clerkNickname(user) : "Войти";
+
+  return (
+    <>
+      <div
+        style={{
+          position: "fixed",
+          top: "max(4px, env(safe-area-inset-top))",
+          right: "max(6px, env(safe-area-inset-right))",
+          zIndex: 20,
+        }}
+      >
+        {user ? (
+          <AvatarBubble src={user.imageUrl} name={nickName} size={40} onClick={() => setOpen(true)} />
+        ) : (
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            style={{
+              ...LOBBY_CORNER_BTN,
+              position: "static",
+              left: "auto",
+              top: "auto",
+              background: "#f1c40f",
+              color: "#1a2e1a",
+              border: "none",
+              boxShadow: "0 4px 12px rgba(0,0,0,0.28)",
+            }}
+          >
+            {loaded ? "Войти" : "…"}
+          </button>
+        )}
+      </div>
+      {open && (
+        <div
+          onClick={() => setOpen(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 40,
+            background: "rgba(0,0,0,0.48)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+        >
+          <div id="clerk-captcha" />
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={PROFILE_PANEL}
+          >
+            <div style={{ fontFamily: 'Georgia, "Times New Roman", serif', fontSize: 22, fontWeight: 700, marginBottom: 14 }}>
+              Профиль
+            </div>
+            {user ? (
+              <>
+                <div style={{ display: "flex", justifyContent: "center", marginBottom: 12 }}>
+                  <AvatarBubble src={user.imageUrl} name={nickName} size={84} />
+                </div>
+                <input
+                  value={nick}
+                  onChange={(e) => setNick(e.target.value.slice(0, 18))}
+                  placeholder="Ник"
+                  maxLength={18}
+                  style={{ ...LOBBY_INPUT, margin: "0 auto 10px" }}
+                />
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() =>
+                    run(async () => {
+                      const next = nick.replace(/\s+/g, " ").trim().slice(0, 18) || "Игрок";
+                      await user.update({
+                        unsafeMetadata: { ...(user.unsafeMetadata || {}), nickname: next },
+                      });
+                      setNick(next);
+                      try {
+                        localStorage.setItem(NAME_KEY, next);
+                      } catch {
+                        /* ignore */
+                      }
+                      setMsg("Ник сохранён");
+                    })
+                  }
+                  style={{ ...LOBBY_GOLD_BTN, maxWidth: "100%", height: 42, marginBottom: 8 }}
+                >
+                  {busy ? "Сохранение…" : "Сохранить ник"}
+                </button>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 4 }}>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() =>
+                      run(async () => {
+                        try {
+                          await user.setProfileImage({ file: null });
+                        } catch {
+                          const google = (user.externalAccounts || []).find(
+                            (a: any) => a.provider === "google" || a.provider === "oauth_google"
+                          );
+                          const url = google?.imageUrl || google?.avatarUrl;
+                          if (!url) throw new Error("Нет фото из Gmail");
+                          const blob = await fetch(url).then((r) => {
+                            if (!r.ok) throw new Error("Не удалось взять фото Gmail");
+                            return r.blob();
+                          });
+                          const file = new File([blob], "gmail.jpg", { type: blob.type || "image/jpeg" });
+                          await user.setProfileImage({ file });
+                        }
+                        setMsg("Аватар из Gmail");
+                      })
+                    }
+                    style={PROFILE_GHOST}
+                  >
+                    Фото из Gmail
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => fileRef.current?.click()}
+                    style={PROFILE_GHOST}
+                  >
+                    Загрузить фото
+                  </button>
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    accept="image/*"
+                    style={{ display: "none" }}
+                    onChange={(e) => {
+                      const file = e.target.files && e.target.files[0];
+                      e.target.value = "";
+                      if (!file) return;
+                      if (file.size > 8 * 1024 * 1024) {
+                        setMsg("Файл больше 8 МБ");
+                        return;
+                      }
+                      void run(async () => {
+                        await user.setProfileImage({ file });
+                        setMsg("Аватар обновлён");
+                      });
+                    }}
+                  />
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() =>
+                      run(async () => {
+                        const clerk = await ensureClerk();
+                        await clerk.signOut();
+                        setOpen(false);
+                      })
+                    }
+                    style={{ ...PROFILE_GHOST, marginTop: 6, opacity: 0.85 }}
+                  >
+                    Выйти
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: 14, lineHeight: 1.45, color: "rgba(255,255,255,0.72)", marginBottom: 16 }}>
+                  Войди через Google — ник и аватар сохранятся в профиле.
+                </div>
+                <button
+                  type="button"
+                  disabled={busy || !loaded}
+                  onClick={() =>
+                    run(async () => {
+                      await signInWithGoogle();
+                    })
+                  }
+                  style={{ ...LOBBY_GOLD_BTN, maxWidth: "100%", height: 46 }}
+                >
+                  {busy ? "Открываем Google…" : "Войти через Google"}
+                </button>
+                {!clerkPublishableKey() && (
+                  <div style={{ marginTop: 14, textAlign: "left" }}>
+                    <div style={{ fontSize: 11, color: "rgba(255,255,255,0.55)", marginBottom: 6, lineHeight: 1.35 }}>
+                      Один раз: Publishable Key из Clerk → API keys (`pk_test_…` или `pk_live_…`).
+                    </div>
+                    <input
+                      value={pkDraft}
+                      onChange={(e) => setPkDraft(e.target.value.trim())}
+                      placeholder="pk_test_…"
+                      style={{ ...LOBBY_INPUT, maxWidth: "100%", fontSize: 12 }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!pkDraft.startsWith("pk_")) {
+                          setMsg("Ключ должен начинаться с pk_");
+                          return;
+                        }
+                        try {
+                          localStorage.setItem("citrons-clerk-pk", pkDraft);
+                        } catch {
+                          /* ignore */
+                        }
+                        clerkPromise = null;
+                        window.location.reload();
+                      }}
+                      style={{ ...PROFILE_GHOST, marginTop: 8 }}
+                    >
+                      Сохранить ключ
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+            {(msg || (!user && error)) && (
+              <div style={{ marginTop: 12, fontSize: 12, lineHeight: 1.4, color: msg ? "#d5f5e3" : "#f5b7b1" }}>
+                {msg || error}
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              style={{ ...PROFILE_GHOST, marginTop: 12, height: 36, fontSize: 13 }}
+            >
+              Закрыть
+            </button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 function SeatLabel({
   name,
+  avatar,
   isHuman,
   ready,
   isTurn,
@@ -1464,6 +2008,7 @@ function SeatLabel({
   offline,
 }: {
   name: string;
+  avatar?: string;
   isHuman: boolean;
   ready?: boolean;
   isTurn?: boolean;
@@ -1473,6 +2018,7 @@ function SeatLabel({
   const theme = useHostTheme();
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <AvatarBubble src={avatar} name={name} size={22} />
       <div
         style={{
           padding: "2px 10px",
@@ -1848,6 +2394,7 @@ function Lobby({
       center
       style={{ padding: "max(8px, env(safe-area-inset-top)) 16px max(28px, calc(env(safe-area-inset-bottom) + 10px))" }}
     >
+      <ProfileButton />
       {view === "main" && (
         <>
           <button
@@ -2401,6 +2948,7 @@ function Table({
       >
         <SeatLabel
           name={hand.length > 0 ? `${players[pIdx].name} · ${hand.length}` : players[pIdx].name}
+          avatar={players[pIdx].avatar}
           isHuman={false}
           ready={isSwap ? players[pIdx].ready : undefined}
           isTurn={isPlaying && currentPlayer === pIdx && phase === "playing"}
@@ -2876,7 +3424,7 @@ type OnlineView = {
   burnCount: number;
   statusMsg: string;
   canStart: boolean;
-  lobby: { id: string; name: string; ready: boolean; connected: boolean; host: boolean }[];
+  lobby: { id: string; name: string; avatar?: string; ready: boolean; connected: boolean; host: boolean }[];
 };
 
 function normalizeWsUrl(raw: string): string {
@@ -2941,6 +3489,7 @@ function fullDealProgress(n: number) {
 }
 
 function OnlineGame({ onLeave }: { onLeave: () => void }) {
+  const auth = useClerkAuth();
   const [screen, setScreen] = useState<"pick" | "create" | "join" | "waiting" | "table">("pick");
   const [name, setName] = useState(readSavedName);
   const [code, setCode] = useState("");
@@ -3088,16 +3637,50 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       if (sess) {
         window.setTimeout(() => {
           if (wsRef.current) return;
-          connect((next) =>
-            next.send(JSON.stringify({ type: "rejoin", code: sess.code, name: sess.name, token: sess.token }))
-          );
+          connect((next) => {
+            void (async () => {
+              let clerkToken = "";
+              try {
+                const clerk = await ensureClerk();
+                clerkToken = (clerk.session && (await clerk.session.getToken())) || "";
+              } catch {
+                /* guest rejoin */
+              }
+              next.send(
+                JSON.stringify({
+                  type: "rejoin",
+                  code: sess.code,
+                  name: sess.name,
+                  token: sess.token,
+                  clerkToken,
+                })
+              );
+            })();
+          });
         }, 800);
       }
     };
   }
 
+  async function clerkPayload() {
+    const clerk = await ensureClerk();
+    const token = clerk.session ? await clerk.session.getToken() : "";
+    const u = clerk.user;
+    if (!token || !u) throw new Error("Сначала войди через Google");
+    const nick = clerkNickname(u);
+    persistName(nick);
+    return { name: nick, avatar: u.imageUrl || "", clerkToken: token };
+  }
+
   function createLobby() {
-    connect((ws) => ws.send(JSON.stringify({ type: "create", name: name.trim() || "Игрок" })));
+    void (async () => {
+      try {
+        const payload = await clerkPayload();
+        connect((ws) => ws.send(JSON.stringify({ type: "create", ...payload })));
+      } catch (e) {
+        setError(clerkErrorText(e));
+      }
+    })();
   }
 
   function joinLobby() {
@@ -3106,7 +3689,14 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       setError("Введи код лобби");
       return;
     }
-    connect((ws) => ws.send(JSON.stringify({ type: "join", code: c, name: name.trim() || "Игрок" })));
+    void (async () => {
+      try {
+        const payload = await clerkPayload();
+        connect((ws) => ws.send(JSON.stringify({ type: "join", code: c, ...payload })));
+      } catch (e) {
+        setError(clerkErrorText(e));
+      }
+    })();
   }
 
   function leaveOnline() {
@@ -3287,6 +3877,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       style={{ padding: "max(8px, env(safe-area-inset-top)) 16px max(28px, calc(env(safe-area-inset-bottom) + 10px))" }}
     >
       <LobbyBack onClick={leaveOnline} />
+      <ProfileButton />
       <div
         style={{
           width: "100%",
@@ -3311,10 +3902,41 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         <div style={{ fontSize: 22, fontWeight: 700, color: "#f5f0e6", fontFamily: 'Georgia, "Times New Roman", serif' }}>
           Мультиплеер
         </div>
-        <button type="button" className="lobby-play-btn" style={LOBBY_GOLD_BTN} onClick={() => setScreen("create")}>
+        {auth.user ? (
+          <div style={{ fontSize: 13, color: "rgba(255,255,255,0.7)" }}>
+            Играешь как {clerkNickname(auth.user)}
+          </div>
+        ) : (
+          <div style={{ fontSize: 13, color: "rgba(255,255,255,0.7)", maxWidth: 300, lineHeight: 1.4 }}>
+            Сначала войди через Google — кнопка справа вверху.
+          </div>
+        )}
+        <button
+          type="button"
+          className="lobby-play-btn"
+          style={LOBBY_GOLD_BTN}
+          onClick={() => {
+            if (!auth.user) {
+              setError("Сначала войди через Google");
+              return;
+            }
+            setScreen("create");
+          }}
+        >
           Создать лобби
         </button>
-        <button type="button" className="lobby-play-btn" style={LOBBY_GOLD_BTN} onClick={() => setScreen("join")}>
+        <button
+          type="button"
+          className="lobby-play-btn"
+          style={LOBBY_GOLD_BTN}
+          onClick={() => {
+            if (!auth.user) {
+              setError("Сначала войди через Google");
+              return;
+            }
+            setScreen("join");
+          }}
+        >
           Присоединиться к лобби
         </button>
       </>
@@ -3327,13 +3949,20 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         <div style={{ fontSize: 22, fontWeight: 700, color: "#f5f0e6", fontFamily: 'Georgia, "Times New Roman", serif' }}>
           {screen === "create" ? "Новое лобби" : "Вход в лобби"}
         </div>
-        <input
-          value={name}
-          onChange={(e) => persistName(e.target.value)}
-          placeholder="Твоё имя"
-          maxLength={18}
-          style={LOBBY_INPUT}
-        />
+        {auth.user ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <AvatarBubble src={auth.user.imageUrl} name={clerkNickname(auth.user)} size={36} />
+            <div style={{ color: "#f5f0e6", fontWeight: 700 }}>{clerkNickname(auth.user)}</div>
+          </div>
+        ) : (
+          <input
+            value={name}
+            onChange={(e) => persistName(e.target.value)}
+            placeholder="Твоё имя"
+            maxLength={18}
+            style={LOBBY_INPUT}
+          />
+        )}
         {screen === "join" && (
           <input
             value={code}
@@ -3344,15 +3973,6 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
             style={{ ...LOBBY_INPUT, letterSpacing: 4, fontWeight: 700 }}
           />
         )}
-        <input
-          value={wsUrl}
-          onChange={(e) => setWsUrl(e.target.value)}
-          placeholder="wss://….up.railway.app"
-          style={{ ...LOBBY_INPUT, fontSize: 12 }}
-        />
-        <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", maxWidth: 300, lineHeight: 1.35 }}>
-          Адрес сервера Railway. Settings → Networking → Generate Domain.
-        </div>
         <button
           type="button"
           className="lobby-play-btn"
@@ -3406,9 +4026,12 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
                 fontSize: 14,
               }}
             >
-              <span>
-                {p.name}
-                {p.host ? " · хост" : ""}
+              <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                <AvatarBubble src={p.avatar} name={p.name} size={24} />
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {p.name}
+                  {p.host ? " · хост" : ""}
+                </span>
               </span>
               <span style={{ opacity: 0.65 }}>{p.connected ? "в сети" : "нет сети"}</span>
             </div>
