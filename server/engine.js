@@ -198,7 +198,7 @@ function applyPlay(playerIndex, play, pls, deck, pile) {
     const idx = play.faceDown;
     const card = pl.faceDown[idx];
     if (card === null || pl.faceUp[idx] !== null) {
-      return failPlay(pls, deck, pile, "Эта карта ещё закрыта открытой сверху");
+      return failPlay(pls, deck, pile, "That card is still covered by a face-up card");
     }
     const faceDown = [...pl.faceDown];
     faceDown[idx] = null;
@@ -206,7 +206,7 @@ function applyPlay(playerIndex, play, pls, deck, pile) {
     if (!canPlayCards([card], discardNext)) {
       const label = `${getRank(card)}${card.slice(-1)}`;
       const taken = [...discardNext, card];
-      message = `${pl.name} открыл ${label} — нельзя, забирает сброс`;
+      message = `${pl.name} flipped ${label} — can't play, takes the discard`;
       playersNext[playerIndex] = pl;
       return {
         ok: true,
@@ -229,14 +229,14 @@ function applyPlay(playerIndex, play, pls, deck, pile) {
     const handIdx = play.hand ?? [];
     const faceIdx = play.faceUp ?? [];
     if (handIdx.length === 0 && faceIdx.length === 0) {
-      return failPlay(pls, deck, pile, "Так ходить нельзя");
+      return failPlay(pls, deck, pile, "Can't play that");
     }
     if (pl.hand.length > 0 && handIdx.length === 0) {
-      return failPlay(pls, deck, pile, "Сначала выбери карты из руки");
+      return failPlay(pls, deck, pile, "Choose cards from your hand first");
     }
     if (faceIdx.length > 0 && pl.hand.length > 0) {
       if (!canCombineHandWithFaceUp(pl, deckNext.length, handIdx)) {
-        return failPlay(pls, deck, pile, "Комбо с открытыми — только последними картами руки, когда колода пуста");
+        return failPlay(pls, deck, pile, "Face-up combo only with your last hand cards when the deck is empty");
       }
     }
     const removed = [];
@@ -256,7 +256,7 @@ function applyPlay(playerIndex, play, pls, deck, pile) {
       pl.faceUp = faceUp;
     }
     if (!canPlayCards(removed, discardNext)) {
-      return failPlay(pls, deck, pile, "Так ходить нельзя");
+      return failPlay(pls, deck, pile, "Can't play that");
     }
     played = removed;
   }
@@ -266,7 +266,7 @@ function applyPlay(playerIndex, play, pls, deck, pile) {
   message = `${pl.name}: ${played.map((c) => getRank(c) + c.slice(-1)).join(", ")}`;
   if (rank === "7") {
     const under = getEffectiveTop(discardNext);
-    message += under ? ` · под 7: ${getRank(under)}${under.slice(-1)}` : " · под 7 пусто";
+    message += under ? ` · under 7: ${getRank(under)}${under.slice(-1)}` : " · nothing under 7";
   }
 
   let extraTurn = false;
@@ -276,7 +276,7 @@ function applyPlay(playerIndex, play, pls, deck, pile) {
     willBurn = true;
     burnCards = [...discardNext];
     extraTurn = true;
-    message += " — сброс в отбой!";
+    message += " — discard burned!";
   }
 
   let drawn = [];
@@ -291,7 +291,7 @@ function applyPlay(playerIndex, play, pls, deck, pile) {
 
   playersNext[playerIndex] = pl;
   const won = playerFinished(pl);
-  if (won) message = `${pl.name} выходит!`;
+  if (won) message = `${pl.name} is out!`;
 
   return {
     ok: true,
@@ -312,7 +312,7 @@ function applyPlay(playerIndex, play, pls, deck, pile) {
 
 function applyPickUp(playerIndex, pls, pile, tableTake) {
   if (pile.length === 0) {
-    return { ok: false, players: pls, discard: pile, message: "Сброс пуст", pickupCards: [] };
+    return { ok: false, players: pls, discard: pile, message: "Discard is empty", pickupCards: [] };
   }
   const playersNext = clonePlayers(pls);
   const pl = playersNext[playerIndex];
@@ -324,14 +324,14 @@ function applyPickUp(playerIndex, pls, pile, tableTake) {
         ok: false,
         players: pls,
         discard: pile,
-        message: "Карту со стола можно взять только с пустой рукой",
+        message: "You can only take a table card with an empty hand",
         pickupCards: [],
       };
     }
     if (tableTake.zone === "faceUp") {
       const card = pl.faceUp[tableTake.index];
       if (card === null) {
-        return { ok: false, players: pls, discard: pile, message: "Нет такой открытой карты", pickupCards: [] };
+        return { ok: false, players: pls, discard: pile, message: "No such face-up card", pickupCards: [] };
       }
       const rank = getRank(card);
       const faceUp = [...pl.faceUp];
@@ -346,7 +346,7 @@ function applyPickUp(playerIndex, pls, pile, tableTake) {
     } else {
       const card = pl.faceDown[tableTake.index];
       if (card === null || pl.faceUp[tableTake.index] !== null) {
-        return { ok: false, players: pls, discard: pile, message: "Нет такой закрытой карты", pickupCards: [] };
+        return { ok: false, players: pls, discard: pile, message: "No such face-down card", pickupCards: [] };
       }
       const faceDown = [...pl.faceDown];
       faceDown[tableTake.index] = null;
@@ -361,16 +361,16 @@ function applyPickUp(playerIndex, pls, pile, tableTake) {
   const tableNote =
     extras.length > 0
       ? tableTake.zone === "faceDown"
-        ? " + 1 закрытая со стола"
+        ? " + 1 face-down from the table"
         : extras.length === 1
-          ? ` + ${getRank(extras[0])}${extras[0].slice(-1)} со стола`
-          : ` + ${extras.length}×${getRank(extras[0])} со стола`
+          ? ` + ${getRank(extras[0])}${extras[0].slice(-1)} from the table`
+          : ` + ${extras.length}×${getRank(extras[0])} from the table`
       : "";
   return {
     ok: true,
     players: playersNext,
     discard: [],
-    message: `${pls[playerIndex].name} забирает сброс (${pile.length})${tableNote}`,
+    message: `${pls[playerIndex].name} takes the discard (${pile.length})${tableNote}`,
     pickupCards,
   };
 }

@@ -190,8 +190,9 @@ function resolveStandings(
 }
 
 function placeLabel(place: number, total: number): string {
-  if (place === total && total > 1) return "Последний";
-  return `${place} место`;
+  if (place === total && total > 1) return "Last";
+  const suf = place === 1 ? "st" : place === 2 ? "nd" : place === 3 ? "rd" : "th";
+  return `${place}${suf}`;
 }
 
 function refillHand(
@@ -1070,7 +1071,7 @@ function BurnPile({ count }: { count: number }) {
             padding: 4,
           }}
         >
-          Отбой
+          Burn
         </div>
       ) : (
         [...Array(Math.min(count, 5))].map((_, i) => (
@@ -1154,7 +1155,7 @@ function DiscardPile({ cards }: { cards: string[] }) {
               fontWeight: 600,
             }}
           >
-            Под 7: {getRank(effective)}
+            Under 7: {getRank(effective)}
             {effective.slice(-1)}
           </div>
         </>
@@ -1181,7 +1182,7 @@ function DiscardPile({ cards }: { cards: string[] }) {
             fontSize: 11,
           }}
         >
-          Сброс
+          Discard
         </div>
       )}
 
@@ -1506,7 +1507,7 @@ function RevealOverlay({ card }: { card: string }) {
           fontWeight: 600,
         }}
       >
-        Твоя карта
+        Your card
       </div>
       <div className="card-reveal" style={{ position: "relative", width: 64, height: 90 }}>
         <PlayingCard card={card} faceVisible style={{ top: 0, left: 0 }} />
@@ -1549,7 +1550,7 @@ function AvatarBubble({
   };
   if (onClick) {
     return (
-      <button type="button" onClick={onClick} style={style} aria-label="Профиль">
+      <button type="button" onClick={onClick} style={style} aria-label="Profile">
         {inner}
       </button>
     );
@@ -1685,7 +1686,7 @@ function loadScriptOnce(src: string, attrs?: Record<string, string>): Promise<vo
       (s as HTMLScriptElement & { _citronsLoaded?: boolean })._citronsLoaded = true;
       resolve();
     };
-    s.onerror = () => reject(new Error(`Не загрузился Clerk (${src})`));
+    s.onerror = () => reject(new Error(`Clerk failed to load (${src})`));
     document.head.appendChild(s);
   });
 }
@@ -1726,7 +1727,7 @@ async function ensureClerk(): Promise<any> {
     await loadScriptOnce(clerkSrc, { "data-clerk-publishable-key": pk });
     let clerk = w.Clerk;
     if (typeof clerk === "function") clerk = new clerk(pk);
-    if (!clerk || typeof clerk.load !== "function") throw new Error("Clerk не загрузился");
+    if (!clerk || typeof clerk.load !== "function") throw new Error("Clerk failed to load");
     await clerk.load({
       signInUrl: clerkSignInUrl() || undefined,
       signUpUrl: clerkSignUpUrl() || undefined,
@@ -1760,14 +1761,14 @@ function clerkNickname(user: any): string {
   const email =
     user?.primaryEmailAddress?.emailAddress || user?.emailAddresses?.[0]?.emailAddress || "";
   const local = String(email).includes("@") ? String(email).split("@")[0] : "";
-  const raw = meta.nickname || user?.firstName || user?.username || local || "Игрок";
-  return String(raw).replace(/\s+/g, " ").trim().slice(0, 18) || "Игрок";
+  const raw = meta.nickname || user?.firstName || user?.username || local || "Player";
+  return String(raw).replace(/\s+/g, " ").trim().slice(0, 18) || "Player";
 }
 
 function clerkErrorText(err: any): string {
-  if (!err) return "Ошибка Clerk";
+  if (!err) return "Clerk error";
   if (err.message === "NO_PK") {
-    return "Не удалось войти. Обнови страницу и попробуй ещё раз.";
+    return "Couldn't sign in. Refresh the page and try again.";
   }
   const clerkMsg = err.errors?.[0]?.longMessage || err.errors?.[0]?.message;
   return String(clerkMsg || err.message || err);
@@ -1776,7 +1777,7 @@ function clerkErrorText(err: any): string {
 async function signInWithGoogle(): Promise<void> {
   const after = encodeURIComponent(appUrl());
   const signIn = clerkSignInUrl();
-  if (!signIn) throw new Error("Вход через Google недоступен");
+  if (!signIn) throw new Error("Google sign-in is unavailable");
   window.location.assign(`${signIn}?redirect_url=${after}`);
 }
 
@@ -1882,7 +1883,7 @@ function ProfileButton() {
     }
   }
 
-  const nickName = user ? clerkNickname(user) : "Войти";
+  const nickName = user ? clerkNickname(user) : "Sign in";
 
   return (
     <>
@@ -1911,7 +1912,7 @@ function ProfileButton() {
               boxShadow: "0 4px 12px rgba(0,0,0,0.28)",
             }}
           >
-            {loaded ? "Войти" : "…"}
+            {loaded ? "Sign in" : "…"}
           </button>
         )}
       </div>
@@ -1934,7 +1935,7 @@ function ProfileButton() {
             style={PROFILE_PANEL}
           >
             <div style={{ fontFamily: 'Georgia, "Times New Roman", serif', fontSize: 22, fontWeight: 700, marginBottom: 14 }}>
-              Профиль
+              Profile
             </div>
             {user ? (
               <>
@@ -1944,7 +1945,7 @@ function ProfileButton() {
                 <input
                   value={nick}
                   onChange={(e) => setNick(e.target.value.slice(0, 18))}
-                  placeholder="Ник"
+                  placeholder="Nickname"
                   maxLength={18}
                   style={{ ...LOBBY_INPUT, margin: "0 auto 10px" }}
                 />
@@ -1953,7 +1954,7 @@ function ProfileButton() {
                   disabled={busy}
                   onClick={() =>
                     run(async () => {
-                      const next = nick.replace(/\s+/g, " ").trim().slice(0, 18) || "Игрок";
+                      const next = nick.replace(/\s+/g, " ").trim().slice(0, 18) || "Player";
                       await user.update({
                         unsafeMetadata: { ...(user.unsafeMetadata || {}), nickname: next },
                       });
@@ -1963,12 +1964,12 @@ function ProfileButton() {
                       } catch {
                         /* ignore */
                       }
-                      setMsg("Ник сохранён");
+                      setMsg("Nickname saved");
                     })
                   }
                   style={{ ...LOBBY_GOLD_BTN, maxWidth: "100%", height: 42, marginBottom: 8 }}
                 >
-                  {busy ? "Сохранение…" : "Сохранить ник"}
+                  {busy ? "Saving…" : "Save nickname"}
                 </button>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 4 }}>
                   <button
@@ -1983,20 +1984,20 @@ function ProfileButton() {
                             (a: any) => a.provider === "google" || a.provider === "oauth_google"
                           );
                           const url = google?.imageUrl || google?.avatarUrl;
-                          if (!url) throw new Error("Нет фото из Gmail");
+                          if (!url) throw new Error("No Gmail photo");
                           const blob = await fetch(url).then((r) => {
-                            if (!r.ok) throw new Error("Не удалось взять фото Gmail");
+                            if (!r.ok) throw new Error("Couldn't fetch the Gmail photo");
                             return r.blob();
                           });
                           const file = new File([blob], "gmail.jpg", { type: blob.type || "image/jpeg" });
                           await user.setProfileImage({ file });
                         }
-                        setMsg("Аватар из Gmail");
+                        setMsg("Gmail avatar set");
                       })
                     }
                     style={PROFILE_GHOST}
                   >
-                    Фото из Gmail
+                    Use Gmail photo
                   </button>
                   <button
                     type="button"
@@ -2004,7 +2005,7 @@ function ProfileButton() {
                     onClick={() => fileRef.current?.click()}
                     style={PROFILE_GHOST}
                   >
-                    Загрузить фото
+                    Upload photo
                   </button>
                   <input
                     ref={fileRef}
@@ -2016,12 +2017,12 @@ function ProfileButton() {
                       e.target.value = "";
                       if (!file) return;
                       if (file.size > 8 * 1024 * 1024) {
-                        setMsg("Файл больше 8 МБ");
+                        setMsg("File is larger than 8 MB");
                         return;
                       }
                       void run(async () => {
                         await user.setProfileImage({ file });
-                        setMsg("Аватар обновлён");
+                        setMsg("Avatar updated");
                       });
                     }}
                   />
@@ -2041,14 +2042,14 @@ function ProfileButton() {
                     }
                     style={{ ...PROFILE_GHOST, marginTop: 6, opacity: 0.85 }}
                   >
-                    Выйти
+                    Sign out
                   </button>
                 </div>
               </>
             ) : (
               <>
                 <div style={{ fontSize: 14, lineHeight: 1.45, color: "rgba(255,255,255,0.72)", marginBottom: 16 }}>
-                  Войди через Google — ник и аватар сохранятся в профиле.
+                  Sign in with Google to save your nickname and avatar.
                 </div>
                 <button
                   type="button"
@@ -2060,7 +2061,7 @@ function ProfileButton() {
                   }
                   style={{ ...LOBBY_GOLD_BTN, maxWidth: "100%", height: 46 }}
                 >
-                  {busy ? "Открываем Google…" : "Войти через Google"}
+                  {busy ? "Opening Google…" : "Sign in with Google"}
                 </button>
               </>
             )}
@@ -2074,7 +2075,7 @@ function ProfileButton() {
               onClick={() => setOpen(false)}
               style={{ ...PROFILE_GHOST, marginTop: 12, height: 36, fontSize: 13 }}
             >
-              Закрыть
+              Close
             </button>
           </div>
         </div>
@@ -2122,7 +2123,7 @@ function SeatLabel({
           opacity: place || offline ? 0.55 : 1,
         }}
       >
-        {offline ? `${name} · нет сети` : name}
+        {offline ? `${name} · offline` : name}
       </div>
       {ready && (
         <div
@@ -2321,7 +2322,7 @@ function RulesScreen({ onBack }: { onBack: () => void }) {
             marginBottom: 20,
           }}
         >
-          ← Назад
+          ← Back
         </button>
         <div
           style={{
@@ -2333,54 +2334,50 @@ function RulesScreen({ onBack }: { onBack: () => void }) {
             letterSpacing: 0.5,
           }}
         >
-          Правила
+          Rules
         </div>
         <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 13, marginBottom: 24 }}>
-          2–5 игроков · 52 карты · масть не важна
+          2–5 players · 52 cards · suits don't matter
         </div>
-        <RuleBlock title="Подготовка">
+        <RuleBlock title="Setup">
           <p style={{ margin: "0 0 8px" }}>
-            Каждому: <b style={{ color: "#fff" }}>3 закрытые</b> →{" "}
-            <b style={{ color: "#fff" }}>3 открытые</b> сверху →{" "}
-            <b style={{ color: "#fff" }}>3 в руку</b>.
+            Each player: <b style={{ color: "#fff" }}>3 face-down</b> →{" "}
+            <b style={{ color: "#fff" }}>3 face-up</b> on top →{" "}
+            <b style={{ color: "#fff" }}>3 in hand</b>.
           </p>
           <p style={{ margin: "0 0 8px" }}>
-            20 секунд на обмен руки с открытыми. Затем Ready. Первый ход — случайный игрок.
+            20 seconds to swap hand cards with face-up cards. Then Ready. First turn is random.
           </p>
         </RuleBlock>
-        <RuleBlock title="Старшинство">
+        <RuleBlock title="Ranking">
           <p style={{ margin: 0, fontFamily: "ui-monospace, monospace", letterSpacing: 1 }}>
             {RANK_ORDER.join(" < ")}
           </p>
         </RuleBlock>
-        <RuleBlock title="Ход">
+        <RuleBlock title="Turn">
           <p style={{ margin: "0 0 8px" }}>
-            Кладешь карты одного ранга. Комбо рука+открытые — только если это
-            последние карты в руке и колода пуста. Пока есть колода — добираешь до ровно 3.
+            Play cards of one rank. Hand + face-up combo only if those are your last hand cards and the deck is empty. While the deck remains, draw back up to 3.
           </p>
-          <p style={{ margin: "0 0 8px" }}>Не можешь ходить — забираешь сброс.</p>
+          <p style={{ margin: "0 0 8px" }}>If you can't play, take the discard pile.</p>
           <p style={{ margin: "0 0 8px" }}>
-            Если рука пуста и ты играешь открытыми или закрытыми со стола — вместе
-            со сбросом можно забрать карту(ы) со стола в руку. Несколько открытых
-            одного ранга забираются все сразу; закрытую — только одну.
+            If your hand is empty and you play face-up or face-down table cards, you may also take table card(s) into hand with the discard. Matching face-up ranks are taken all at once; a face-down card is taken one at a time.
           </p>
           <p style={{ margin: 0 }}>
-            Рука и колода пусты → открытые, потом закрытые.
+            Empty hand and empty deck → face-up cards, then face-down.
           </p>
         </RuleBlock>
-        <RuleBlock title="Спецкарты">
+        <RuleBlock title="Specials">
           <ul style={{ margin: 0, paddingLeft: 18 }}>
-            <li><b style={{ color: "#fff" }}>2</b> — на любую; сброс до двойки</li>
-            <li><b style={{ color: "#fff" }}>6</b> — только 6 или ниже, либо 7. Десятку нельзя</li>
-            <li><b style={{ color: "#fff" }}>7</b> — прозрачная</li>
-            <li><b style={{ color: "#fff" }}>10</b> — на любую кроме 6; сжигает сброс</li>
-            <li><b style={{ color: "#fff" }}>4 одинаковых</b> подряд — сжигание</li>
+            <li><b style={{ color: "#fff" }}>2</b> — plays on anything; pile resets to 2</li>
+            <li><b style={{ color: "#fff" }}>6</b> — only 6 or lower, or 7. No 10s</li>
+            <li><b style={{ color: "#fff" }}>7</b> — transparent</li>
+            <li><b style={{ color: "#fff" }}>10</b> — plays on anything except 6; burns the discard</li>
+            <li><b style={{ color: "#fff" }}>4 of a kind</b> in a row — burn</li>
           </ul>
         </RuleBlock>
-        <RuleBlock title="Победа">
+        <RuleBlock title="Winning">
           <p style={{ margin: 0 }}>
-            Кто первым избавился от всех карт — занимает 1 место, остальные продолжают.
-            Игра идёт, пока не останется один проигравший.
+            First to empty their cards takes 1st place; everyone else keeps playing until one loser remains.
           </p>
         </RuleBlock>
         <button
@@ -2399,7 +2396,7 @@ function RulesScreen({ onBack }: { onBack: () => void }) {
             boxShadow: "0 6px 16px rgba(0,0,0,0.25)",
           }}
         >
-          Понятно
+          Got it
         </button>
       </div>
     </FeltShell>
@@ -2445,7 +2442,7 @@ const LOBBY_CORNER_BTN: CSSProperties = {
 function LobbyBack({ onClick }: { onClick: () => void }) {
   return (
     <button type="button" onClick={onClick} style={LOBBY_CORNER_BTN}>
-      ← Главное меню
+      ← Main menu
     </button>
   );
 }
@@ -2491,7 +2488,7 @@ function Lobby({
               color: fsOn ? "#1a2e1a" : "#f5f0e6",
             }}
           >
-            {fsOn ? "Экран" : "Полный экран"}
+            {fsOn ? "Window" : "Fullscreen"}
           </button>
           <div
             className="lobby-fs-hint"
@@ -2507,7 +2504,7 @@ function Lobby({
               textAlign: "left",
             }}
           >
-            Скрывает панели браузера. На iPhone: Поделиться → На экран «Домой».
+            Hides the browser chrome. On iPhone: Share → Add to Home Screen.
           </div>
         </>
       )}
@@ -2597,7 +2594,7 @@ function Lobby({
                 onClick={() => setView("solo")}
                 style={LOBBY_GOLD_BTN}
               >
-                Одиночная игра
+                Solo
               </button>
               <button
                 type="button"
@@ -2605,7 +2602,7 @@ function Lobby({
                 onClick={onOnline}
                 style={LOBBY_GOLD_BTN}
               >
-                Мультиплеер
+                Multiplayer
               </button>
             </>
           )}
@@ -2621,7 +2618,7 @@ function Lobby({
                   color: "rgba(255,255,255,0.55)",
                 }}
               >
-                Игроков
+                Players
               </div>
               <div
                 key={popKey}
@@ -2684,7 +2681,7 @@ function Lobby({
                     cursor: "pointer",
                   }}
                 >
-                  Правила
+                  Rules
                 </button>
                 <button
                   type="button"
@@ -2702,7 +2699,7 @@ function Lobby({
                     boxShadow: "0 6px 16px rgba(0,0,0,0.28)",
                   }}
                 >
-                  Играть
+                  Play
                 </button>
               </div>
             </>
@@ -2711,10 +2708,10 @@ function Lobby({
           {view === "multi" && (
             <>
               <button type="button" className="lobby-play-btn" style={LOBBY_GOLD_BTN}>
-                Создать лобби
+                Create lobby
               </button>
               <button type="button" className="lobby-play-btn" style={LOBBY_GOLD_BTN}>
-                Присоединиться к лобби
+                Join lobby
               </button>
             </>
           )}
@@ -3009,7 +3006,7 @@ function Table({
     }
     const res = await enterFullscreen();
     if (res !== "ok") {
-      setFsNote("iPhone: Поделиться → На экран «Домой» — так скроется Safari");
+      setFsNote("iPhone: Share → Add to Home Screen to hide Safari");
       window.setTimeout(() => setFsNote(""), 6000);
     } else {
       setFsNote("");
@@ -3129,7 +3126,7 @@ function Table({
           touchAction: "manipulation",
         }}
       >
-        {fsOn ? "Экран" : "Полный экран"}
+        {fsOn ? "Window" : "Fullscreen"}
       </button>
       {fsNote ? (
         <div
@@ -3184,13 +3181,13 @@ function Table({
             textAlign: "center",
           }}
         >
-          {phase === "finished" ? "Итоги · " : ""}
+          {phase === "finished" ? "Results · " : ""}
           {finishOrder.map((pIdx, i) => {
             const place = i + 1;
             const isLast = phase === "finished" && place === finishOrder.length && finishOrder.length > 1;
             return (
               <span key={pIdx} style={{ fontWeight: pIdx === 0 || place === 1 ? 700 : 500 }}>
-                {isLast ? "Последний" : `${place}`} {players[pIdx].name}
+                {isLast ? "Last" : `${place}`} {players[pIdx].name}
                 {i < finishOrder.length - 1 ? " · " : ""}
               </span>
             );
@@ -3333,7 +3330,7 @@ function Table({
               <FeltChip onClick={onReady} disabled={humanReady} kind="ready" label="Ready" />
             )}
             {pickupAwaitTable && isHumanTurn && (
-              <FeltChip onClick={onCancelPickupAwait} kind="ghost" label="Отмена" />
+              <FeltChip onClick={onCancelPickupAwait} kind="ghost" label="Cancel" />
             )}
           </div>
           <div
@@ -3446,7 +3443,7 @@ function Table({
       <FeltChip
         kind={myTurn ? "play" : "ghost"}
         disabled={!myTurn}
-        label="Ход"
+        label="Play"
         onClick={() => {
           if (playClickable) onPlay();
         }}
@@ -3466,9 +3463,9 @@ function Table({
         disabled={!myTurn}
         label={
           <>
-            Забрать
+            Take
             <br />
-            сброс
+            discard
           </>
         }
         onClick={() => {
@@ -3791,14 +3788,14 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     }
     if (msg.type === "error") {
       setBusy(false);
-      setError(msg.message || "Ошибка сервера");
+      setError(msg.message || "Server error");
       return;
     }
     if (msg.type === "joined") {
       setBusy(false);
       setError("");
       if (msg.code && msg.token) {
-        const sess = { code: msg.code, token: msg.token, name: name.trim() || "Игрок" };
+        const sess = { code: msg.code, token: msg.token, name: name.trim() || "Player" };
         sessionRef.current = sess;
         try {
           sessionStorage.setItem(SESSION_KEY, JSON.stringify(sess));
@@ -3873,7 +3870,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       ws = new WebSocket(normalizeWsUrl(wsUrl));
     } catch {
       setBusy(false);
-      setError("Не удалось открыть соединение");
+      setError("Couldn't open the connection");
       return;
     }
     wsRef.current = ws;
@@ -3884,7 +3881,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     ws.onmessage = (ev) => handleMessage(String(ev.data));
     ws.onerror = () => {
       setBusy(false);
-      setError("Нет связи с сервером. Проверь адрес Railway.");
+      setError("No connection to the server. Check the Railway URL.");
     };
     ws.onclose = () => {
       stopPing();
@@ -3922,7 +3919,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     const clerk = await ensureClerk();
     const token = clerk.session ? await clerk.session.getToken() : "";
     const u = clerk.user;
-    if (!token || !u) throw new Error("Сначала войди через Google");
+    if (!token || !u) throw new Error("Sign in with Google first");
     const nick = clerkNickname(u);
     persistName(nick);
     return { name: nick, avatar: u.imageUrl || "", clerkToken: token };
@@ -3942,7 +3939,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   function joinLobby() {
     const c = code.trim().toUpperCase();
     if (c.length < 4) {
-      setError("Введи код лобби");
+      setError("Enter a lobby code");
       return;
     }
     void (async () => {
@@ -4157,15 +4154,15 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     return formShell(
       <>
         <div style={{ fontSize: 22, fontWeight: 700, color: "#f5f0e6", fontFamily: 'Georgia, "Times New Roman", serif' }}>
-          Мультиплеер
+          Multiplayer
         </div>
         {auth.user ? (
           <div style={{ fontSize: 13, color: "rgba(255,255,255,0.7)" }}>
-            Играешь как {clerkNickname(auth.user)}
+            Playing as {clerkNickname(auth.user)}
           </div>
         ) : (
           <div style={{ fontSize: 13, color: "rgba(255,255,255,0.7)", maxWidth: 300, lineHeight: 1.4 }}>
-            Сначала войди через Google — кнопка справа вверху.
+            Sign in with Google first — button at the top right.
           </div>
         )}
         <button
@@ -4174,13 +4171,13 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
           style={LOBBY_GOLD_BTN}
           onClick={() => {
             if (!auth.user) {
-              setError("Сначала войди через Google");
+              setError("Sign in with Google first");
               return;
             }
             setScreen("create");
           }}
         >
-          Создать лобби
+          Create lobby
         </button>
         <button
           type="button"
@@ -4188,13 +4185,13 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
           style={LOBBY_GOLD_BTN}
           onClick={() => {
             if (!auth.user) {
-              setError("Сначала войди через Google");
+              setError("Sign in with Google first");
               return;
             }
             setScreen("join");
           }}
         >
-          Присоединиться к лобби
+          Join lobby
         </button>
       </>
     );
@@ -4204,7 +4201,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     return formShell(
       <>
         <div style={{ fontSize: 22, fontWeight: 700, color: "#f5f0e6", fontFamily: 'Georgia, "Times New Roman", serif' }}>
-          {screen === "create" ? "Новое лобби" : "Вход в лобби"}
+          {screen === "create" ? "New lobby" : "Join lobby"}
         </div>
         {auth.user ? (
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -4215,7 +4212,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
           <input
             value={name}
             onChange={(e) => persistName(e.target.value)}
-            placeholder="Твоё имя"
+            placeholder="Your name"
             maxLength={18}
             style={LOBBY_INPUT}
           />
@@ -4224,7 +4221,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
           <input
             value={code}
             onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8))}
-            placeholder="Код"
+            placeholder="Code"
             maxLength={8}
             autoCapitalize="characters"
             style={{ ...LOBBY_INPUT, letterSpacing: 4, fontWeight: 700 }}
@@ -4237,7 +4234,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
           disabled={busy}
           onClick={screen === "create" ? createLobby : joinLobby}
         >
-          {busy ? "Подключение…" : screen === "create" ? "Создать" : "Войти"}
+          {busy ? "Connecting…" : screen === "create" ? "Create" : "Sign in"}
         </button>
       </>
     );
@@ -4247,7 +4244,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     return formShell(
       <>
         <div style={{ fontSize: 22, fontWeight: 700, color: "#f5f0e6", fontFamily: 'Georgia, "Times New Roman", serif' }}>
-          Код лобби
+          Lobby code
         </div>
         <button
           type="button"
@@ -4267,7 +4264,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
           {view.code}
         </button>
         <div style={{ fontSize: 12, color: "rgba(255,255,255,0.55)" }}>
-          {copied ? "Скопировано" : "Нажми код, чтобы скопировать"}
+          {copied ? "Copied" : "Tap the code to copy"}
         </div>
         <div style={{ width: "100%", maxWidth: 300, display: "flex", flexDirection: "column", gap: 6 }}>
           {view.lobby.map((p) => (
@@ -4287,10 +4284,10 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
                 <AvatarBubble src={p.avatar} name={p.name} size={24} />
                 <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {p.name}
-                  {p.host ? " · хост" : ""}
+                  {p.host ? " · host" : ""}
                 </span>
               </span>
-              <span style={{ opacity: 0.65 }}>{p.connected ? "в сети" : "нет сети"}</span>
+              <span style={{ opacity: 0.65 }}>{p.connected ? "online" : "offline"}</span>
             </div>
           ))}
         </div>
@@ -4302,10 +4299,10 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
             disabled={!view.canStart}
             onClick={() => send({ type: "start" })}
           >
-            {view.canStart ? "Начать игру" : "Ждём ещё игрока"}
+            {view.canStart ? "Start game" : "Waiting for another player"}
           </button>
         ) : (
-          <div style={{ color: "rgba(255,255,255,0.7)", fontSize: 14 }}>Ждём, пока хост начнёт игру</div>
+          <div style={{ color: "rgba(255,255,255,0.7)", fontSize: 14 }}>Waiting for the host to start</div>
         )}
       </>
     );
@@ -4351,7 +4348,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     );
   }
 
-  return formShell(<div style={{ color: "#f5f0e6" }}>Подключение…</div>);
+  return formShell(<div style={{ color: "#f5f0e6" }}>Connecting…</div>);
 }
 
 // ─── Root ────────────────────────────────────────────────────────────────────
@@ -4443,7 +4440,7 @@ export default function CardGame() {
 
       if (standing.gameOver) {
         setPhase("finished");
-        setStatusMsg("Игра окончена");
+        setStatusMsg("Game over");
         return;
       }
       advanceTurn(playerIndex, result.players, false);
@@ -4663,7 +4660,7 @@ export default function CardGame() {
     setPlaySelected(emptyPlay());
     setFinishOrder([]);
     setPhase("playing");
-    setStatusMsg(`Ход: ${pls[first].name}`);
+    setStatusMsg(`Turn: ${pls[first].name}`);
   }
 
   function markReady(playerIndex: number) {
@@ -4683,7 +4680,7 @@ export default function CardGame() {
     setPhase("swap");
     setSwapSeconds(SWAP_SECONDS);
     setSelection(null);
-    setStatusMsg("Обмен карт — 20 секунд");
+    setStatusMsg("Card swap — 20 seconds");
 
     swapIntervalRef.current = setInterval(() => {
       setSwapSeconds((s) => {
@@ -4772,7 +4769,7 @@ export default function CardGame() {
           discard: pile,
           extraTurn: false,
           won: false,
-          message: "Эта карта ещё закрыта открытой сверху",
+          message: "That card is still covered by a face-up card",
           played: [],
           willBurn: false,
           burnCards: [],
@@ -4791,8 +4788,8 @@ export default function CardGame() {
         // Human sees the revealed card on the pile; opponents must not learn AI's failed card
         discardNext = isHuman ? taken : [...discardNext];
         message = isHuman
-          ? `Ты открыл ${label} — нельзя, забираешь сброс`
-          : `${pl.name} открыл карту — нельзя, забирает сброс`;
+          ? `You flipped ${label} — can't play, take the discard`
+          : `${pl.name} flipped a card — can't play, takes the discard`;
         playersNext[playerIndex] = pl;
         return {
           players: playersNext,
@@ -4828,14 +4825,14 @@ export default function CardGame() {
         drawn: [] as string[],
       });
       if (handIdx.length === 0 && faceIdx.length === 0) {
-        return fail("Так ходить нельзя");
+        return fail("Can't play that");
       }
       if (pl.hand.length > 0 && handIdx.length === 0) {
-        return fail("Сначала выбери карты из руки");
+        return fail("Choose cards from your hand first");
       }
       if (faceIdx.length > 0 && pl.hand.length > 0) {
         if (!canCombineHandWithFaceUp(pl, deckNext.length, handIdx)) {
-          return fail("Комбо с открытыми — только последними картами руки, когда колода пуста");
+          return fail("Face-up combo only with your last hand cards when the deck is empty");
         }
       }
 
@@ -4857,7 +4854,7 @@ export default function CardGame() {
       }
 
       if (!canPlayCards(removed, discardNext)) {
-        return fail("Так ходить нельзя");
+        return fail("Can't play that");
       }
       played = removed;
     }
@@ -4869,9 +4866,9 @@ export default function CardGame() {
     if (rank === "7") {
       const under = getEffectiveTop(discardNext);
       if (under) {
-        message += ` · под 7: ${getRank(under)}${under.slice(-1)}`;
+        message += ` · under 7: ${getRank(under)}${under.slice(-1)}`;
       } else {
-        message += " · под 7 пусто";
+        message += " · nothing under 7";
       }
     }
 
@@ -4883,7 +4880,7 @@ export default function CardGame() {
       burnCards = [...discardNext];
       // Keep discard for play animation; cleared after burn flight
       extraTurn = true;
-      message += " — сброс в отбой!";
+      message += " — discard burned!";
     }
 
     let drawn: string[] = [];
@@ -4896,7 +4893,7 @@ export default function CardGame() {
 
     playersNext[playerIndex] = pl;
     const won = playerFinished({ ...pl, hand: sortHand([...pl.hand, ...drawn]) });
-    if (won) message = `${pl.name} выходит!`;
+    if (won) message = `${pl.name} is out!`;
 
     return {
       players: playersNext,
@@ -4924,7 +4921,7 @@ export default function CardGame() {
       return {
         players: pls,
         discard: pile,
-        message: "Сброс пуст",
+        message: "Discard is empty",
         pickupCards: [] as string[],
       };
     }
@@ -4943,7 +4940,7 @@ export default function CardGame() {
         return {
           players: pls,
           discard: pile,
-          message: "Карту со стола можно взять только с пустой рукой",
+          message: "You can only take a table card with an empty hand",
           pickupCards: [] as string[],
         };
       }
@@ -4953,7 +4950,7 @@ export default function CardGame() {
           return {
             players: pls,
             discard: pile,
-            message: "Нет такой открытой карты",
+            message: "No such face-up card",
             pickupCards: [] as string[],
           };
         }
@@ -4973,7 +4970,7 @@ export default function CardGame() {
           return {
             players: pls,
             discard: pile,
-            message: "Нет такой закрытой карты",
+            message: "No such face-down card",
             pickupCards: [] as string[],
           };
         }
@@ -4989,15 +4986,15 @@ export default function CardGame() {
     const tableNote =
       extras.length > 0
         ? tableTake!.zone === "faceDown"
-          ? " + 1 закрытая со стола"
+          ? " + 1 face-down from the table"
           : extras.length === 1
-            ? ` + ${getRank(extras[0])}${extras[0].slice(-1)} со стола`
-            : ` + ${extras.length}×${getRank(extras[0])} со стола`
+            ? ` + ${getRank(extras[0])}${extras[0].slice(-1)} from the table`
+            : ` + ${extras.length}×${getRank(extras[0])} from the table`
         : "";
     return {
       players: playersNext,
       discard: pile,
-      message: `${pls[playerIndex].name} забирает сброс (${pile.length})${tableNote}`,
+      message: `${pls[playerIndex].name} takes the discard (${pile.length})${tableNote}`,
       pickupCards,
     };
   }
@@ -5005,12 +5002,12 @@ export default function CardGame() {
   function advanceTurn(from: number, pls: PlayerState[], extraTurn: boolean) {
     if (extraTurn && !playerFinished(pls[from])) {
       setCurrentPlayer(from);
-      setStatusMsg(`Ход: ${pls[from].name} (ещё раз)`);
+      setStatusMsg(`Turn: ${pls[from].name} (again)`);
       return from;
     }
     const nxt = nextAlive(from, pls);
     setCurrentPlayer(nxt);
-    setStatusMsg(`Ход: ${pls[nxt].name}`);
+    setStatusMsg(`Turn: ${pls[nxt].name}`);
     return nxt;
   }
 
@@ -5061,7 +5058,7 @@ export default function CardGame() {
     let cursor = 0;
 
     const newPlayers: PlayerState[] = Array.from({ length: playerCount }, (_, i) => ({
-      name: i === 0 ? "Ты" : `Игрок ${i + 1}`,
+      name: i === 0 ? "You" : `Player ${i + 1}`,
       faceDown: [],
       faceUp: [],
       hand: [],
@@ -5092,7 +5089,7 @@ export default function CardGame() {
     setSwapTick(0);
     setPlaySelected(emptyPlay());
     setFinishOrder([]);
-    setStatusMsg("Раздача карт...");
+    setStatusMsg("Dealing...");
     clearAnimState();
     setBurnCount(0);
     setPickupAwaitTable(false);
@@ -5285,9 +5282,9 @@ export default function CardGame() {
       discardRef.current
     );
     if (
-      result.message === "Так ходить нельзя" ||
-      result.message === "Сначала выбери карты из руки" ||
-      result.message.startsWith("Комбо с открытыми")
+      result.message === "Can't play that" ||
+      result.message === "Choose cards from your hand first" ||
+      result.message.startsWith("Face-up combo")
     ) {
       setStatusMsg(result.message);
       return;
@@ -5314,11 +5311,11 @@ export default function CardGame() {
     const pile = discardRef.current;
     if (pile.length === 0 && activePlayZone(pl, drawDeckRef.current.length) === "faceDown") {
       // Face-down zone with empty discard: nothing to pick up
-      setStatusMsg("Сброс пуст");
+      setStatusMsg("Discard is empty");
       return;
     }
     if (pile.length === 0) {
-      setStatusMsg("Сброс пуст");
+      setStatusMsg("Discard is empty");
       return;
     }
     if (canTakeTableWithPickup(pl)) {
@@ -5326,8 +5323,8 @@ export default function CardGame() {
       setPlaySelected(emptyPlay());
       setStatusMsg(
         activePlayZone(pl, drawDeckRef.current.length) === "faceUp"
-          ? "Выбери ранг на столе (все одинаковые) или только сброс"
-          : "Выбери карту со стола или забери только сброс"
+          ? "Pick a matching rank on the table, or take discard only"
+          : "Pick a table card or take discard only"
       );
       return;
     }
@@ -5340,7 +5337,7 @@ export default function CardGame() {
 
   function handleCancelPickupAwait() {
     setPickupAwaitTable(false);
-    setStatusMsg(`Ход: ${playersRef.current[0]?.name ?? "Ты"}`);
+    setStatusMsg(`Turn: ${playersRef.current[0]?.name ?? "You"}`);
   }
 
   function resetToLobby() {

@@ -60,7 +60,7 @@ my $babel = "https://cdn.jsdelivr.net/npm/\@babel/standalone\@7.26.10/babel.min.
 
 my $html = <<"HTML";
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
@@ -72,7 +72,7 @@ my $html = <<"HTML";
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="apple-touch-icon" href="icon.svg" />
   <title>Citrons — TwoCircles Edition</title>
-  <meta name="description" content="Карточная игра Citrons. Соло против ботов." />
+  <meta name="description" content="Citrons card game. Solo against bots." />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%231a6b3c'/><text x='16' y='22' text-anchor='middle' font-size='16' fill='%23f5f0e6'>C</text></svg>" />
   <style>
     html, body { margin: 0; height: 100%; height: 100dvh; background: #145230; overflow: hidden; }
@@ -94,7 +94,7 @@ my $html = <<"HTML";
 </head>
 <body>
   <script>window.CITRONS_WS = window.CITRONS_WS || "wss://web-production-b9cc89.up.railway.app"; window.CLERK_PK = window.CLERK_PK || "pk_test_YXB0LXR1cnRsZS00MTg3LmNsZXJrLmFjY291bnRzLmRldiQ";</script>
-  <div id="root"><p style="color:#f5f0e6;text-align:center;padding:48px 16px;letter-spacing:0.04em">Загрузка Citrons…</p></div>
+  <div id="root"><p style="color:#f5f0e6;text-align:center;padding:48px 16px;letter-spacing:0.04em">Loading Citrons…</p></div>
   <script src="$react" crossorigin></script>
   <script src="$reactdom" crossorigin></script>
   <script src="$babel"></script>

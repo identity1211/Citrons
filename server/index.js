@@ -45,7 +45,7 @@ function dummyCard() {
 
 function maskPlayer(p, isSelf) {
   return {
-    name: isSelf ? "Ты" : p.name,
+    name: isSelf ? "You" : p.name,
     avatar: p.avatar || "",
     ready: !!p.ready,
     connected: !!p.connected,
@@ -81,7 +81,7 @@ function viewFor(room, playerId) {
     canStart: room.hostId === playerId && room.phase === "waiting" && room.seats.length >= MIN_PLAYERS,
     lobby: room.seats.map((p) => ({
       id: p.id,
-      name: p.id === playerId ? `${p.name} (ты)` : p.name,
+      name: p.id === playerId ? `${p.name} (you)` : p.name,
       avatar: p.avatar || "",
       ready: !!p.ready,
       connected: !!p.connected,
@@ -158,7 +158,7 @@ function sanitizeName(name) {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 18);
-  return n || "Игрок";
+  return n || "Player";
 }
 
 function sanitizeAvatar(url) {
@@ -216,10 +216,10 @@ async function identifyClerk(ws, clerkToken, { required }) {
   if (!result.ok) {
     if (!required && result.reason === "no-token") return { userId: null };
     const map = {
-      "no-token": "Сначала войди через Google",
-      exp: "Сессия истекла — войди снова",
+      "no-token": "Sign in with Google first",
+      exp: "Session expired — sign in again",
     };
-    error(ws, map[result.reason] || "Не удалось проверить вход");
+    error(ws, map[result.reason] || "Couldn't verify sign-in");
     return null;
   }
   return { userId: result.userId };
@@ -231,7 +231,7 @@ async function createRoom(ws, name, avatar, clerkToken) {
   const clerkUserId = auth.userId;
   const busy = findClerkSeat(clerkUserId);
   if (busy && busy.room.phase !== "waiting") {
-    return error(ws, `Ты уже в игре ${busy.room.code}`);
+    return error(ws, `You're already in game ${busy.room.code}`);
   }
   kickClerkFromWaiting(clerkUserId, null);
   leave(ws, true);
@@ -258,7 +258,7 @@ async function createRoom(ws, name, avatar, clerkToken) {
 
 async function joinRoom(ws, code, name, token, avatar, clerkToken) {
   const room = rooms.get(String(code || "").trim().toUpperCase());
-  if (!room) return error(ws, "Лобби не найдено");
+  if (!room) return error(ws, "Lobby not found");
   const auth = await identifyClerk(ws, clerkToken, { required: !token });
   if (!auth) return;
   const clerkUserId = auth.userId;
@@ -286,13 +286,13 @@ async function joinRoom(ws, code, name, token, avatar, clerkToken) {
     }
     const busy = findClerkSeat(clerkUserId);
     if (busy && busy.room.phase !== "waiting") {
-      return error(ws, `Ты уже в игре ${busy.room.code}`);
+      return error(ws, `You're already in game ${busy.room.code}`);
     }
     kickClerkFromWaiting(clerkUserId, room.code);
   }
 
-  if (room.phase !== "waiting") return error(ws, "Игра уже началась");
-  if (room.seats.length >= MAX_PLAYERS) return error(ws, "Лобби заполнено");
+  if (room.phase !== "waiting") return error(ws, "The game has already started");
+  if (room.seats.length >= MAX_PLAYERS) return error(ws, "Lobby is full");
 
   const player = makePlayer(ws, name, avatar, clerkUserId);
   room.seats.push(player);
@@ -328,7 +328,7 @@ function startGame(room) {
   room.burnCount = 0;
   room.currentPlayer = 0;
   room.phase = "dealing";
-  room.statusMsg = "Раздача карт...";
+  room.statusMsg = "Dealing...";
   broadcast(room);
 
   const n = room.seats.length;
@@ -340,7 +340,7 @@ function beginSwap(room) {
   if (room.phase !== "dealing") return;
   room.phase = "swap";
   room.swapSeconds = SWAP_SECONDS;
-  room.statusMsg = "Обмен карт — 20 секунд";
+  room.statusMsg = "Card swap — 20 seconds";
   broadcast(room);
 
   const tick = () => {
@@ -363,7 +363,7 @@ function beginPlaying(room) {
   room.phase = "playing";
   room.currentPlayer = Math.floor(Math.random() * room.seats.length);
   room.discard = [];
-  room.statusMsg = `Ход: ${room.seats[room.currentPlayer].name}`;
+  room.statusMsg = `Turn: ${room.seats[room.currentPlayer].name}`;
   broadcast(room);
 }
 
@@ -378,7 +378,7 @@ function resolveStandings(room, finisher) {
   if (left.length <= 1) {
     if (left.length === 1 && !room.finishOrder.includes(left[0])) room.finishOrder.push(left[0]);
     room.phase = "finished";
-    room.statusMsg = "Игра окончена";
+    room.statusMsg = "Game over";
     return true;
   }
   return false;
@@ -412,10 +412,10 @@ function afterPlay(room, playerIndex, result) {
   }
   if (result.extraTurn && !engine.playerFinished(room.seats[playerIndex])) {
     room.currentPlayer = playerIndex;
-    room.statusMsg = `Ход: ${room.seats[playerIndex].name} (ещё раз)`;
+    room.statusMsg = `Turn: ${room.seats[playerIndex].name} (again)`;
   } else {
     room.currentPlayer = engine.nextAlive(playerIndex, room.seats);
-    room.statusMsg = `Ход: ${room.seats[room.currentPlayer].name}`;
+    room.statusMsg = `Turn: ${room.seats[room.currentPlayer].name}`;
   }
   broadcast(room, makePlayAnim(playerIndex, result));
 }
@@ -433,18 +433,18 @@ function makePlayAnim(playerIndex, result) {
 }
 
 function handlePlay(room, player, play) {
-  if (room.phase !== "playing") return error(player.ws, "Сейчас нельзя ходить");
+  if (room.phase !== "playing") return error(player.ws, "You can't play right now");
   const idx = room.seats.indexOf(player);
-  if (idx !== room.currentPlayer) return error(player.ws, "Сейчас не твой ход");
+  if (idx !== room.currentPlayer) return error(player.ws, "It's not your turn");
   const result = engine.applyPlay(idx, play || {}, room.seats, room.deck, room.discard);
   if (!result.ok) return error(player.ws, result.message);
   afterPlay(room, idx, result);
 }
 
 function handlePickup(room, player, tableTake) {
-  if (room.phase !== "playing") return error(player.ws, "Сейчас нельзя забирать");
+  if (room.phase !== "playing") return error(player.ws, "You can't take cards right now");
   const idx = room.seats.indexOf(player);
-  if (idx !== room.currentPlayer) return error(player.ws, "Сейчас не твой ход");
+  if (idx !== room.currentPlayer) return error(player.ws, "It's not your turn");
   const result = engine.applyPickUp(idx, room.seats, room.discard, tableTake || null);
   if (!result.ok) return error(player.ws, result.message);
   for (let i = 0; i < room.seats.length; i++) {
@@ -455,7 +455,7 @@ function handlePickup(room, player, tableTake) {
   room.discard = result.discard;
   room.statusMsg = result.message;
   room.currentPlayer = engine.nextAlive(idx, room.seats);
-  room.statusMsg = `${result.message}. Ход: ${room.seats[room.currentPlayer].name}`;
+  room.statusMsg = `${result.message}. Turn: ${room.seats[room.currentPlayer].name}`;
   broadcast(room, {
     kind: "pickup",
     fromPlayer: idx,
@@ -517,7 +517,7 @@ function onMessage(ws, data) {
   try {
     msg = JSON.parse(data);
   } catch {
-    return error(ws, "Некорректное сообщение");
+    return error(ws, "Invalid message");
   }
   const type = msg && msg.type;
   const room = rooms.get(ws.roomCode);
@@ -537,10 +537,10 @@ function onMessage(ws, data) {
   }
   if (type === "ping") return send(ws, { type: "pong" });
 
-  if (!room || !player) return error(ws, "Сначала зайди в лобби");
+  if (!room || !player) return error(ws, "Join a lobby first");
   if (type === "start") {
-    if (player.id !== room.hostId) return error(ws, "Начать может только хост");
-    if (room.seats.length < MIN_PLAYERS) return error(ws, "Нужно минимум 2 игрока");
+    if (player.id !== room.hostId) return error(ws, "Only the host can start");
+    if (room.seats.length < MIN_PLAYERS) return error(ws, "Need at least 2 players");
     return startGame(room);
   }
   if (type === "swap") return handleSwap(room, player, msg.hand, msg.faceUp);
@@ -552,7 +552,7 @@ function onMessage(ws, data) {
     send(ws, { type: "left" });
     return;
   }
-  error(ws, "Неизвестная команда");
+  error(ws, "Unknown command");
 }
 
 setInterval(() => {
