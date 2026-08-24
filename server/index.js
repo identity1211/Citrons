@@ -13,7 +13,8 @@ const MAX_PLAYERS = 5;
 const MIN_PLAYERS = 2;
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const ROOM_TTL_MS = 3 * 60 * 60 * 1000;
-const REJOIN_MS = 90 * 1000;
+const REJOIN_MS = 10 * 60 * 1000;
+const WAITING_REJOIN_MS = 2 * 60 * 1000;
 
 const rooms = new Map();
 const browsers = new Set();
@@ -225,21 +226,29 @@ function findClerkSeat(clerkUserId) {
   return null;
 }
 
-function kickClerkFromWaiting(clerkUserId, exceptCode) {
+function abandonSeat(room, player) {
+  if (!room || !player) return;
+  if (player.leaveTimer) {
+    clearTimeout(player.leaveTimer);
+    player.leaveTimer = null;
+  }
+  if (player.ws) {
+    send(player.ws, { type: "left" });
+    player.ws.roomCode = null;
+    player.ws.playerId = null;
+    player.ws = null;
+  }
+  if (removeSeat(room, player) && rooms.has(room.code)) broadcast(room);
+  notifyLobbies();
+}
+
+function releaseClerk(clerkUserId, exceptCode) {
   if (!clerkUserId) return;
   for (const room of [...rooms.values()]) {
     if (exceptCode && room.code === exceptCode) continue;
-    if (room.phase !== "waiting") continue;
     const player = room.seats.find((p) => p.clerkUserId === clerkUserId);
-    if (!player) continue;
-    if (player.ws) {
-      send(player.ws, { type: "left" });
-      player.ws.roomCode = null;
-      player.ws.playerId = null;
-    }
-    if (removeSeat(room, player) && rooms.has(room.code)) broadcast(room);
+    if (player) abandonSeat(room, player);
   }
-  notifyLobbies();
 }
 
 async function identifyClerk(ws, clerkToken, { required }) {
@@ -261,11 +270,7 @@ async function createRoom(ws, name, avatar, clerkToken) {
   const auth = await identifyClerk(ws, clerkToken, { required: true });
   if (!auth) return;
   const clerkUserId = auth.userId;
-  const busy = findClerkSeat(clerkUserId);
-  if (busy && busy.room.phase !== "waiting") {
-    return error(ws, `You're already in game ${busy.room.code}`);
-  }
-  kickClerkFromWaiting(clerkUserId, null);
+  releaseClerk(clerkUserId, null);
   leave(ws, true);
   const code = uniqueCode();
   const player = makePlayer(ws, name, avatar, clerkUserId);
@@ -316,11 +321,7 @@ async function joinRoom(ws, code, name, token, avatar, clerkToken) {
       attach(ws, room, existing);
       return;
     }
-    const busy = findClerkSeat(clerkUserId);
-    if (busy && busy.room.phase !== "waiting") {
-      return error(ws, `You're already in game ${busy.room.code}`);
-    }
-    kickClerkFromWaiting(clerkUserId, room.code);
+    releaseClerk(clerkUserId, room.code);
   }
 
   if (room.phase !== "waiting") return error(ws, "The game has already started");
@@ -527,25 +528,20 @@ function leave(ws, immediate) {
   ws.roomCode = null;
   ws.playerId = null;
 
-  if (room.phase === "waiting") {
-    if (player.leaveTimer) clearTimeout(player.leaveTimer);
-    if (immediate) {
-      if (removeSeat(room, player)) broadcast(room);
-      notifyLobbies();
-      return;
-    }
-    player.leaveTimer = setTimeout(() => {
-      const r = rooms.get(room.code);
-      if (!r) return;
-      if (removeSeat(r, player)) broadcast(r);
-      notifyLobbies();
-    }, 4000);
-  } else {
-    player.leaveTimer = setTimeout(() => {
-      player.connected = false;
-      broadcast(room);
-    }, REJOIN_MS);
+  if (immediate) {
+    abandonSeat(room, player);
+    return;
   }
+
+  if (player.leaveTimer) clearTimeout(player.leaveTimer);
+  const delay = room.phase === "waiting" ? WAITING_REJOIN_MS : REJOIN_MS;
+  player.leaveTimer = setTimeout(() => {
+    const r = rooms.get(room.code);
+    if (!r) return;
+    const p = r.seats.find((x) => x.id === player.id);
+    if (!p || p.connected) return;
+    abandonSeat(r, p);
+  }, delay);
 }
 
 function onMessage(ws, data) {

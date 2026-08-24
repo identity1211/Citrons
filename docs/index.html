@@ -3593,6 +3593,59 @@ function Table({
 const NAME_KEY = "citrons-name";
 const WS_KEY = "citrons-ws";
 const SESSION_KEY = "citrons-mp-session";
+const REJOIN_KEEP_MS = 10 * 60 * 1000;
+
+type MpSession = { code: string; token: string; name: string; savedAt: number };
+
+function readMpSession(): MpSession | null {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY) || sessionStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<MpSession>;
+    if (!parsed.code || !parsed.token) return null;
+    const savedAt = Number(parsed.savedAt) || Date.now();
+    if (Date.now() - savedAt > REJOIN_KEEP_MS) {
+      localStorage.removeItem(SESSION_KEY);
+      sessionStorage.removeItem(SESSION_KEY);
+      return null;
+    }
+    return {
+      code: String(parsed.code),
+      token: String(parsed.token),
+      name: String(parsed.name || "Player"),
+      savedAt,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeMpSession(sess: MpSession) {
+  const raw = JSON.stringify(sess);
+  try {
+    localStorage.setItem(SESSION_KEY, raw);
+  } catch {
+    /* ignore */
+  }
+  try {
+    sessionStorage.setItem(SESSION_KEY, raw);
+  } catch {
+    /* ignore */
+  }
+}
+
+function clearMpSession() {
+  try {
+    localStorage.removeItem(SESSION_KEY);
+  } catch {
+    /* ignore */
+  }
+  try {
+    sessionStorage.removeItem(SESSION_KEY);
+  } catch {
+    /* ignore */
+  }
+}
 
 type OnlineView = {
   code: string;
@@ -3849,12 +3902,15 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   const [burnAnim, setBurnAnim] = useState<BurnAnim | null>(null);
   const [pickupAnim, setPickupAnim] = useState<PickupAnim | null>(null);
   const [drawAnim, setDrawAnim] = useState<DrawAnim | null>(null);
+  const [dropped, setDropped] = useState(false);
+  const [savedGame, setSavedGame] = useState<MpSession | null>(() => readMpSession());
 
   const wsRef = useRef<WebSocket | null>(null);
   const pingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const dealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const revealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const sessionRef = useRef<{ code: string; token: string; name: string } | null>(null);
+  const sessionRef = useRef<MpSession | null>(readMpSession());
+  const reconnectTriesRef = useRef(0);
   const viewRef = useRef<OnlineView | null>(null);
   const screenRef = useRef(screen);
   const animIdRef = useRef(0);
@@ -4030,6 +4086,10 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     if (msg.type === "error") {
       setBusy(false);
       setError(msg.message || "Server error");
+      if (/lobby not found|game has already started/i.test(msg.message || "")) {
+        const inMatch = screenRef.current === "waiting" || screenRef.current === "table";
+        if (!inMatch) forgetSession();
+      }
       return;
     }
     if (msg.type === "lobbies" && Array.isArray(msg.lobbies)) {
@@ -4040,20 +4100,26 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     if (msg.type === "joined") {
       setBusy(false);
       setError("");
+      setDropped(false);
+      reconnectTriesRef.current = 0;
       if (msg.code && msg.token) {
-        const sess = { code: msg.code, token: msg.token, name: name.trim() || "Player" };
+        const sess: MpSession = {
+          code: msg.code,
+          token: msg.token,
+          name: name.trim() || "Player",
+          savedAt: Date.now(),
+        };
         sessionRef.current = sess;
-        try {
-          sessionStorage.setItem(SESSION_KEY, JSON.stringify(sess));
-        } catch {
-          /* ignore */
-        }
+        setSavedGame(sess);
+        writeMpSession(sess);
       }
       return;
     }
     if (msg.type === "state" && msg.view) {
       setBusy(false);
       setError("");
+      setDropped(false);
+      reconnectTriesRef.current = 0;
       if (msg.view.phase === "waiting") {
         clearTableAnims();
         setView(msg.view);
@@ -4103,6 +4169,8 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       return;
     }
     if (msg.type === "left") {
+      forgetSession();
+      setDropped(false);
       setView(null);
       setScreen("pick");
     }
@@ -4136,34 +4204,26 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       stopPing();
       if (wsRef.current === ws) wsRef.current = null;
       const sess = sessionRef.current;
-      if (sess) {
+      const inMatch = screenRef.current === "waiting" || screenRef.current === "table";
+      if (sess && inMatch) {
+        if (reconnectTriesRef.current < 2) {
+          reconnectTriesRef.current += 1;
+          window.setTimeout(() => {
+            if (wsRef.current) return;
+            if (screenRef.current !== "waiting" && screenRef.current !== "table") return;
+            rejoinSavedGame();
+          }, 800);
+        } else {
+          setDropped(true);
+          setBusy(false);
+          setError("Connection lost — you can rejoin.");
+        }
+        return;
+      }
+      if (screenRef.current === "pick" || screenRef.current === "join") {
         window.setTimeout(() => {
           if (wsRef.current) return;
-          connect((next) => {
-            void (async () => {
-              let clerkToken = "";
-              try {
-                const clerk = await ensureClerk();
-                clerkToken = (clerk.session && (await clerk.session.getToken())) || "";
-              } catch {
-                /* guest rejoin */
-              }
-              next.send(
-                JSON.stringify({
-                  type: "rejoin",
-                  code: sess.code,
-                  name: sess.name,
-                  token: sess.token,
-                  clerkToken,
-                })
-              );
-            })();
-          });
-        }, 800);
-      } else if (screenRef.current === "join") {
-        window.setTimeout(() => {
-          if (wsRef.current) return;
-          if (screenRef.current !== "join") return;
+          if (screenRef.current !== "pick" && screenRef.current !== "join") return;
           connect((next) => next.send(JSON.stringify({ type: "browse" })), { silent: true });
         }, 1200);
       }
@@ -4237,14 +4297,52 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     }
   }
 
+  function forgetSession() {
+    sessionRef.current = null;
+    setSavedGame(null);
+    clearMpSession();
+  }
+
+  function rejoinSavedGame() {
+    const sess = sessionRef.current || readMpSession();
+    if (!sess) {
+      setError("No game to rejoin");
+      setDropped(false);
+      return;
+    }
+    sessionRef.current = sess;
+    setSavedGame(sess);
+    setDropped(false);
+    setError("");
+    void (async () => {
+      try {
+        const payload = await clerkPayload();
+        connect((ws) =>
+          ws.send(
+            JSON.stringify({
+              type: "rejoin",
+              code: sess.code,
+              token: sess.token,
+              ...payload,
+            })
+          )
+        );
+      } catch (e) {
+        setError(clerkErrorText(e));
+        setDropped(true);
+      }
+    })();
+  }
+
+  function exitToMenu() {
+    closeSocket();
+    if (dealTimerRef.current) clearTimeout(dealTimerRef.current);
+    onLeave();
+  }
+
   function leaveOnline() {
     send({ type: "leave" });
-    sessionRef.current = null;
-    try {
-      sessionStorage.removeItem(SESSION_KEY);
-    } catch {
-      /* ignore */
-    }
+    forgetSession();
     closeSocket();
     if (dealTimerRef.current) clearTimeout(dealTimerRef.current);
     onLeave();
@@ -4426,7 +4524,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       center
       style={{ padding: "max(8px, env(safe-area-inset-top)) 16px max(28px, calc(env(safe-area-inset-bottom) + 10px))" }}
     >
-      <LobbyBack onClick={leaveOnline} />
+      <LobbyBack onClick={exitToMenu} />
       <ProfileButton />
       <div
         style={{
@@ -4445,6 +4543,64 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       </div>
     </FeltShell>
   );
+
+  const droppedOverlay = dropped ? (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 50,
+        background: "rgba(0,0,0,0.58)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 24,
+      }}
+    >
+      <div
+        style={{
+          width: "100%",
+          maxWidth: 320,
+          borderRadius: 14,
+          background: "#145230",
+          border: "1px solid rgba(255,255,255,0.22)",
+          padding: "22px 18px",
+          textAlign: "center",
+        }}
+      >
+        <div style={{ color: "#f5f0e6", fontWeight: 800, fontSize: 18, marginBottom: 8 }}>Connection lost</div>
+        <div style={{ color: "rgba(255,255,255,0.72)", fontSize: 13, lineHeight: 1.4, marginBottom: 16 }}>
+          Your seat is saved. Rejoin this game when you're back online.
+        </div>
+        <button
+          type="button"
+          className="lobby-play-btn"
+          style={{ ...LOBBY_GOLD_BTN, marginBottom: 10 }}
+          disabled={busy}
+          onClick={rejoinSavedGame}
+        >
+          {busy ? "Rejoining…" : savedGame ? `Rejoin ${savedGame.code}` : "Rejoin game"}
+        </button>
+        <button
+          type="button"
+          onClick={leaveOnline}
+          style={{
+            background: "transparent",
+            border: "1.5px solid rgba(255,255,255,0.35)",
+            color: "#f5f0e6",
+            borderRadius: 10,
+            height: 44,
+            width: "100%",
+            maxWidth: 300,
+            fontWeight: 700,
+            cursor: "pointer",
+          }}
+        >
+          Leave game
+        </button>
+      </div>
+    </div>
+  ) : null;
 
   if (screen === "pick") {
     return formShell(
@@ -4489,6 +4645,23 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         >
           Join lobby
         </button>
+        {savedGame ? (
+          <button
+            type="button"
+            className="lobby-play-btn"
+            style={LOBBY_GOLD_BTN}
+            disabled={busy}
+            onClick={() => {
+              if (!auth.user) {
+                setError("Sign in with Google first");
+                return;
+              }
+              rejoinSavedGame();
+            }}
+          >
+            {busy ? "Rejoining…" : `Rejoin ${savedGame.code}`}
+          </button>
+        ) : null}
         <OpenLobbyList
           lobbies={lobbies}
           busy={busy}
@@ -4646,12 +4819,15 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         ) : (
           <div style={{ color: "rgba(255,255,255,0.7)", fontSize: 14 }}>Waiting for the host to start</div>
         )}
+        {droppedOverlay}
       </>
     );
   }
 
   if (screen === "table" && view) {
     return (
+      <>
+        {droppedOverlay}
       <Table
         players={players}
         drawDeck={drawDeck}
@@ -4685,8 +4861,9 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
           setPickupAwaitTable(false);
         }}
         onCancelPickupAwait={() => setPickupAwaitTable(false)}
-        onReset={leaveOnline}
+        onReset={view.phase === "finished" ? leaveOnline : exitToMenu}
       />
+      </>
     );
   }
 
