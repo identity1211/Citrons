@@ -455,6 +455,12 @@ function ensureKeyframes() {
     .lobby-brand-in {
       animation: lobbyBrandIn 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
     }
+    @media (orientation: landscape) and (max-height: 520px) {
+      .lobby-title { font-size: 28px !important; }
+      .lobby-subtitle { margin-top: 4px !important; font-size: 12px !important; }
+      .lobby-fan-wrap { height: 56px !important; margin: 0 0 4px !important; transform: scale(0.72); transform-origin: top center; }
+      .lobby-fan-wrap .lobby-fan-card { top: 0 !important; }
+    }
     .lobby-play-btn {
       transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
     }
@@ -1532,7 +1538,8 @@ function LobbyCardFan() {
         position: "relative",
         width: "min(320px, 86vw)",
         height: 120,
-        margin: "8px 0 28px",
+        margin: "4px 0 8px",
+        flexShrink: 0,
       }}
       aria-hidden
     >
@@ -1745,7 +1752,7 @@ function Lobby({ onStart, onRules }: { onStart: (count: number) => void; onRules
   }
 
   return (
-    <FeltShell center style={{ padding: "min(32px, 5vh) 16px" }}>
+    <FeltShell center style={{ padding: "max(48px, calc(env(safe-area-inset-top) + 40px)) 16px 20px" }}>
       {view === "main" && (
         <>
           <button
@@ -1781,6 +1788,8 @@ function Lobby({ onStart, onRules }: { onStart: (count: number) => void; onRules
         style={{
           width: "100%",
           maxWidth: 440,
+          flex: 1,
+          minHeight: 0,
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
@@ -1788,11 +1797,12 @@ function Lobby({ onStart, onRules }: { onStart: (count: number) => void; onRules
           padding: "0 8px",
         }}
       >
-        <div className="lobby-brand-in" style={{ animationDelay: "0.05s" }}>
+        <div className="lobby-brand-in" style={{ animationDelay: "0.05s", flexShrink: 0 }}>
           <div
+            className="lobby-title"
             style={{
               fontFamily: 'Georgia, "Times New Roman", serif',
-              fontSize: "clamp(36px, 11vh, 72px)",
+              fontSize: "clamp(32px, 8vh, 64px)",
               fontWeight: 700,
               color: "#f5f0e6",
               letterSpacing: 1,
@@ -1803,8 +1813,9 @@ function Lobby({ onStart, onRules }: { onStart: (count: number) => void; onRules
             Citrons
           </div>
           <div
+            className="lobby-subtitle"
             style={{
-              marginTop: 12,
+              marginTop: 8,
               fontSize: 15,
               color: "rgba(255,255,255,0.72)",
               fontWeight: 500,
@@ -1819,6 +1830,8 @@ function Lobby({ onStart, onRules }: { onStart: (count: number) => void; onRules
 
         <LobbyCardFan />
 
+        <div style={{ flex: 1, minHeight: 16, width: "100%" }} />
+
         <div
           key={view}
           className="lobby-brand-in"
@@ -1829,6 +1842,10 @@ function Lobby({ onStart, onRules }: { onStart: (count: number) => void; onRules
             flexDirection: "column",
             alignItems: "center",
             gap: 12,
+            flexShrink: 0,
+            position: "relative",
+            zIndex: 3,
+            paddingBottom: 4,
           }}
         >
           {view === "main" && (

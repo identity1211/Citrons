@@ -81,8 +81,10 @@ my $html = <<"HTML";
     body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; -webkit-text-size-adjust: 100%; }
     button { font-family: inherit; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
     \@media (orientation: landscape) and (max-height: 520px) {
-      .lobby-fan-wrap { height: 72px !important; margin: 2px 0 10px !important; }
-      .lobby-fan-wrap .lobby-fan-card { top: 4px !important; }
+      .lobby-title { font-size: 28px !important; }
+      .lobby-subtitle { margin-top: 4px !important; font-size: 12px !important; }
+      .lobby-fan-wrap { height: 56px !important; margin: 0 0 4px !important; transform: scale(0.72); transform-origin: top center; }
+      .lobby-fan-wrap .lobby-fan-card { top: 0 !important; }
       .lobby-play-btn, .lobby-ghost-btn { height: 42px !important; }
     }
   </style>
