@@ -1000,6 +1000,7 @@ function DeckPile({ count }: { count: number }) {
 }
 
 const FLY_MS = 640;
+const LAND_PAUSE_MS = 320;
 const BURN_MS = 600;
 const PICKUP_MS = 600;
 const REVEAL_MS = 900;
@@ -2992,11 +2993,13 @@ function Table({
     canPlayCards(selectedCards, discard);
 
   const displayDiscard =
-    burnAnim || pickupAnim
+    pickupAnim
       ? []
       : flyAnim && flyAnim.cards.length > 0 && discard.length >= flyAnim.cards.length
         ? discard.slice(0, discard.length - flyAnim.cards.length)
-        : discard;
+        : burnAnim
+          ? []
+          : discard;
 
   const vp = useViewport();
   const fsOn = useFullscreen();
@@ -3764,9 +3767,18 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         playerCount: n,
       });
       afterAnim(FLY_MS + played.length * 55, () => {
-        setFlyAnim(null);
-        if (pickup) startPickup();
-        else afterPlayOrBurn();
+        if (pickup) {
+          setFlyAnim(null);
+          startPickup();
+        } else if (anim.willBurn && burnCards.length > 0) {
+          afterAnim(LAND_PAUSE_MS, () => {
+            setFlyAnim(null);
+            afterPlayOrBurn();
+          });
+        } else {
+          setFlyAnim(null);
+          afterPlayOrBurn();
+        }
       });
       return;
     }
@@ -3861,6 +3873,9 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
             anim.pickup.toPlayer,
             omitCardsFromHand(display.players[anim.pickup.toPlayer].hand, anim.pickup.cards)
           );
+        }
+        if (anim.willBurn && anim.burnCards && anim.burnCards.length > 0) {
+          display = { ...display, discard: anim.burnCards };
         }
         setView(display);
         runNetAnim(msg.view, anim);
@@ -4630,8 +4645,16 @@ export default function CardGame() {
         playerCount: result.players.length,
       });
       const t = setTimeout(() => {
-        setFlyAnim(null);
-        afterPlayOrBurn();
+        if (result.willBurn && result.burnCards.length > 0) {
+          const pause = setTimeout(() => {
+            setFlyAnim(null);
+            afterPlayOrBurn();
+          }, LAND_PAUSE_MS);
+          aiTimersRef.current.push(pause);
+        } else {
+          setFlyAnim(null);
+          afterPlayOrBurn();
+        }
       }, FLY_MS + result.played.length * 55);
       aiTimersRef.current.push(t);
     } else {
