@@ -1878,7 +1878,7 @@ function ProfileButton() {
             padding: 16,
           }}
         >
-          <div>
+          <div
             onClick={(e) => e.stopPropagation()}
             style={PROFILE_PANEL}
           >
