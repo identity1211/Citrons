@@ -3612,6 +3612,15 @@ type OnlineView = {
   lobby: { id: string; name: string; avatar?: string; ready: boolean; connected: boolean; host: boolean }[];
 };
 
+type LobbyInfo = {
+  code: string;
+  host: string;
+  hostAvatar?: string;
+  players: { name: string; avatar?: string }[];
+  count: number;
+  max: number;
+};
+
 type NetAnim = {
   kind?: string;
   fromPlayer: number;
@@ -3708,6 +3717,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   const [wsUrl, setWsUrl] = useState(defaultWsUrl);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [lobbies, setLobbies] = useState<LobbyInfo[]>([]);
   const [view, setView] = useState<OnlineView | null>(null);
   const [revealCard, setRevealCard] = useState<string | null>(null);
   const [selection, setSelection] = useState<Selection>(null);
@@ -3729,9 +3739,11 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   const revealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sessionRef = useRef<{ code: string; token: string; name: string } | null>(null);
   const viewRef = useRef<OnlineView | null>(null);
+  const screenRef = useRef(screen);
   const animIdRef = useRef(0);
   const animTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   viewRef.current = view;
+  screenRef.current = screen;
 
   function persistName(n: string) {
     setName(n);
@@ -3891,6 +3903,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       token?: string;
       card?: string;
       anim?: NetAnim;
+      lobbies?: LobbyInfo[];
     };
     try {
       msg = JSON.parse(raw);
@@ -3900,6 +3913,11 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     if (msg.type === "error") {
       setBusy(false);
       setError(msg.message || "Server error");
+      return;
+    }
+    if (msg.type === "lobbies" && Array.isArray(msg.lobbies)) {
+      setLobbies(msg.lobbies);
+      if (!sessionRef.current) setBusy(false);
       return;
     }
     if (msg.type === "joined") {
@@ -3973,8 +3991,8 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     }
   }
 
-  function connect(then: (ws: WebSocket) => void) {
-    setBusy(true);
+  function connect(then: (ws: WebSocket) => void, opts?: { silent?: boolean }) {
+    if (!opts?.silent) setBusy(true);
     setError("");
     closeSocket();
     persistWs(wsUrl);
@@ -4025,6 +4043,12 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
             })();
           });
         }, 800);
+      } else if (screenRef.current === "join") {
+        window.setTimeout(() => {
+          if (wsRef.current) return;
+          if (screenRef.current !== "join") return;
+          connect((next) => next.send(JSON.stringify({ type: "browse" })), { silent: true });
+        }, 1200);
       }
     };
   }
@@ -4050,8 +4074,8 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     })();
   }
 
-  function joinLobby() {
-    const c = code.trim().toUpperCase();
+  function joinByCode(raw: string) {
+    const c = raw.trim().toUpperCase();
     if (c.length < 4) {
       setError("Enter a lobby code");
       return;
@@ -4059,11 +4083,30 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     void (async () => {
       try {
         const payload = await clerkPayload();
-        connect((ws) => ws.send(JSON.stringify({ type: "join", code: c, ...payload })));
+        const ws = wsRef.current;
+        if (ws && ws.readyState === 1) {
+          setBusy(true);
+          ws.send(JSON.stringify({ type: "join", code: c, ...payload }));
+        } else {
+          connect((sock) => sock.send(JSON.stringify({ type: "join", code: c, ...payload })));
+        }
       } catch (e) {
         setError(clerkErrorText(e));
       }
     })();
+  }
+
+  function joinLobby() {
+    joinByCode(code);
+  }
+
+  function startBrowse() {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify({ type: "browse" }));
+      return;
+    }
+    connect((sock) => sock.send(JSON.stringify({ type: "browse" })), { silent: true });
   }
 
   function leaveOnline() {
@@ -4078,6 +4121,11 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     if (dealTimerRef.current) clearTimeout(dealTimerRef.current);
     onLeave();
   }
+
+  useEffect(() => {
+    if (screen !== "join") return;
+    startBrowse();
+  }, [screen]);
 
   useEffect(() => {
     if (!view || view.phase !== "dealing") {
@@ -4311,11 +4359,11 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     );
   }
 
-  if (screen === "create" || screen === "join") {
+  if (screen === "create") {
     return formShell(
       <>
         <div style={{ fontSize: 22, fontWeight: 700, color: "#f5f0e6", fontFamily: 'Georgia, "Times New Roman", serif' }}>
-          {screen === "create" ? "New lobby" : "Join lobby"}
+          New lobby
         </div>
         {auth.user ? (
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -4331,24 +4379,146 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
             style={LOBBY_INPUT}
           />
         )}
-        {screen === "join" && (
-          <input
-            value={code}
-            onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8))}
-            placeholder="Code"
-            maxLength={8}
-            autoCapitalize="characters"
-            style={{ ...LOBBY_INPUT, letterSpacing: 4, fontWeight: 700 }}
-          />
-        )}
         <button
           type="button"
           className="lobby-play-btn"
           style={LOBBY_GOLD_BTN}
           disabled={busy}
-          onClick={screen === "create" ? createLobby : joinLobby}
+          onClick={createLobby}
         >
-          {busy ? "Connecting…" : screen === "create" ? "Create" : "Sign in"}
+          {busy ? "Connecting…" : "Create"}
+        </button>
+      </>
+    );
+  }
+
+  if (screen === "join") {
+    return formShell(
+      <>
+        <div style={{ fontSize: 22, fontWeight: 700, color: "#f5f0e6", fontFamily: 'Georgia, "Times New Roman", serif' }}>
+          Join lobby
+        </div>
+        {auth.user ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <AvatarBubble src={auth.user.imageUrl} name={clerkNickname(auth.user)} size={36} />
+            <div style={{ color: "#f5f0e6", fontWeight: 700 }}>{clerkNickname(auth.user)}</div>
+          </div>
+        ) : (
+          <input
+            value={name}
+            onChange={(e) => persistName(e.target.value)}
+            placeholder="Your name"
+            maxLength={18}
+            style={LOBBY_INPUT}
+          />
+        )}
+        <div style={{ width: "100%", maxWidth: 340, textAlign: "left" }}>
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: 1.4,
+              textTransform: "uppercase",
+              color: "rgba(255,255,255,0.55)",
+              marginBottom: 8,
+              textAlign: "center",
+            }}
+          >
+            Open lobbies
+          </div>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+              maxHeight: "38vh",
+              overflowY: "auto",
+            }}
+          >
+            {lobbies.length === 0 ? (
+              <div
+                style={{
+                  padding: "16px 12px",
+                  borderRadius: 10,
+                  background: "rgba(0,0,0,0.28)",
+                  color: "rgba(255,255,255,0.62)",
+                  fontSize: 13,
+                  textAlign: "center",
+                  lineHeight: 1.4,
+                }}
+              >
+                No open lobbies yet. Create one, or join with a code.
+              </div>
+            ) : (
+              lobbies.map((lobby) => {
+                const full = lobby.count >= lobby.max;
+                const names = lobby.players.map((p) => p.name).join(", ");
+                return (
+                  <div
+                    key={lobby.code}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      padding: "10px 10px 10px 12px",
+                      borderRadius: 10,
+                      background: "rgba(0,0,0,0.32)",
+                      border: "1px solid rgba(255,255,255,0.12)",
+                    }}
+                  >
+                    <AvatarBubble src={lobby.hostAvatar} name={lobby.host} size={32} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ color: "#f5f0e6", fontWeight: 700, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {lobby.host}
+                      </div>
+                      <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {lobby.count}/{lobby.max} · {names || lobby.code}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={busy || full}
+                      onClick={() => joinByCode(lobby.code)}
+                      style={{
+                        flexShrink: 0,
+                        height: 32,
+                        padding: "0 12px",
+                        borderRadius: 8,
+                        border: "none",
+                        background: full ? "rgba(255,255,255,0.12)" : "#f1c40f",
+                        color: full ? "rgba(255,255,255,0.45)" : "#1a2e1a",
+                        fontSize: 12,
+                        fontWeight: 700,
+                        cursor: busy || full ? "default" : "pointer",
+                      }}
+                    >
+                      {full ? "Full" : "Join"}
+                    </button>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.4, textTransform: "uppercase", color: "rgba(255,255,255,0.55)" }}>
+          Or enter a code
+        </div>
+        <input
+          value={code}
+          onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8))}
+          placeholder="Code"
+          maxLength={8}
+          autoCapitalize="characters"
+          style={{ ...LOBBY_INPUT, letterSpacing: 4, fontWeight: 700 }}
+        />
+        <button
+          type="button"
+          className="lobby-play-btn"
+          style={LOBBY_GOLD_BTN}
+          disabled={busy}
+          onClick={joinLobby}
+        >
+          {busy ? "Connecting…" : "Join"}
         </button>
       </>
     );

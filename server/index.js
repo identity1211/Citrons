@@ -16,6 +16,35 @@ const ROOM_TTL_MS = 3 * 60 * 60 * 1000;
 const REJOIN_MS = 90 * 1000;
 
 const rooms = new Map();
+const browsers = new Set();
+
+function publicLobbies() {
+  const list = [];
+  for (const room of rooms.values()) {
+    if (room.phase !== "waiting") continue;
+    const host = room.seats.find((p) => p.id === room.hostId) || room.seats[0];
+    list.push({
+      code: room.code,
+      host: host ? host.name : "Host",
+      hostAvatar: (host && host.avatar) || "",
+      players: room.seats.map((p) => ({ name: p.name, avatar: p.avatar || "" })),
+      count: room.seats.length,
+      max: MAX_PLAYERS,
+    });
+  }
+  list.sort((a, b) => b.count - a.count || a.code.localeCompare(b.code));
+  return list;
+}
+
+function notifyLobbies() {
+  const payload = { type: "lobbies", lobbies: publicLobbies() };
+  for (const ws of browsers) send(ws, payload);
+}
+
+function addBrowser(ws) {
+  browsers.add(ws);
+  send(ws, { type: "lobbies", lobbies: publicLobbies() });
+}
 
 function id() {
   return crypto.randomBytes(8).toString("hex");
@@ -141,6 +170,7 @@ function removeSeat(room, player) {
 }
 
 function attach(ws, room, player) {
+  browsers.delete(ws);
   player.ws = ws;
   player.connected = true;
   if (player.leaveTimer) {
@@ -151,6 +181,7 @@ function attach(ws, room, player) {
   ws.playerId = player.id;
   send(ws, { type: "joined", code: room.code, playerId: player.id, token: player.token });
   broadcast(room);
+  notifyLobbies();
 }
 
 function sanitizeName(name) {
@@ -208,6 +239,7 @@ function kickClerkFromWaiting(clerkUserId, exceptCode) {
     }
     if (removeSeat(room, player) && rooms.has(room.code)) broadcast(room);
   }
+  notifyLobbies();
 }
 
 async function identifyClerk(ws, clerkToken, { required }) {
@@ -330,6 +362,7 @@ function startGame(room) {
   room.phase = "dealing";
   room.statusMsg = "Dealing...";
   broadcast(room);
+  notifyLobbies();
 
   const n = room.seats.length;
   const dealMs = 500 + (9 * n + 1) * DEAL_STEP_MS;
@@ -484,6 +517,7 @@ function handleReady(room, player) {
 }
 
 function leave(ws, immediate) {
+  browsers.delete(ws);
   const room = rooms.get(ws.roomCode);
   if (!room) return;
   const player = room.seats.find((p) => p.id === ws.playerId);
@@ -497,12 +531,14 @@ function leave(ws, immediate) {
     if (player.leaveTimer) clearTimeout(player.leaveTimer);
     if (immediate) {
       if (removeSeat(room, player)) broadcast(room);
+      notifyLobbies();
       return;
     }
     player.leaveTimer = setTimeout(() => {
       const r = rooms.get(room.code);
       if (!r) return;
       if (removeSeat(r, player)) broadcast(r);
+      notifyLobbies();
     }, 4000);
   } else {
     player.leaveTimer = setTimeout(() => {
@@ -536,6 +572,10 @@ function onMessage(ws, data) {
     return;
   }
   if (type === "ping") return send(ws, { type: "pong" });
+  if (type === "browse") {
+    addBrowser(ws);
+    return;
+  }
 
   if (!room || !player) return error(ws, "Join a lobby first");
   if (type === "start") {
@@ -557,12 +597,15 @@ function onMessage(ws, data) {
 
 setInterval(() => {
   const now = Date.now();
+  let dropped = false;
   for (const [code, room] of rooms) {
     if (now - room.createdAt > ROOM_TTL_MS) {
       clearRoomTimers(room);
       rooms.delete(code);
+      dropped = true;
     }
   }
+  if (dropped) notifyLobbies();
 }, 60 * 1000);
 
 const server = http.createServer((req, res) => {
@@ -573,7 +616,13 @@ const server = http.createServer((req, res) => {
     res.end();
     return;
   }
-  if (req.url === "/health" || req.url === "/") {
+  const path = String(req.url || "/").split("?")[0];
+  if (path === "/lobbies") {
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ lobbies: publicLobbies() }));
+    return;
+  }
+  if (path === "/health" || path === "/") {
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
     res.end(
       JSON.stringify({
