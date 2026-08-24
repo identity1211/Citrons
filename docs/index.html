@@ -707,6 +707,7 @@ function VisualFrame({ children }: { children: ReactNode }) {
         background: "#145230",
       }}
     >
+      <div id="clerk-captcha" />
       {children}
     </div>
   );
@@ -1574,20 +1575,17 @@ function AvatarBubble({
   return <div style={style}>{inner}</div>;
 }
 
-// Publishable key is public. Bake it as window.CLERK_PK in docs/index.html.
+// Publishable key is public. Prefer the baked key so a leftover localStorage value cannot hide it.
 const DEFAULT_CLERK_PK = "pk_test_YXB0LXR1cnRsZS00MTg3LmNsZXJrLmFjY291bnRzLmRldiQ";
 
+function isClerkPk(value: unknown): value is string {
+  return typeof value === "string" && /^pk_(test|live)_/.test(value) && value.length > 20;
+}
+
 function clerkPublishableKey(): string {
-  if (typeof window === "undefined") return DEFAULT_CLERK_PK;
-  const w = window as unknown as { CLERK_PK?: string };
-  const q = new URLSearchParams(window.location.search).get("clerk");
-  if (q && q.startsWith("pk_")) return q;
-  if (typeof w.CLERK_PK === "string" && w.CLERK_PK.startsWith("pk_")) return w.CLERK_PK;
-  try {
-    const saved = localStorage.getItem("citrons-clerk-pk");
-    if (saved && saved.startsWith("pk_")) return saved;
-  } catch {
-    /* ignore */
+  if (typeof window !== "undefined") {
+    const w = window as unknown as { CLERK_PK?: string };
+    if (isClerkPk(w.CLERK_PK)) return w.CLERK_PK;
   }
   return DEFAULT_CLERK_PK;
 }
@@ -1604,7 +1602,65 @@ function clerkFrontendHost(pk: string): string {
 function appUrl(): string {
   if (typeof window === "undefined") return "";
   const u = new URL(window.location.href);
-  return `${u.origin}${u.pathname}`;
+  let path = u.pathname || "/";
+  const last = path.split("/").pop() || "";
+  if (!path.endsWith("/") && !last.includes(".")) path += "/";
+  return `${u.origin}${path}`;
+}
+
+function isClerkCallbackUrl(href: string): boolean {
+  return /__clerk|rotating_token_nonce|clerk_status|created_session/.test(href);
+}
+
+async function activateClerkSession(clerk: any, fromCallback = false): Promise<void> {
+  const tryActive = async (sessionId: unknown) => {
+    if (clerk.user) return;
+    const id = typeof sessionId === "string" && sessionId ? sessionId : "";
+    if (!id || typeof clerk.setActive !== "function") return;
+    try {
+      await clerk.setActive({ session: id });
+    } catch {
+      /* session may already be active or expired */
+    }
+  };
+
+  const signIn = clerk.client?.signIn;
+  const signUp = clerk.client?.signUp;
+  await tryActive(signIn?.createdSessionId);
+  await tryActive(signUp?.createdSessionId);
+  await tryActive(clerk.session?.id);
+  await tryActive(clerk.client?.lastActiveSessionId);
+  const sessions = clerk.client?.sessions;
+  if (Array.isArray(sessions) && sessions[0]?.id) await tryActive(sessions[0].id);
+  if (clerk.user) return;
+
+  const transferable =
+    signIn?.firstFactorVerification?.status === "transferable" ||
+    signIn?.verifications?.externalAccount?.status === "transferable";
+  if (transferable && signUp && typeof signUp.create === "function") {
+    try {
+      await signUp.create({ transfer: true });
+      await tryActive(signUp.createdSessionId);
+    } catch {
+      /* captcha or missing fields */
+    }
+  }
+  if (clerk.user) return;
+
+  if (!fromCallback || typeof clerk.handleRedirectCallback !== "function") return;
+  try {
+    await clerk.handleRedirectCallback({
+      afterSignInUrl: appUrl(),
+      afterSignUpUrl: appUrl(),
+      continueSignUpUrl: appUrl(),
+      signInFallbackRedirectUrl: appUrl(),
+      signUpFallbackRedirectUrl: appUrl(),
+    });
+  } catch {
+    /* load() may already consume the callback */
+  }
+  await tryActive(clerk.client?.signIn?.createdSessionId);
+  await tryActive(clerk.client?.signUp?.createdSessionId);
 }
 
 function loadScriptOnce(src: string, attrs?: Record<string, string>): Promise<void> {
@@ -1644,11 +1700,16 @@ async function ensureClerk(): Promise<any> {
       throw err;
     }
     const w = window as any;
+    const callbackHref = window.location.href;
     if (w.Clerk && typeof w.Clerk.load === "function" && typeof w.Clerk !== "function") {
       if (!w.Clerk.loaded) {
         await w.Clerk.load({
           ui: w.__internal_ClerkUICtor ? { ClerkUI: w.__internal_ClerkUICtor } : undefined,
         });
+      }
+      const fromCallback = isClerkCallbackUrl(callbackHref);
+      if (fromCallback || !w.Clerk.user) {
+        await activateClerkSession(w.Clerk, fromCallback);
       }
       return w.Clerk;
     }
@@ -1671,17 +1732,15 @@ async function ensureClerk(): Promise<any> {
       ui: w.__internal_ClerkUICtor ? { ClerkUI: w.__internal_ClerkUICtor } : undefined,
     });
     w.Clerk = clerk;
-    const href = window.location.href;
-    if (typeof clerk.handleRedirectCallback === "function" && /__clerk|rotating_token_nonce|clerk_status/.test(href)) {
+    const fromCallback = isClerkCallbackUrl(callbackHref);
+    if (fromCallback || !clerk.user) {
+      await activateClerkSession(clerk, fromCallback);
+    }
+    if (clerk.user && isClerkCallbackUrl(window.location.href)) {
       try {
-        await clerk.handleRedirectCallback({
-          afterSignInUrl: appUrl(),
-          afterSignUpUrl: appUrl(),
-          signInFallbackRedirectUrl: appUrl(),
-          signUpFallbackRedirectUrl: appUrl(),
-        });
+        window.history.replaceState({}, "", appUrl());
       } catch {
-        /* load() may already consume the callback */
+        /* ignore */
       }
     }
     return clerk;
@@ -1704,7 +1763,7 @@ function clerkNickname(user: any): string {
 function clerkErrorText(err: any): string {
   if (!err) return "Ошибка Clerk";
   if (err.message === "NO_PK") {
-    return "Нет ключа Clerk. Вставь Publishable Key из dashboard.clerk.com → API keys.";
+    return "Не удалось войти. Обнови страницу и попробуй ещё раз.";
   }
   const clerkMsg = err.errors?.[0]?.longMessage || err.errors?.[0]?.message;
   return String(clerkMsg || err.message || err);
@@ -1765,8 +1824,8 @@ function useClerkAuth() {
       try {
         const clerk = await ensureClerk();
         if (cancelled) return;
-        const sync = () => {
-          const u = clerk.user || null;
+        const sync = (payload?: { user?: any }) => {
+          const u = payload?.user !== undefined ? payload.user : clerk.user || null;
           setUser(u);
           setLoaded(true);
           setError("");
@@ -1780,6 +1839,11 @@ function useClerkAuth() {
         };
         sync();
         if (typeof clerk.addListener === "function") unsub = clerk.addListener(sync);
+        if (!clerk.user) {
+          window.setTimeout(() => {
+            if (!cancelled) sync();
+          }, 400);
+        }
       } catch (e) {
         if (cancelled) return;
         setLoaded(true);
@@ -1823,7 +1887,6 @@ function ProfileButton() {
   const { loaded, user, error } = useClerkAuth();
   const [open, setOpen] = useState(false);
   const [nick, setNick] = useState("");
-  const [pkDraft, setPkDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -1891,8 +1954,7 @@ function ProfileButton() {
             padding: 16,
           }}
         >
-          <div id="clerk-captcha" />
-          <div
+          <div>
             onClick={(e) => e.stopPropagation()}
             style={PROFILE_PANEL}
           >
@@ -2021,38 +2083,6 @@ function ProfileButton() {
                 >
                   {busy ? "Открываем Google…" : "Войти через Google"}
                 </button>
-                {!clerkPublishableKey() && (
-                  <div style={{ marginTop: 14, textAlign: "left" }}>
-                    <div style={{ fontSize: 11, color: "rgba(255,255,255,0.55)", marginBottom: 6, lineHeight: 1.35 }}>
-                      Один раз: Publishable Key из Clerk → API keys (`pk_test_…` или `pk_live_…`).
-                    </div>
-                    <input
-                      value={pkDraft}
-                      onChange={(e) => setPkDraft(e.target.value.trim())}
-                      placeholder="pk_test_…"
-                      style={{ ...LOBBY_INPUT, maxWidth: "100%", fontSize: 12 }}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (!pkDraft.startsWith("pk_")) {
-                          setMsg("Ключ должен начинаться с pk_");
-                          return;
-                        }
-                        try {
-                          localStorage.setItem("citrons-clerk-pk", pkDraft);
-                        } catch {
-                          /* ignore */
-                        }
-                        clerkPromise = null;
-                        window.location.reload();
-                      }}
-                      style={{ ...PROFILE_GHOST, marginTop: 8 }}
-                    >
-                      Сохранить ключ
-                    </button>
-                  </div>
-                )}
               </>
             )}
             {(msg || (!user && error)) && (
