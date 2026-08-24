@@ -1,0 +1,15 @@
+{
+  "name": "citrons",
+  "private": true,
+  "description": "Citrons multiplayer server for Railway",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node server/index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  }
+}

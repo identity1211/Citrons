@@ -93,6 +93,7 @@ my $html = <<"HTML";
   </style>
 </head>
 <body>
+  <script>window.CITRONS_WS = window.CITRONS_WS || "";</script>
   <div id="root"><p style="color:#f5f0e6;text-align:center;padding:48px 16px;letter-spacing:0.04em">Загрузка Citrons…</p></div>
   <script src="$react" crossorigin></script>
   <script src="$reactdom" crossorigin></script>

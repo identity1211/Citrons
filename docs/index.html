@@ -32,6 +32,7 @@
   </style>
 </head>
 <body>
+  <script>window.CITRONS_WS = window.CITRONS_WS || "";</script>
   <div id="root"><p style="color:#f5f0e6;text-align:center;padding:48px 16px;letter-spacing:0.04em">Загрузка Citrons…</p></div>
   <script src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js" crossorigin></script>
   <script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin></script>
@@ -122,6 +123,7 @@ interface PlayerState {
   faceUp: (string | null)[];
   hand: string[];
   ready: boolean;
+  connected?: boolean;
 }
 
 type Phase = "lobby" | "rules" | "dealing" | "swap" | "playing" | "finished";
@@ -1535,12 +1537,14 @@ function SeatLabel({
   ready,
   isTurn,
   place,
+  offline,
 }: {
   name: string;
   isHuman: boolean;
   ready?: boolean;
   isTurn?: boolean;
   place?: number | null;
+  offline?: boolean;
 }) {
   const theme = useHostTheme();
   return (
@@ -1560,10 +1564,10 @@ function SeatLabel({
           fontSize: 11,
           fontWeight: 600,
           color: isTurn ? "#222" : isHuman ? theme.text.primary : "#fff",
-          opacity: place ? 0.75 : 1,
+          opacity: place || offline ? 0.55 : 1,
         }}
       >
-        {name}
+        {offline ? `${name} · нет сети` : name}
       </div>
       {ready && (
         <div
@@ -1891,7 +1895,15 @@ function LobbyBack({ onClick }: { onClick: () => void }) {
   );
 }
 
-function Lobby({ onStart, onRules }: { onStart: (count: number) => void; onRules: () => void }) {
+function Lobby({
+  onStart,
+  onRules,
+  onOnline,
+}: {
+  onStart: (count: number) => void;
+  onRules: () => void;
+  onOnline: () => void;
+}) {
   const [view, setView] = useState<LobbyView>("main");
   const [selected, setSelected] = useState(4);
   const [popKey, setPopKey] = useState(0);
@@ -2034,7 +2046,7 @@ function Lobby({ onStart, onRules }: { onStart: (count: number) => void; onRules
               <button
                 type="button"
                 className="lobby-play-btn"
-                onClick={() => setView("multi")}
+                onClick={onOnline}
                 style={LOBBY_GOLD_BTN}
               >
                 Мультиплеер
@@ -2469,6 +2481,7 @@ function Table({
           ready={isSwap ? players[pIdx].ready : undefined}
           isTurn={isPlaying && currentPlayer === pIdx && phase === "playing"}
           place={finishOrder.includes(pIdx) ? finishOrder.indexOf(pIdx) + 1 : null}
+          offline={players[pIdx].connected === false}
         />
         <div
           style={{
@@ -2920,9 +2933,625 @@ function Table({
   );
 }
 
+const NAME_KEY = "citrons-name";
+const WS_KEY = "citrons-ws";
+const SESSION_KEY = "citrons-mp-session";
+
+type OnlineView = {
+  code: string;
+  you: number;
+  youId: string;
+  host: boolean;
+  phase: "waiting" | "dealing" | "swap" | "playing" | "finished";
+  players: PlayerState[];
+  deckCount: number;
+  discard: string[];
+  currentPlayer: number;
+  finishOrder: number[];
+  swapSeconds: number;
+  burnCount: number;
+  statusMsg: string;
+  canStart: boolean;
+  lobby: { id: string; name: string; ready: boolean; connected: boolean; host: boolean }[];
+};
+
+function normalizeWsUrl(raw: string): string {
+  let u = String(raw || "").trim();
+  if (!u) return u;
+  if (u.startsWith("https://")) u = `wss://${u.slice(8)}`;
+  else if (u.startsWith("http://")) u = `ws://${u.slice(7)}`;
+  else if (!u.startsWith("ws://") && !u.startsWith("wss://")) {
+    const proto = typeof location !== "undefined" && location.protocol === "https:" ? "wss://" : "ws://";
+    u = proto + u.replace(/^\/\//, "");
+  }
+  return u.replace(/\/$/, "");
+}
+
+function defaultWsUrl(): string {
+  if (typeof window === "undefined") return "ws://127.0.0.1:8787";
+  const q = new URLSearchParams(window.location.search).get("ws");
+  if (q) return normalizeWsUrl(q);
+  try {
+    const saved = localStorage.getItem(WS_KEY);
+    if (saved) return saved;
+  } catch {
+    /* ignore */
+  }
+  const builtin = (window as unknown as { CITRONS_WS?: string }).CITRONS_WS;
+  if (builtin) return normalizeWsUrl(builtin);
+  const host = window.location.hostname;
+  if (host === "localhost" || host === "127.0.0.1") return `ws://${host}:8787`;
+  return "wss://citrons-production.up.railway.app";
+}
+
+function readSavedName(): string {
+  try {
+    return localStorage.getItem(NAME_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+const LOBBY_INPUT: CSSProperties = {
+  width: "100%",
+  maxWidth: 300,
+  height: 44,
+  borderRadius: 10,
+  border: "1.5px solid rgba(255,255,255,0.28)",
+  background: "rgba(0,0,0,0.28)",
+  color: "#f5f0e6",
+  fontSize: 16,
+  textAlign: "center",
+  outline: "none",
+  boxSizing: "border-box",
+};
+
+function fullDealProgress(n: number) {
+  return {
+    faceDown: Array.from({ length: n }, () => 3),
+    faceUp: Array.from({ length: n }, () => 3),
+    hand: Array.from({ length: n }, () => 3),
+  };
+}
+
+function OnlineGame({ onLeave }: { onLeave: () => void }) {
+  const [screen, setScreen] = useState<"pick" | "create" | "join" | "waiting" | "table">("pick");
+  const [name, setName] = useState(readSavedName);
+  const [code, setCode] = useState("");
+  const [wsUrl, setWsUrl] = useState(defaultWsUrl);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [view, setView] = useState<OnlineView | null>(null);
+  const [revealCard, setRevealCard] = useState<string | null>(null);
+  const [selection, setSelection] = useState<Selection>(null);
+  const [swapTick, setSwapTick] = useState(0);
+  const [playSelected, setPlaySelected] = useState<CombinedPlay>(emptyPlay);
+  const [pickupAwaitTable, setPickupAwaitTable] = useState(false);
+  const [dealing, setDealing] = useState(false);
+  const [dealProgress, setDealProgress] = useState(fullDealProgress(2));
+  const [lastStep, setLastStep] = useState<DealStep | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const wsRef = useRef<WebSocket | null>(null);
+  const pingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const dealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const revealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sessionRef = useRef<{ code: string; token: string; name: string } | null>(null);
+  const viewRef = useRef<OnlineView | null>(null);
+  viewRef.current = view;
+
+  function persistName(n: string) {
+    setName(n);
+    try {
+      localStorage.setItem(NAME_KEY, n);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function persistWs(u: string) {
+    const next = normalizeWsUrl(u);
+    setWsUrl(next);
+    try {
+      localStorage.setItem(WS_KEY, next);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function send(msg: Record<string, unknown>) {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg));
+  }
+
+  function stopPing() {
+    if (pingRef.current) clearInterval(pingRef.current);
+    pingRef.current = null;
+  }
+
+  function closeSocket() {
+    stopPing();
+    const ws = wsRef.current;
+    wsRef.current = null;
+    if (!ws) return;
+    ws.onopen = null;
+    ws.onclose = null;
+    ws.onerror = null;
+    ws.onmessage = null;
+    try {
+      ws.close();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function handleMessage(raw: string) {
+    let msg: { type?: string; message?: string; view?: OnlineView; code?: string; token?: string; card?: string };
+    try {
+      msg = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    if (msg.type === "error") {
+      setBusy(false);
+      setError(msg.message || "Ошибка сервера");
+      return;
+    }
+    if (msg.type === "joined") {
+      setBusy(false);
+      setError("");
+      if (msg.code && msg.token) {
+        const sess = { code: msg.code, token: msg.token, name: name.trim() || "Игрок" };
+        sessionRef.current = sess;
+        try {
+          sessionStorage.setItem(SESSION_KEY, JSON.stringify(sess));
+        } catch {
+          /* ignore */
+        }
+      }
+      return;
+    }
+    if (msg.type === "state" && msg.view) {
+      setBusy(false);
+      setError("");
+      setView(msg.view);
+      if (msg.view.phase === "waiting") setScreen("waiting");
+      else setScreen("table");
+      return;
+    }
+    if (msg.type === "reveal" && msg.card) {
+      setRevealCard(msg.card);
+      if (revealTimerRef.current) clearTimeout(revealTimerRef.current);
+      revealTimerRef.current = setTimeout(() => setRevealCard(null), 900);
+      return;
+    }
+    if (msg.type === "left") {
+      setView(null);
+      setScreen("pick");
+    }
+  }
+
+  function connect(then: (ws: WebSocket) => void) {
+    setBusy(true);
+    setError("");
+    closeSocket();
+    persistWs(wsUrl);
+    persistName(name);
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(normalizeWsUrl(wsUrl));
+    } catch {
+      setBusy(false);
+      setError("Не удалось открыть соединение");
+      return;
+    }
+    wsRef.current = ws;
+    ws.onopen = () => {
+      pingRef.current = setInterval(() => send({ type: "ping" }), 25000);
+      then(ws);
+    };
+    ws.onmessage = (ev) => handleMessage(String(ev.data));
+    ws.onerror = () => {
+      setBusy(false);
+      setError("Нет связи с сервером. Проверь адрес Railway.");
+    };
+    ws.onclose = () => {
+      stopPing();
+      if (wsRef.current === ws) wsRef.current = null;
+      const sess = sessionRef.current;
+      if (sess) {
+        window.setTimeout(() => {
+          if (wsRef.current) return;
+          connect((next) =>
+            next.send(JSON.stringify({ type: "rejoin", code: sess.code, name: sess.name, token: sess.token }))
+          );
+        }, 800);
+      }
+    };
+  }
+
+  function createLobby() {
+    connect((ws) => ws.send(JSON.stringify({ type: "create", name: name.trim() || "Игрок" })));
+  }
+
+  function joinLobby() {
+    const c = code.trim().toUpperCase();
+    if (c.length < 4) {
+      setError("Введи код лобби");
+      return;
+    }
+    connect((ws) => ws.send(JSON.stringify({ type: "join", code: c, name: name.trim() || "Игрок" })));
+  }
+
+  function leaveOnline() {
+    send({ type: "leave" });
+    sessionRef.current = null;
+    try {
+      sessionStorage.removeItem(SESSION_KEY);
+    } catch {
+      /* ignore */
+    }
+    closeSocket();
+    if (dealTimerRef.current) clearTimeout(dealTimerRef.current);
+    onLeave();
+  }
+
+  useEffect(() => {
+    if (!view || view.phase !== "dealing") {
+      if (dealTimerRef.current) clearTimeout(dealTimerRef.current);
+      setDealing(false);
+      setLastStep(null);
+      if (view) setDealProgress(fullDealProgress(view.players.length));
+      return;
+    }
+    const n = view.players.length;
+    setDealProgress({
+      faceDown: Array.from({ length: n }, () => 0),
+      faceUp: Array.from({ length: n }, () => 0),
+      hand: Array.from({ length: n }, () => 0),
+    });
+    setDealing(true);
+    const steps = buildDealSequence(n);
+    let i = 0;
+    function runStep() {
+      const step = steps[i];
+      if (!step || step.type === "done") {
+        setDealing(false);
+        setLastStep(null);
+        return;
+      }
+      setLastStep(step);
+      setDealProgress((prev) => {
+        const next = {
+          faceDown: [...prev.faceDown],
+          faceUp: [...prev.faceUp],
+          hand: [...prev.hand],
+        };
+        if (step.type === "faceDown") next.faceDown[step.player]++;
+        else if (step.type === "faceUp") next.faceUp[step.player]++;
+        else if (step.type === "hand") next.hand[step.player]++;
+        return next;
+      });
+      i++;
+      dealTimerRef.current = setTimeout(runStep, DEAL_STEP_MS);
+    }
+    dealTimerRef.current = setTimeout(runStep, 500);
+    return () => {
+      if (dealTimerRef.current) clearTimeout(dealTimerRef.current);
+    };
+  }, [view?.phase, view?.players.length]);
+
+  useEffect(
+    () => () => {
+      closeSocket();
+      if (dealTimerRef.current) clearTimeout(dealTimerRef.current);
+      if (revealTimerRef.current) clearTimeout(revealTimerRef.current);
+    },
+    []
+  );
+
+  const players = view?.players ?? [];
+  const drawDeck = Array.from({ length: view?.deckCount ?? 0 }, () => "A♠");
+  const tablePhase: Phase =
+    !view || view.phase === "waiting"
+      ? "lobby"
+      : view.phase === "dealing"
+        ? "dealing"
+        : view.phase === "swap"
+          ? "swap"
+          : view.phase === "finished"
+            ? "finished"
+            : "playing";
+
+  function onSelectHand(index: number) {
+    if (!view) return;
+    if (view.phase === "swap") {
+      if (view.players[0]?.ready) return;
+      const sel = selection;
+      if (sel?.zone === "faceUp") {
+        send({ type: "swap", hand: index, faceUp: sel.index });
+        setSwapTick((t) => t + 1);
+        setSelection(null);
+      } else if (sel?.zone === "hand" && sel.index === index) setSelection(null);
+      else setSelection({ zone: "hand", index });
+      return;
+    }
+    if (view.phase !== "playing" || view.currentPlayer !== 0) return;
+    const pl = view.players[0];
+    if (activePlayZone(pl, view.deckCount) !== "hand") return;
+    const rank = getRank(pl.hand[index]);
+    setPlaySelected((prev) => {
+      const curRank = playSelectionRank(pl, prev);
+      if (prev.hand.includes(index)) return { hand: prev.hand.filter((i) => i !== index), faceUp: [] };
+      if (!curRank || curRank !== rank) return { hand: [index], faceUp: [] };
+      return { hand: [...prev.hand, index], faceUp: prev.faceUp };
+    });
+  }
+
+  function onSelectFaceUp(index: number) {
+    if (!view) return;
+    if (view.phase === "swap") {
+      if (view.players[0]?.ready) return;
+      const sel = selection;
+      if (sel?.zone === "hand") {
+        send({ type: "swap", hand: sel.index, faceUp: index });
+        setSwapTick((t) => t + 1);
+        setSelection(null);
+      } else if (sel?.zone === "faceUp" && sel.index === index) setSelection(null);
+      else setSelection({ zone: "faceUp", index });
+      return;
+    }
+    if (view.phase !== "playing" || view.currentPlayer !== 0) return;
+    if (pickupAwaitTable) {
+      send({ type: "pickup", tableTake: { zone: "faceUp", index } });
+      setPickupAwaitTable(false);
+      return;
+    }
+    const pl = view.players[0];
+    const zone = activePlayZone(pl, view.deckCount);
+    if (zone !== "faceUp" && zone !== "hand") return;
+    const card = pl.faceUp[index];
+    if (!card) return;
+    const rank = getRank(card);
+    if (zone === "hand") {
+      if (!mayAttachFaceUp(pl, view.deckCount)) return;
+      if (getRank(pl.hand[0]) !== rank) return;
+    }
+    setPlaySelected((prev) => {
+      if (prev.faceUp.includes(index)) return { ...prev, faceUp: prev.faceUp.filter((i) => i !== index) };
+      if (zone === "hand") return { hand: pl.hand.map((_, i) => i), faceUp: [...prev.faceUp, index] };
+      const curRank = playSelectionRank(pl, prev);
+      if (!curRank || curRank !== rank) return { hand: [], faceUp: [index] };
+      return { hand: [], faceUp: [...prev.faceUp, index] };
+    });
+  }
+
+  function onSelectFaceDown(index: number) {
+    if (!view || view.phase !== "playing" || view.currentPlayer !== 0) return;
+    if (pickupAwaitTable) {
+      send({ type: "pickup", tableTake: { zone: "faceDown", index } });
+      setPickupAwaitTable(false);
+      return;
+    }
+    if (activePlayZone(view.players[0], view.deckCount) !== "faceDown") return;
+    send({ type: "play", play: { faceDown: index } });
+  }
+
+  function onPlay() {
+    if (!view || view.phase !== "playing" || view.currentPlayer !== 0) return;
+    if (selectionCount(playSelected) === 0) return;
+    send({ type: "play", play: { hand: playSelected.hand, faceUp: playSelected.faceUp } });
+    setPlaySelected(emptyPlay());
+  }
+
+  function onPickUp() {
+    if (!view || view.phase !== "playing" || view.currentPlayer !== 0) return;
+    if (view.discard.length === 0) return;
+    if (canTakeTableWithPickup(view.players[0])) {
+      setPickupAwaitTable(true);
+      setPlaySelected(emptyPlay());
+      return;
+    }
+    send({ type: "pickup", tableTake: null });
+  }
+
+  const formShell = (children: ReactNode) => (
+    <FeltShell
+      center
+      style={{ padding: "max(8px, env(safe-area-inset-top)) 16px max(28px, calc(env(safe-area-inset-bottom) + 10px))" }}
+    >
+      <LobbyBack onClick={leaveOnline} />
+      <div
+        style={{
+          width: "100%",
+          maxWidth: 440,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: 12,
+          padding: "48px 8px 8px",
+          textAlign: "center",
+        }}
+      >
+        {children}
+        {error ? <div style={{ color: "#f5b7b1", fontSize: 13, maxWidth: 300, lineHeight: 1.4 }}>{error}</div> : null}
+      </div>
+    </FeltShell>
+  );
+
+  if (screen === "pick") {
+    return formShell(
+      <>
+        <div style={{ fontSize: 22, fontWeight: 700, color: "#f5f0e6", fontFamily: 'Georgia, "Times New Roman", serif' }}>
+          Мультиплеер
+        </div>
+        <button type="button" className="lobby-play-btn" style={LOBBY_GOLD_BTN} onClick={() => setScreen("create")}>
+          Создать лобби
+        </button>
+        <button type="button" className="lobby-play-btn" style={LOBBY_GOLD_BTN} onClick={() => setScreen("join")}>
+          Присоединиться к лобби
+        </button>
+      </>
+    );
+  }
+
+  if (screen === "create" || screen === "join") {
+    return formShell(
+      <>
+        <div style={{ fontSize: 22, fontWeight: 700, color: "#f5f0e6", fontFamily: 'Georgia, "Times New Roman", serif' }}>
+          {screen === "create" ? "Новое лобби" : "Вход в лобби"}
+        </div>
+        <input
+          value={name}
+          onChange={(e) => persistName(e.target.value)}
+          placeholder="Твоё имя"
+          maxLength={18}
+          style={LOBBY_INPUT}
+        />
+        {screen === "join" && (
+          <input
+            value={code}
+            onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8))}
+            placeholder="Код"
+            maxLength={8}
+            autoCapitalize="characters"
+            style={{ ...LOBBY_INPUT, letterSpacing: 4, fontWeight: 700 }}
+          />
+        )}
+        <input
+          value={wsUrl}
+          onChange={(e) => setWsUrl(e.target.value)}
+          placeholder="wss://….up.railway.app"
+          style={{ ...LOBBY_INPUT, fontSize: 12 }}
+        />
+        <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", maxWidth: 300, lineHeight: 1.35 }}>
+          Адрес сервера Railway. Settings → Networking → Generate Domain.
+        </div>
+        <button
+          type="button"
+          className="lobby-play-btn"
+          style={LOBBY_GOLD_BTN}
+          disabled={busy}
+          onClick={screen === "create" ? createLobby : joinLobby}
+        >
+          {busy ? "Подключение…" : screen === "create" ? "Создать" : "Войти"}
+        </button>
+      </>
+    );
+  }
+
+  if (screen === "waiting" && view) {
+    return formShell(
+      <>
+        <div style={{ fontSize: 22, fontWeight: 700, color: "#f5f0e6", fontFamily: 'Georgia, "Times New Roman", serif' }}>
+          Код лобби
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            void navigator.clipboard?.writeText(view.code);
+            setCopied(true);
+            window.setTimeout(() => setCopied(false), 1200);
+          }}
+          style={{
+            ...LOBBY_GOLD_BTN,
+            height: 64,
+            fontSize: 32,
+            letterSpacing: 8,
+            fontFamily: "ui-monospace, Menlo, monospace",
+          }}
+        >
+          {view.code}
+        </button>
+        <div style={{ fontSize: 12, color: "rgba(255,255,255,0.55)" }}>
+          {copied ? "Скопировано" : "Нажми код, чтобы скопировать"}
+        </div>
+        <div style={{ width: "100%", maxWidth: 300, display: "flex", flexDirection: "column", gap: 6 }}>
+          {view.lobby.map((p) => (
+            <div
+              key={p.id}
+              style={{
+                padding: "8px 12px",
+                borderRadius: 8,
+                background: "rgba(0,0,0,0.28)",
+                color: "#f5f0e6",
+                display: "flex",
+                justifyContent: "space-between",
+                fontSize: 14,
+              }}
+            >
+              <span>
+                {p.name}
+                {p.host ? " · хост" : ""}
+              </span>
+              <span style={{ opacity: 0.65 }}>{p.connected ? "в сети" : "нет сети"}</span>
+            </div>
+          ))}
+        </div>
+        {view.host ? (
+          <button
+            type="button"
+            className="lobby-play-btn"
+            style={LOBBY_GOLD_BTN}
+            disabled={!view.canStart}
+            onClick={() => send({ type: "start" })}
+          >
+            {view.canStart ? "Начать игру" : "Ждём ещё игрока"}
+          </button>
+        ) : (
+          <div style={{ color: "rgba(255,255,255,0.7)", fontSize: 14 }}>Ждём, пока хост начнёт игру</div>
+        )}
+      </>
+    );
+  }
+
+  if (screen === "table" && view) {
+    return (
+      <Table
+        players={players}
+        drawDeck={drawDeck}
+        discard={view.discard}
+        phase={tablePhase}
+        dealing={dealing && view.phase === "dealing"}
+        dealProgress={view.phase === "dealing" ? dealProgress : fullDealProgress(players.length)}
+        lastStep={lastStep}
+        swapSeconds={view.swapSeconds}
+        selection={selection}
+        swapTick={swapTick}
+        currentPlayer={view.currentPlayer}
+        playSelected={playSelected}
+        statusMsg={view.statusMsg}
+        finishOrder={view.finishOrder}
+        flyAnim={null}
+        burnCount={view.burnCount}
+        burnAnim={null}
+        pickupAnim={null}
+        drawAnim={null}
+        revealCard={revealCard}
+        pickupAwaitTable={pickupAwaitTable}
+        onSelectHand={onSelectHand}
+        onSelectFaceUp={onSelectFaceUp}
+        onSelectFaceDown={onSelectFaceDown}
+        onReady={() => send({ type: "ready" })}
+        onPlay={onPlay}
+        onPickUp={onPickUp}
+        onPickUpOnly={() => {
+          send({ type: "pickup", tableTake: null });
+          setPickupAwaitTable(false);
+        }}
+        onCancelPickupAwait={() => setPickupAwaitTable(false)}
+        onReset={leaveOnline}
+      />
+    );
+  }
+
+  return formShell(<div style={{ color: "#f5f0e6" }}>Подключение…</div>);
+}
+
 // ─── Root ────────────────────────────────────────────────────────────────────
 
 function CardGame() {
+  const [online, setOnline] = useState(false);
   const [phase, setPhase] = useState<Phase>("lobby");
   const [players, setPlayers] = useState<PlayerState[]>([]);
   const [drawDeck, setDrawDeck] = useState<string[]>([]);
@@ -3928,10 +4557,18 @@ function CardGame() {
 
   useEffect(() => () => clearTimers(), []);
 
+  if (online) {
+    return (
+      <VisualFrame>
+        <OnlineGame onLeave={() => setOnline(false)} />
+      </VisualFrame>
+    );
+  }
+
   if (phase === "lobby") {
     return (
       <VisualFrame>
-        <Lobby onStart={startGame} onRules={() => setPhase("rules")} />
+        <Lobby onStart={startGame} onRules={() => setPhase("rules")} onOnline={() => setOnline(true)} />
       </VisualFrame>
     );
   }
