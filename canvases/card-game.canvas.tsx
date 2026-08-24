@@ -520,15 +520,13 @@ function cardBox(w: number, h: number) {
 }
 
 function useViewport() {
-  const [vp, setVp] = useState({ w: 1024, h: 700, x: 0, y: 0 });
+  const [vp, setVp] = useState({ w: 1024, h: 700 });
   useEffect(() => {
     const fit = () => {
       const vv = window.visualViewport;
       setVp({
         w: Math.max(1, Math.round(vv?.width ?? window.innerWidth)),
         h: Math.max(1, Math.round(vv?.height ?? window.innerHeight)),
-        x: Math.round(vv?.offsetLeft ?? 0),
-        y: Math.round(vv?.offsetTop ?? 0),
       });
     };
     fit();
@@ -624,16 +622,16 @@ function VisualFrame({ children }: { children: ReactNode }) {
   return (
     <div
       style={{
-        position: "fixed",
-        left: vp.x,
-        top: vp.y,
+        position: "absolute",
+        left: 0,
+        top: 0,
         width: vp.w,
         height: vp.h,
         overflow: "hidden",
         background: "#145230",
       }}
     >
-      <div id="clerk-captcha" style={{ position: "fixed", left: 0, bottom: 0, zIndex: 50 }} />
+      <div id="clerk-captcha" style={{ position: "absolute", left: 0, bottom: 0, zIndex: 50 }} />
       {children}
     </div>
   );
@@ -1912,10 +1910,11 @@ function ProfileButton() {
     <>
       <div
         style={{
-          position: "fixed",
+          position: "absolute",
           top: "max(4px, env(safe-area-inset-top))",
           right: "max(6px, env(safe-area-inset-right))",
           zIndex: 20,
+          pointerEvents: "auto",
         }}
       >
         {user ? (
@@ -1943,9 +1942,10 @@ function ProfileButton() {
         <div
           onClick={() => setOpen(false)}
           style={{
-            position: "fixed",
+            position: "absolute",
             inset: 0,
             zIndex: 80,
+            pointerEvents: "auto",
             background: "rgba(0,0,0,0.48)",
             display: "flex",
             alignItems: "center",
@@ -2223,10 +2223,12 @@ const LOBBY_FAN: { card: string; rot: number; x: number; y: number; delay: numbe
 
 function FeltShell({
   children,
+  overlay,
   center,
   style,
 }: {
   children: ReactNode;
+  overlay?: ReactNode;
   center?: boolean;
   style?: CSSProperties;
 }) {
@@ -2237,31 +2239,45 @@ function FeltShell({
         height: "100%",
         boxSizing: "border-box",
         position: "relative",
-        overflowX: "hidden",
-        overflowY: "auto",
+        overflow: "hidden",
         display: "flex",
         flexDirection: "column",
-        alignItems: "center",
-        justifyContent: center ? "center" : "flex-start",
         background: FELT_BG,
         backgroundImage: `${FELT_TEXTURE}, ${FELT_BG}`,
         boxShadow: `inset 0 0 0 12px ${WOOD_EDGE}, inset 0 0 0 14px #5d4037`,
         ["--felt" as string]: "#1a6b3c",
         ["--wood" as string]: WOOD_EDGE,
-        ...style,
       }}
     >
       <div className="lobby-felt-glow" />
-      <div id="clerk-captcha" style={{ position: "fixed", left: 0, bottom: 0, zIndex: 50 }} />
+      <div id="clerk-captcha" style={{ position: "absolute", left: 0, bottom: 0, zIndex: 50 }} />
+      {overlay ? (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            zIndex: 8,
+            pointerEvents: "none",
+          }}
+        >
+          {overlay}
+        </div>
+      ) : null}
       <div
         style={{
           position: "relative",
           zIndex: 1,
           width: "100%",
+          flex: 1,
+          minHeight: 0,
+          overflowX: "hidden",
+          overflowY: "auto",
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
-          ...(center ? { justifyContent: "center", flex: 1 } : {}),
+          justifyContent: center ? "center" : "flex-start",
+          boxSizing: "border-box",
+          ...style,
         }}
       >
         {children}
@@ -2452,7 +2468,8 @@ const LOBBY_CORNER_BTN: CSSProperties = {
   top: "max(4px, env(safe-area-inset-top))",
   left: "max(6px, env(safe-area-inset-left))",
   zIndex: 8,
-  padding: "5px 10px",
+  padding: "8px 12px",
+  minHeight: 36,
   borderRadius: 6,
   border: "1px solid rgba(255,255,255,0.28)",
   background: "rgba(0,0,0,0.35)",
@@ -2461,6 +2478,7 @@ const LOBBY_CORNER_BTN: CSSProperties = {
   fontSize: 12,
   fontWeight: 700,
   touchAction: "manipulation",
+  pointerEvents: "auto",
 };
 
 function LobbyBack({ onClick }: { onClick: () => void }) {
@@ -2498,58 +2516,63 @@ function Lobby({
   return (
     <FeltShell
       center
-      style={{ padding: "max(8px, env(safe-area-inset-top)) 16px max(28px, calc(env(safe-area-inset-bottom) + 10px))" }}
-    >
-      <ProfileButton />
-      {view === "main" && (
+      overlay={
         <>
-          <button
-            type="button"
-            onClick={() => void toggleFullscreen()}
-            style={{
-              ...LOBBY_CORNER_BTN,
-              background: fsOn ? "rgba(241,196,15,0.9)" : "rgba(0,0,0,0.35)",
-              color: fsOn ? "#1a2e1a" : "#f5f0e6",
-            }}
-          >
-            {fsOn ? "Window" : "Fullscreen"}
-          </button>
+          <ProfileButton />
+          {view === "main" && (
+            <>
+              <button
+                type="button"
+                onClick={() => void toggleFullscreen()}
+                style={{
+                  ...LOBBY_CORNER_BTN,
+                  background: fsOn ? "rgba(241,196,15,0.9)" : "rgba(0,0,0,0.35)",
+                  color: fsOn ? "#1a2e1a" : "#f5f0e6",
+                }}
+              >
+                {fsOn ? "Window" : "Fullscreen"}
+              </button>
+              <div
+                className="lobby-fs-hint"
+                style={{
+                  position: "absolute",
+                  top: "max(40px, calc(env(safe-area-inset-top) + 36px))",
+                  left: "max(6px, env(safe-area-inset-left))",
+                  zIndex: 8,
+                  maxWidth: 148,
+                  fontSize: 11,
+                  lineHeight: 1.35,
+                  color: "rgba(255,255,255,0.55)",
+                  textAlign: "left",
+                  pointerEvents: "none",
+                }}
+              >
+                Hides the browser chrome. On iPhone: Share → Add to Home Screen.
+              </div>
+            </>
+          )}
+          {view !== "main" && <LobbyBack onClick={() => setView("main")} />}
           <div
-            className="lobby-fs-hint"
+            className="lobby-edition"
             style={{
               position: "absolute",
-              top: "max(32px, calc(env(safe-area-inset-top) + 28px))",
-              left: "max(6px, env(safe-area-inset-left))",
-              zIndex: 8,
-              maxWidth: 148,
+              right: "max(16px, env(safe-area-inset-right))",
+              bottom: "max(12px, env(safe-area-inset-bottom))",
+              zIndex: 2,
               fontSize: 11,
-              lineHeight: 1.35,
-              color: "rgba(255,255,255,0.55)",
-              textAlign: "left",
+              fontWeight: 500,
+              letterSpacing: 0.5,
+              color: "rgba(255,255,255,0.26)",
+              pointerEvents: "none",
+              whiteSpace: "nowrap",
             }}
           >
-            Hides the browser chrome. On iPhone: Share → Add to Home Screen.
+            TwoCircles Edition
           </div>
         </>
-      )}
-      {view !== "main" && <LobbyBack onClick={() => setView("main")} />}
-      <div
-        className="lobby-edition"
-        style={{
-          position: "fixed",
-          right: "max(16px, env(safe-area-inset-right))",
-          bottom: "max(12px, env(safe-area-inset-bottom))",
-          zIndex: 2,
-          fontSize: 11,
-          fontWeight: 500,
-          letterSpacing: 0.5,
-          color: "rgba(255,255,255,0.26)",
-          pointerEvents: "none",
-          whiteSpace: "nowrap",
-        }}
-      >
-        TwoCircles Edition
-      </div>
+      }
+      style={{ padding: "max(8px, env(safe-area-inset-top)) 16px max(28px, calc(env(safe-area-inset-bottom) + 10px))" }}
+    >
       <div
         style={{
           width: "100%",
@@ -3115,45 +3138,50 @@ function Table({
         padding: 0,
       }}
     >
-      <button
-        onClick={onReset}
+      <div
         style={{
           position: "absolute",
           top: "max(4px, env(safe-area-inset-top))",
           left: "max(6px, env(safe-area-inset-left))",
           zIndex: 8,
-          padding: "5px 10px",
-          borderRadius: 6,
-          border: `1px solid ${theme.stroke.secondary}`,
-          background: "rgba(0,0,0,0.35)",
-          color: theme.text.primary,
-          cursor: "pointer",
-          fontSize: 12,
-          touchAction: "manipulation",
+          display: "flex",
+          gap: 6,
         }}
       >
-        ← Lobby
-      </button>
-      <button
-        onClick={() => void toggleFullscreen()}
-        style={{
-          position: "absolute",
-          top: "max(4px, env(safe-area-inset-top))",
-          left: "max(88px, calc(env(safe-area-inset-left) + 82px))",
-          zIndex: 8,
-          padding: "5px 10px",
-          borderRadius: 6,
-          border: `1px solid ${theme.stroke.secondary}`,
-          background: fsOn ? "rgba(241,196,15,0.9)" : "rgba(0,0,0,0.35)",
-          color: fsOn ? "#1a2e1a" : theme.text.primary,
-          cursor: "pointer",
-          fontSize: 12,
-          fontWeight: 700,
-          touchAction: "manipulation",
-        }}
-      >
-        {fsOn ? "Window" : "Fullscreen"}
-      </button>
+        <button
+          onClick={onReset}
+          style={{
+            padding: "8px 12px",
+            minHeight: 36,
+            borderRadius: 6,
+            border: `1px solid ${theme.stroke.secondary}`,
+            background: "rgba(0,0,0,0.35)",
+            color: theme.text.primary,
+            cursor: "pointer",
+            fontSize: 12,
+            touchAction: "manipulation",
+          }}
+        >
+          ← Lobby
+        </button>
+        <button
+          onClick={() => void toggleFullscreen()}
+          style={{
+            padding: "8px 12px",
+            minHeight: 36,
+            borderRadius: 6,
+            border: `1px solid ${theme.stroke.secondary}`,
+            background: fsOn ? "rgba(241,196,15,0.9)" : "rgba(0,0,0,0.35)",
+            color: fsOn ? "#1a2e1a" : theme.text.primary,
+            cursor: "pointer",
+            fontSize: 12,
+            fontWeight: 700,
+            touchAction: "manipulation",
+          }}
+        >
+          {fsOn ? "Window" : "Fullscreen"}
+        </button>
+      </div>
       {fsNote ? (
         <div
           style={{
@@ -4446,10 +4474,14 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   const formShell = (children: ReactNode) => (
     <FeltShell
       center
+      overlay={
+        <>
+          <LobbyBack onClick={exitToMenu} />
+          <ProfileButton />
+        </>
+      }
       style={{ padding: "max(8px, env(safe-area-inset-top)) 16px max(28px, calc(env(safe-area-inset-bottom) + 10px))" }}
     >
-      <LobbyBack onClick={exitToMenu} />
-      <ProfileButton />
       <div
         style={{
           width: "100%",
