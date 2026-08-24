@@ -32,7 +32,7 @@
   </style>
 </head>
 <body>
-  <script>window.CITRONS_WS = window.CITRONS_WS || "wss://web-production-b9cc89.up.railway.app"; window.CLERK_PK = window.CLERK_PK || "";</script>
+  <script>window.CITRONS_WS = window.CITRONS_WS || "wss://web-production-b9cc89.up.railway.app"; window.CLERK_PK = window.CLERK_PK || "pk_test_YXB0LXR1cnRsZS00MTg3LmNsZXJrLmFjY291bnRzLmRldiQ";</script>
   <div id="root"><p style="color:#f5f0e6;text-align:center;padding:48px 16px;letter-spacing:0.04em">Загрузка Citrons…</p></div>
   <script src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js" crossorigin></script>
   <script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin></script>
@@ -1575,7 +1575,7 @@ function AvatarBubble({
 }
 
 // Publishable key is public. Bake it as window.CLERK_PK in docs/index.html.
-const DEFAULT_CLERK_PK = "";
+const DEFAULT_CLERK_PK = "pk_test_YXB0LXR1cnRsZS00MTg3LmNsZXJrLmFjY291bnRzLmRldiQ";
 
 function clerkPublishableKey(): string {
   if (typeof window === "undefined") return DEFAULT_CLERK_PK;

@@ -1499,7 +1499,7 @@ function AvatarBubble({
 }
 
 // Publishable key is public. Bake it as window.CLERK_PK in docs/index.html.
-const DEFAULT_CLERK_PK = "";
+const DEFAULT_CLERK_PK = "pk_test_YXB0LXR1cnRsZS00MTg3LmNsZXJrLmFjY291bnRzLmRldiQ";
 
 function clerkPublishableKey(): string {
   if (typeof window === "undefined") return DEFAULT_CLERK_PK;

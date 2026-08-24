@@ -2,7 +2,7 @@
 
 const crypto = require("crypto");
 
-const DEFAULT_CLERK_PK = process.env.CLERK_PUBLISHABLE_KEY || "";
+const DEFAULT_CLERK_PK = process.env.CLERK_PUBLISHABLE_KEY || "pk_test_YXB0LXR1cnRsZS00MTg3LmNsZXJrLmFjY291bnRzLmRldiQ";
 
 function frontendApiFromPk(pk) {
   try {
