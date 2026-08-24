@@ -355,10 +355,10 @@ function aiChoosePlay(
 
 // ─── CSS keyframes ───────────────────────────────────────────────────────────
 
-const STYLE_ID = "card-game-keyframes-v10";
+const STYLE_ID = "card-game-keyframes-v11";
 function ensureKeyframes() {
   if (typeof document === "undefined") return;
-  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7", "card-game-keyframes-v8", "card-game-keyframes-v9"]) {
+  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7", "card-game-keyframes-v8", "card-game-keyframes-v9", "card-game-keyframes-v10"]) {
     document.getElementById(id)?.remove();
   }
   if (document.getElementById(STYLE_ID)) return;
@@ -390,8 +390,9 @@ function ensureKeyframes() {
       50% { transform: scale(1.06); }
     }
     @keyframes cardFlyToDiscard {
-      0% { opacity: 0.95; transform: translate(var(--fx), var(--fy)) scale(0.88) rotate(var(--fr)); }
-      100% { opacity: 1; transform: translate(0, 0) scale(1) rotate(0deg); }
+      0% { opacity: 1; transform: translate(var(--fx), var(--fy)) scale(0.9) rotate(var(--fr)); }
+      55% { opacity: 1; transform: translate(var(--mx), var(--my)) scale(1.06) rotate(var(--mr)); }
+      100% { opacity: 1; transform: translate(var(--tx), var(--ty)) scale(1) rotate(0deg); }
     }
     @keyframes cardFlyToBurn {
       0% { opacity: 1; transform: translate(0, 0) scale(1) rotate(0deg); }
@@ -442,7 +443,7 @@ function ensureKeyframes() {
     }
     .felt-chip:active:not(:disabled) { transform: translateY(1px); filter: brightness(0.92); }
     html:fullscreen, html:-webkit-full-screen { background: #145230; width: 100%; height: 100%; }
-    .card-fly { animation: cardFlyToDiscard 0.48s cubic-bezier(0.22, 1, 0.36, 1) both; pointer-events: none; }
+    .card-fly { animation: cardFlyToDiscard 0.58s cubic-bezier(0.22, 1, 0.36, 1) both; pointer-events: none; }
     .card-fly-burn { animation: cardFlyToBurn 0.55s cubic-bezier(0.33, 1, 0.68, 1) both; pointer-events: none; }
     .card-fly-pickup { animation: cardFlyToPlayer 0.55s cubic-bezier(0.33, 1, 0.68, 1) both; pointer-events: none; }
     .card-fly-draw { animation: cardFlyFromDeck 0.62s cubic-bezier(0.22, 1, 0.36, 1) both; pointer-events: none; transform-style: preserve-3d; }
@@ -997,7 +998,7 @@ function DeckPile({ count }: { count: number }) {
   );
 }
 
-const FLY_MS = 520;
+const FLY_MS = 640;
 const BURN_MS = 600;
 const PICKUP_MS = 600;
 const REVEAL_MS = 900;
@@ -1204,10 +1205,57 @@ function DiscardPile({ cards }: { cards: string[] }) {
   );
 }
 
+function measureFlyPath(overlay: HTMLElement, fromPlayer: number) {
+  const box = overlay.getBoundingClientRect();
+  const cx = box.left + box.width / 2;
+  const cy = box.top + box.height / 2;
+  const fromEl =
+    document.querySelector(`[data-hand-fan="${fromPlayer}"]`) ||
+    document.querySelector(`[data-player-hand="${fromPlayer}"]`);
+  const toEl = document.querySelector("[data-discard-pile]");
+  const fromR = fromEl?.getBoundingClientRect();
+  const toR = toEl?.getBoundingClientRect();
+  const fallback = flyOrigin(fromPlayer, 5);
+  const fx = fromR ? fromR.left + fromR.width / 2 - cx : fromPlayer === 0 ? box.height * 0.02 : 0;
+  const fy = fromR
+    ? fromR.top + fromR.height / 2 - cy
+    : fromPlayer === 0
+      ? box.height * 0.36
+      : -box.height * 0.28;
+  const tx = toR ? toR.left + toR.width / 2 - cx : 0;
+  const ty = toR ? toR.top + toR.height / 2 - cy : 0;
+  return {
+    fx: `${Math.round(fx)}px`,
+    fy: `${Math.round(fy)}px`,
+    tx: `${Math.round(tx)}px`,
+    ty: `${Math.round(ty)}px`,
+    mx: `${Math.round((fx + tx) / 2)}px`,
+    my: `${Math.round((fy + ty) / 2 - 56)}px`,
+    rot: fallback.rot,
+  };
+}
+
 function FlyOverlay({ anim }: { anim: FlyAnim }) {
-  const origin = flyOrigin(anim.fromPlayer, anim.playerCount);
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const [path, setPath] = useState<{
+    fx: string;
+    fy: string;
+    tx: string;
+    ty: string;
+    mx: string;
+    my: string;
+    rot: number;
+  } | null>(null);
+
+  useLayoutEffect(() => {
+    const overlay = overlayRef.current;
+    if (!overlay) return;
+    setPath(measureFlyPath(overlay, anim.fromPlayer));
+  }, [anim.id, anim.fromPlayer]);
+
   return (
     <div
+      ref={overlayRef}
       style={{
         position: "absolute",
         inset: 0,
@@ -1218,24 +1266,34 @@ function FlyOverlay({ anim }: { anim: FlyAnim }) {
         justifyContent: "center",
       }}
     >
-      {anim.cards.map((card, i) => (
-        <div
-          key={`${anim.id}-${i}-${card}`}
-          className="card-fly"
-          style={{
-            ["--fx" as string]: `calc(${origin.x} + ${(i - (anim.cards.length - 1) / 2) * 14}px)`,
-            ["--fy" as string]: origin.y,
-            ["--fr" as string]: `${origin.rot + i * 4}deg`,
-            position: "absolute",
-            width: 56,
-            height: 78,
-            animationDelay: `${i * 55}ms`,
-            zIndex: 50 + i,
-          }}
-        >
-          <PlayingCard card={card} faceVisible style={{ top: 0, left: 0 }} />
-        </div>
-      ))}
+      {path &&
+        anim.cards.map((card, i) => {
+          const spread = (i - (anim.cards.length - 1) / 2) * 14;
+          const rot = path.rot + i * 4;
+          return (
+            <div
+              key={`${anim.id}-${i}-${card}`}
+              className="card-fly"
+              style={{
+                ["--fx" as string]: `calc(${path.fx} + ${spread}px)`,
+                ["--fy" as string]: path.fy,
+                ["--tx" as string]: `calc(${path.tx} + ${spread * 0.25}px)`,
+                ["--ty" as string]: path.ty,
+                ["--mx" as string]: `calc(${path.mx} + ${spread * 0.6}px)`,
+                ["--my" as string]: path.my,
+                ["--fr" as string]: `${rot}deg`,
+                ["--mr" as string]: `${Math.round(rot * 0.35)}deg`,
+                position: "absolute",
+                width: 56,
+                height: 78,
+                animationDelay: `${i * 55}ms`,
+                zIndex: 50 + i,
+              }}
+            >
+              <PlayingCard card={card} faceVisible style={{ top: 0, left: 0 }} />
+            </div>
+          );
+        })}
     </div>
   );
 }
@@ -3252,6 +3310,7 @@ function Table({
             <DeckPile count={drawDeck.length} />
           </div>
           <div
+            data-discard-pile=""
             style={{
               position: "absolute",
               left: "50%",
@@ -3454,6 +3513,33 @@ type OnlineView = {
   lobby: { id: string; name: string; avatar?: string; ready: boolean; connected: boolean; host: boolean }[];
 };
 
+type NetAnim = {
+  kind?: string;
+  fromPlayer: number;
+  played?: string[];
+  willBurn?: boolean;
+  burnCards?: string[];
+  drawn?: string[];
+  pickup?: { cards: string[]; toPlayer: number } | null;
+};
+
+function omitCardsFromHand(hand: string[], cards: string[]): string[] {
+  const next = [...hand];
+  for (const c of cards) {
+    const i = next.indexOf(c);
+    if (i >= 0) next.splice(i, 1);
+    else if (next.length) next.pop();
+  }
+  return next;
+}
+
+function withPlayerHand(view: OnlineView, playerIndex: number, hand: string[]): OnlineView {
+  return {
+    ...view,
+    players: view.players.map((p, i) => (i === playerIndex ? { ...p, hand } : p)),
+  };
+}
+
 function normalizeWsUrl(raw: string): string {
   let u = String(raw || "").trim();
   if (!u) return u;
@@ -3533,6 +3619,10 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   const [dealProgress, setDealProgress] = useState(fullDealProgress(2));
   const [lastStep, setLastStep] = useState<DealStep | null>(null);
   const [copied, setCopied] = useState(false);
+  const [flyAnim, setFlyAnim] = useState<FlyAnim | null>(null);
+  const [burnAnim, setBurnAnim] = useState<BurnAnim | null>(null);
+  const [pickupAnim, setPickupAnim] = useState<PickupAnim | null>(null);
+  const [drawAnim, setDrawAnim] = useState<DrawAnim | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const pingRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -3540,6 +3630,8 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   const revealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sessionRef = useRef<{ code: string; token: string; name: string } | null>(null);
   const viewRef = useRef<OnlineView | null>(null);
+  const animIdRef = useRef(0);
+  const animTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   viewRef.current = view;
 
   function persistName(n: string) {
@@ -3566,6 +3658,101 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg));
   }
 
+  function clearTableAnims() {
+    animTimersRef.current.forEach(clearTimeout);
+    animTimersRef.current = [];
+    setFlyAnim(null);
+    setBurnAnim(null);
+    setPickupAnim(null);
+    setDrawAnim(null);
+  }
+
+  function afterAnim(ms: number, fn: () => void) {
+    const t = setTimeout(fn, ms);
+    animTimersRef.current.push(t);
+  }
+
+  function runNetAnim(finalView: OnlineView, anim: NetAnim) {
+    clearTableAnims();
+    const n = finalView.players.length;
+    const played = anim.played || [];
+    const burnCards = anim.burnCards || [];
+    const drawn = anim.drawn || [];
+    const pickup = anim.pickup || null;
+    const finish = () => {
+      setView(finalView);
+      setFlyAnim(null);
+      setBurnAnim(null);
+      setPickupAnim(null);
+      setDrawAnim(null);
+    };
+
+    const startDraw = () => {
+      if (drawn.length === 0) {
+        finish();
+        return;
+      }
+      animIdRef.current += 1;
+      setDrawAnim({
+        id: animIdRef.current,
+        cards: drawn,
+        toPlayer: anim.fromPlayer,
+        playerCount: n,
+      });
+      afterAnim(DRAW_MS + Math.max(0, drawn.length - 1) * DRAW_STAGGER_MS, finish);
+    };
+
+    const afterPlayOrBurn = () => {
+      if (anim.willBurn && burnCards.length > 0) {
+        animIdRef.current += 1;
+        setBurnAnim({ id: animIdRef.current, cards: burnCards });
+        afterAnim(BURN_MS + Math.min(burnCards.length, 6) * 35, () => {
+          setBurnAnim(null);
+          startDraw();
+        });
+        return;
+      }
+      startDraw();
+    };
+
+    const startPickup = () => {
+      if (!pickup) {
+        afterPlayOrBurn();
+        return;
+      }
+      animIdRef.current += 1;
+      setPickupAnim({
+        id: animIdRef.current,
+        cards: pickup.cards,
+        toPlayer: pickup.toPlayer,
+        playerCount: n,
+        hideFaces: pickup.toPlayer !== 0,
+      });
+      afterAnim(PICKUP_MS + Math.min(pickup.cards.length, 8) * 40, finish);
+    };
+
+    if (pickup && played.length === 0) {
+      startPickup();
+      return;
+    }
+    if (played.length > 0) {
+      animIdRef.current += 1;
+      setFlyAnim({
+        id: animIdRef.current,
+        cards: played,
+        fromPlayer: anim.fromPlayer,
+        playerCount: n,
+      });
+      afterAnim(FLY_MS + played.length * 55, () => {
+        setFlyAnim(null);
+        if (pickup) startPickup();
+        else afterPlayOrBurn();
+      });
+      return;
+    }
+    startDraw();
+  }
+
   function stopPing() {
     if (pingRef.current) clearInterval(pingRef.current);
     pingRef.current = null;
@@ -3588,7 +3775,15 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   }
 
   function handleMessage(raw: string) {
-    let msg: { type?: string; message?: string; view?: OnlineView; code?: string; token?: string; card?: string };
+    let msg: {
+      type?: string;
+      message?: string;
+      view?: OnlineView;
+      code?: string;
+      token?: string;
+      card?: string;
+      anim?: NetAnim;
+    };
     try {
       msg = JSON.parse(raw);
     } catch {
@@ -3616,9 +3811,43 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     if (msg.type === "state" && msg.view) {
       setBusy(false);
       setError("");
-      setView(msg.view);
-      if (msg.view.phase === "waiting") setScreen("waiting");
-      else setScreen("table");
+      if (msg.view.phase === "waiting") {
+        clearTableAnims();
+        setView(msg.view);
+        setScreen("waiting");
+        return;
+      }
+      setScreen("table");
+      const anim = msg.anim;
+      const hasAnim =
+        msg.view.phase === "playing" &&
+        anim &&
+        ((anim.played && anim.played.length > 0) ||
+          anim.pickup ||
+          (anim.drawn && anim.drawn.length > 0) ||
+          anim.willBurn);
+      if (hasAnim && anim) {
+        let display = msg.view;
+        if (anim.drawn && anim.drawn.length > 0) {
+          display = withPlayerHand(
+            display,
+            anim.fromPlayer,
+            omitCardsFromHand(display.players[anim.fromPlayer].hand, anim.drawn)
+          );
+        }
+        if (anim.pickup) {
+          display = withPlayerHand(
+            display,
+            anim.pickup.toPlayer,
+            omitCardsFromHand(display.players[anim.pickup.toPlayer].hand, anim.pickup.cards)
+          );
+        }
+        setView(display);
+        runNetAnim(msg.view, anim);
+      } else {
+        clearTableAnims();
+        setView(msg.view);
+      }
       return;
     }
     if (msg.type === "reveal" && msg.card) {
@@ -3787,6 +4016,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   useEffect(
     () => () => {
       closeSocket();
+      clearTableAnims();
       if (dealTimerRef.current) clearTimeout(dealTimerRef.current);
       if (revealTimerRef.current) clearTimeout(revealTimerRef.current);
     },
@@ -4098,11 +4328,11 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         playSelected={playSelected}
         statusMsg={view.statusMsg}
         finishOrder={view.finishOrder}
-        flyAnim={null}
+        flyAnim={flyAnim}
         burnCount={view.burnCount}
-        burnAnim={null}
-        pickupAnim={null}
-        drawAnim={null}
+        burnAnim={burnAnim}
+        pickupAnim={pickupAnim}
+        drawAnim={drawAnim}
         revealCard={revealCard}
         pickupAwaitTable={pickupAwaitTable}
         onSelectHand={onSelectHand}

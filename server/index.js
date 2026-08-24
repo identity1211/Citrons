@@ -90,12 +90,39 @@ function viewFor(room, playerId) {
   };
 }
 
-function broadcast(room) {
+function broadcast(room, anim) {
   for (const p of room.seats) {
     if (!p.ws) continue;
     const view = viewFor(room, p.id);
-    send(p.ws, { type: "state", view });
+    send(p.ws, { type: "state", view, anim: animFor(room, p.id, anim) });
   }
+}
+
+function animFor(room, playerId, anim) {
+  if (!anim) return undefined;
+  const myIndex = room.seats.findIndex((p) => p.id === playerId);
+  if (myIndex < 0) return undefined;
+  const n = room.seats.length;
+  const rot = (i) => (i - myIndex + n) % n;
+  const fromPlayer = rot(anim.fromPlayer);
+  const pickup = anim.pickup
+    ? {
+        cards:
+          rot(anim.pickup.toPlayer) === 0
+            ? [...anim.pickup.cards]
+            : anim.pickup.cards.map(() => dummyCard()),
+        toPlayer: rot(anim.pickup.toPlayer),
+      }
+    : null;
+  return {
+    kind: anim.kind,
+    fromPlayer,
+    played: [...(anim.played || [])],
+    willBurn: !!anim.willBurn,
+    burnCards: [...(anim.burnCards || [])],
+    drawn: fromPlayer === 0 ? [...(anim.drawn || [])] : (anim.drawn || []).map(() => dummyCard()),
+    pickup,
+  };
 }
 
 function error(ws, message) {
@@ -379,7 +406,7 @@ function afterPlay(room, playerIndex, result) {
   }
   if (result.won) {
     if (resolveStandings(room, playerIndex)) {
-      broadcast(room);
+      broadcast(room, makePlayAnim(playerIndex, result));
       return;
     }
   }
@@ -390,7 +417,19 @@ function afterPlay(room, playerIndex, result) {
     room.currentPlayer = engine.nextAlive(playerIndex, room.seats);
     room.statusMsg = `Ход: ${room.seats[room.currentPlayer].name}`;
   }
-  broadcast(room);
+  broadcast(room, makePlayAnim(playerIndex, result));
+}
+
+function makePlayAnim(playerIndex, result) {
+  return {
+    kind: "play",
+    fromPlayer: playerIndex,
+    played: result.played || [],
+    willBurn: !!result.willBurn,
+    burnCards: result.burnCards || [],
+    pickup: result.pickup,
+    drawn: result.drawn || [],
+  };
 }
 
 function handlePlay(room, player, play) {
@@ -417,7 +456,15 @@ function handlePickup(room, player, tableTake) {
   room.statusMsg = result.message;
   room.currentPlayer = engine.nextAlive(idx, room.seats);
   room.statusMsg = `${result.message}. Ход: ${room.seats[room.currentPlayer].name}`;
-  broadcast(room);
+  broadcast(room, {
+    kind: "pickup",
+    fromPlayer: idx,
+    played: [],
+    willBurn: false,
+    burnCards: [],
+    pickup: { cards: result.pickupCards, toPlayer: idx },
+    drawn: [],
+  });
 }
 
 function handleSwap(room, player, hand, faceUp) {
