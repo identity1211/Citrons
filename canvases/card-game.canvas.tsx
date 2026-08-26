@@ -356,10 +356,10 @@ function aiChoosePlay(
 
 // ─── CSS keyframes ───────────────────────────────────────────────────────────
 
-const STYLE_ID = "card-game-keyframes-v11";
+const STYLE_ID = "card-game-keyframes-v12";
 function ensureKeyframes() {
   if (typeof document === "undefined") return;
-  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7", "card-game-keyframes-v8", "card-game-keyframes-v9", "card-game-keyframes-v10"]) {
+  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7", "card-game-keyframes-v8", "card-game-keyframes-v9", "card-game-keyframes-v10", "card-game-keyframes-v11"]) {
     document.getElementById(id)?.remove();
   }
   if (document.getElementById(STYLE_ID)) return;
@@ -492,6 +492,28 @@ function ensureKeyframes() {
     }
     .lobby-ghost-btn:active {
       transform: translateY(-1px);
+    }
+    @keyframes winnerBannerIn {
+      0% { opacity: 0; transform: scale(0.72) translateY(22px); }
+      55% { opacity: 1; transform: scale(1.06) translateY(-6px); }
+      100% { opacity: 1; transform: scale(1) translateY(0); }
+    }
+    @keyframes winnerBurst {
+      0% { opacity: 0; transform: scale(0.35); }
+      35% { opacity: 0.5; transform: scale(1.05); }
+      100% { opacity: 0; transform: scale(1.85); }
+    }
+    @keyframes winnerConfetti {
+      0% { opacity: 0; transform: translate3d(var(--cx), -18%, 0) rotate(0deg); }
+      10% { opacity: 1; }
+      100% { opacity: 0.12; transform: translate3d(calc(var(--cx) + var(--cdx)), 122%, 0) rotate(var(--crot)); }
+    }
+    .winner-banner { animation: winnerBannerIn 0.55s cubic-bezier(0.22, 1, 0.36, 1) both; }
+    .winner-burst { animation: winnerBurst 0.9s ease-out both; pointer-events: none; }
+    .winner-confetti { animation: winnerConfetti var(--cdur) linear var(--cdelay) both; pointer-events: none; }
+    @media (prefers-reduced-motion: reduce) {
+      .winner-banner { animation: none !important; }
+      .winner-burst, .winner-confetti { animation: none !important; opacity: 0 !important; }
     }
   `;
   document.head.appendChild(style);
@@ -1478,6 +1500,128 @@ function DrawOverlay({ anim }: { anim: DrawAnim }) {
           </div>
         ))}
     </div>
+  );
+}
+
+function WinnerOverlay({
+  name,
+  avatar,
+  you,
+  onDismiss,
+}: {
+  name: string;
+  avatar?: string;
+  you: boolean;
+  onDismiss: () => void;
+}) {
+  const colors = ["#f1c40f", "#fdebd0", "#ffffff", "#2ecc71", "#e67e22", "#f8e6a0"];
+  const bits = Array.from({ length: 24 }, (_, i) => ({
+    left: `${(i * 17 + 9) % 94}%`,
+    delay: `${(i % 8) * 0.07}s`,
+    dur: `${1.65 + (i % 5) * 0.2}s`,
+    dx: `${((i * 13) % 72) - 36}px`,
+    rot: `${200 + (i % 7) * 80}deg`,
+    color: colors[i % colors.length],
+    w: i % 3 === 0 ? 10 : 7,
+    h: i % 4 === 0 ? 16 : 8,
+    round: i % 2 === 0,
+  }));
+  return (
+    <button
+      type="button"
+      onClick={onDismiss}
+      aria-label="Dismiss winner"
+      style={{
+        position: "absolute",
+        inset: 0,
+        zIndex: 90,
+        border: "none",
+        padding: 0,
+        margin: 0,
+        background: "rgba(8, 22, 14, 0.58)",
+        cursor: "pointer",
+        overflow: "hidden",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      {bits.map((b, i) => (
+        <span
+          key={i}
+          className="winner-confetti"
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            width: b.w,
+            height: b.h,
+            borderRadius: b.round ? 99 : 2,
+            background: b.color,
+            boxShadow: "0 0 6px rgba(241,196,15,0.35)",
+            ["--cx" as string]: b.left,
+            ["--cdx" as string]: b.dx,
+            ["--crot" as string]: b.rot,
+            ["--cdur" as string]: b.dur,
+            ["--cdelay" as string]: b.delay,
+          }}
+        />
+      ))}
+      <div
+        className="winner-burst"
+        style={{
+          position: "absolute",
+          width: 220,
+          height: 220,
+          borderRadius: 110,
+          background: "radial-gradient(circle, rgba(241,196,15,0.45) 0%, transparent 70%)",
+        }}
+      />
+      <div
+        className="winner-banner"
+        style={{
+          position: "relative",
+          zIndex: 1,
+          minWidth: 200,
+          maxWidth: "86%",
+          padding: "18px 22px 14px",
+          borderRadius: 16,
+          background: "linear-gradient(180deg, rgba(26,43,26,0.94), rgba(16,32,18,0.96))",
+          border: "1.5px solid rgba(241,196,15,0.75)",
+          boxShadow: "0 16px 40px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.08) inset",
+          color: "#f5f0e6",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: 8,
+        }}
+      >
+        <div
+          style={{
+            fontSize: 11,
+            fontWeight: 800,
+            letterSpacing: 2.4,
+            textTransform: "uppercase",
+            color: "#f1c40f",
+          }}
+        >
+          1st place
+        </div>
+        <AvatarBubble src={avatar} name={name} size={56} />
+        <div
+          style={{
+            fontFamily: 'Georgia, "Times New Roman", serif',
+            fontSize: 28,
+            fontWeight: 700,
+            lineHeight: 1.1,
+            textAlign: "center",
+          }}
+        >
+          {you ? "You win!" : `${name} wins!`}
+        </div>
+        <div style={{ fontSize: 11, color: "rgba(255,255,255,0.55)" }}>Tap to continue</div>
+      </div>
+    </button>
   );
 }
 
@@ -3043,6 +3187,23 @@ function Table({
   const vp = useViewport();
   const fsOn = useFullscreen();
   const [fsNote, setFsNote] = useState("");
+  const [winShow, setWinShow] = useState(false);
+  const winnerIdx = finishOrder.length > 0 ? finishOrder[0] : null;
+  const winner = winnerIdx != null ? players[winnerIdx] : null;
+
+  useEffect(() => {
+    if (winnerIdx == null) {
+      setWinShow(false);
+      return;
+    }
+    const hold = phase === "finished" ? 4200 : 2800;
+    const show = window.setTimeout(() => setWinShow(true), 280);
+    const hide = window.setTimeout(() => setWinShow(false), 280 + hold);
+    return () => {
+      window.clearTimeout(show);
+      window.clearTimeout(hide);
+    };
+  }, [winnerIdx]);
   const short = vp.h < 560;
   const ownerH = short ? Math.round(clamp(vp.h * 0.26, 64, 86)) : 78;
   const ownerW = Math.round(ownerH * 0.72);
@@ -3554,6 +3715,14 @@ function Table({
           pointerEvents: "auto",
         }}
       />
+      {winShow && winner ? (
+        <WinnerOverlay
+          name={winner.name}
+          avatar={winner.avatar}
+          you={winnerIdx === 0}
+          onDismiss={() => setWinShow(false)}
+        />
+      ) : null}
     </div>
   );
 }
