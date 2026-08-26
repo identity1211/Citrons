@@ -687,6 +687,14 @@ wss.on("connection", (ws) => {
   ws.on("error", () => leave(ws));
 });
 
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`Citrons multiplayer on :${PORT}`);
-});
+Promise.resolve(leaderboard.hydrateFromClerk())
+  .catch((err) => console.error("leaderboard hydrate failed", err))
+  .finally(() => {
+    server.listen(PORT, "0.0.0.0", () => {
+      const board = leaderboard.info();
+      console.log(`Citrons multiplayer on :${PORT}`);
+      console.log(
+        `leaderboard file=${board.file} clerk=${board.clerk ? "on" : "off"} players=${board.players}`
+      );
+    });
+  });
