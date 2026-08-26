@@ -430,7 +430,13 @@ const TUTORIAL_STEPS: TutStep[] = [
     special: "2",
   },
   {
-    text: "Pile is a 2. Play your 6 \u2014 after a 6, only 6 or lower (or a 7) can be played. Your 10 is illegal.",
+    text: "Watch Coach play a 4. The 2 reset the pile, so any card was legal.",
+    wait: "coach",
+    coachRank: "4",
+    special: "2",
+  },
+  {
+    text: "Play your 6 \u2014 after a 6, only 6 or lower (or a 7) can be played. Your 10 is illegal.",
     wait: "play",
     hint: "hand",
     rank: "6",
@@ -551,19 +557,20 @@ function buildTutorialDeck(): string[] {
   put(20, "2♣");
   put(21, "4♥");
   put(22, "10♠");
-  put(23, "7♦");
-  put(24, "7♥");
-  put(25, "Q♦");
-  put(26, "A♠");
-  put(27, "Q♣");
-  put(28, "Q♠");
-  put(29, "4♠");
-  put(30, "Q♥");
-  put(31, "8♣");
-  put(32, "5♠");
-  put(33, "8♥");
-  put(34, "J♣");
-  put(35, "9♠");
+  put(23, "3♦");
+  put(24, "7♦");
+  put(25, "7♥");
+  put(26, "Q♦");
+  put(27, "A♠");
+  put(28, "Q♣");
+  put(29, "Q♠");
+  put(30, "4♠");
+  put(31, "Q♥");
+  put(32, "8♣");
+  put(33, "5♠");
+  put(34, "8♥");
+  put(35, "J♣");
+  put(36, "9♠");
   const rest: string[] = [];
   for (const r of RANKS) {
     for (const s of SUITS) {
