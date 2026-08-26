@@ -358,15 +358,26 @@ function aiChoosePlay(
 
 type TutWait = "dealing" | "continue" | "swap" | "ready" | "play" | "coach" | "take" | "free";
 type TutHint = "hand" | "faceUp" | "ready" | "play" | "take" | "none";
+type TutSpecial = "2" | "6" | "7" | "10" | "4";
 
 interface TutStep {
   text: string;
   wait: TutWait;
   hint?: TutHint;
   rank?: string;
+  count?: number;
   faceRank?: string;
   coachRank?: string;
+  special?: TutSpecial;
 }
+
+const SPECIALS_MEMO: { id: TutSpecial; label: string; text: string }[] = [
+  { id: "2", label: "2", text: "Plays on anything. Pile resets to 2." },
+  { id: "6", label: "6", text: "Only 6 or lower, or a 7. No 10s." },
+  { id: "7", label: "7", text: "Transparent — the card under it still counts." },
+  { id: "10", label: "10", text: "Plays on anything except 6. Burns the pile." },
+  { id: "4", label: "4×", text: "Four of a kind in a row also burns." },
+];
 
 const TUTORIAL_STEPS: TutStep[] = [
   {
@@ -416,23 +427,40 @@ const TUTORIAL_STEPS: TutStep[] = [
     wait: "play",
     hint: "hand",
     rank: "2",
+    special: "2",
   },
   {
-    text: "Pile is a 2. Play your 6 \u2014 after a 6, only 6 or lower (or a 7) can be played. No 10s.",
+    text: "Pile is a 2. Play your 6 \u2014 after a 6, only 6 or lower (or a 7) can be played. Your 10 is illegal.",
     wait: "play",
     hint: "hand",
     rank: "6",
+    special: "6",
   },
   {
     text: "Watch Coach play a 7. It is transparent \u2014 the 6 underneath still counts.",
     wait: "coach",
     coachRank: "7",
+    special: "7",
   },
   {
-    text: "The pile still counts as 6, so a 10 cannot burn it. Play your 3.",
+    text: "Your turn to play a 7. The pile still counts as 6, so a 10 still cannot burn it.",
+    wait: "play",
+    hint: "hand",
+    rank: "7",
+    special: "7",
+  },
+  {
+    text: "Watch Coach play another 7. Two 7s in a row still leave the 6 in charge.",
+    wait: "coach",
+    coachRank: "7",
+    special: "7",
+  },
+  {
+    text: "3 is 6 or lower, so it is legal. Play your 3.",
     wait: "play",
     hint: "hand",
     rank: "3",
+    special: "6",
   },
   {
     text: "Watch Coach play a 9.",
@@ -444,12 +472,33 @@ const TUTORIAL_STEPS: TutStep[] = [
     wait: "play",
     hint: "hand",
     rank: "10",
+    special: "10",
   },
   {
-    text: "Pile burned. Four of a kind in a row also burns. Empty pile \u2014 play your 4.",
+    text: "Pile burned. Empty pile \u2014 play your 4.",
     wait: "play",
     hint: "hand",
     rank: "4",
+  },
+  {
+    text: "Watch Coach play a Queen.",
+    wait: "coach",
+    coachRank: "Q",
+    special: "4",
+  },
+  {
+    text: "Select all three Queens, then Play. Four of a kind in a row burns, same as a 10.",
+    wait: "play",
+    hint: "hand",
+    rank: "Q",
+    count: 3,
+    special: "4",
+  },
+  {
+    text: "The pile burned, so you go again. Play your 5.",
+    wait: "play",
+    hint: "hand",
+    rank: "5",
   },
   {
     text: "Watch Coach play an Ace.",
@@ -483,14 +532,14 @@ function buildTutorialDeck(): string[] {
   put(2, "8♦");
   put(4, "J♥");
   put(1, "5♦");
-  put(3, "Q♥");
+  put(3, "6♠");
   put(5, "J♠");
   put(6, "3♠");
   put(8, "9♥");
   put(10, "K♣");
   put(7, "4♣");
   put(9, "9♦");
-  put(11, "Q♠");
+  put(11, "K♠");
   put(12, "4♦");
   put(14, "8♠");
   put(16, "A♥");
@@ -502,12 +551,19 @@ function buildTutorialDeck(): string[] {
   put(20, "2♣");
   put(21, "4♥");
   put(22, "10♠");
-  put(23, "8♥");
-  put(24, "A♠");
-  put(25, "J♣");
-  put(26, "8♣");
-  put(27, "4♠");
-  put(28, "5♠");
+  put(23, "7♦");
+  put(24, "7♥");
+  put(25, "Q♦");
+  put(26, "A♠");
+  put(27, "Q♣");
+  put(28, "Q♠");
+  put(29, "4♠");
+  put(30, "Q♥");
+  put(31, "8♣");
+  put(32, "5♠");
+  put(33, "8♥");
+  put(34, "J♣");
+  put(35, "9♠");
   const rest: string[] = [];
   for (const r of RANKS) {
     for (const s of SUITS) {
@@ -3444,6 +3500,99 @@ function TutorialBar({
   );
 }
 
+function SpecialsMemo({ active, drop }: { active?: TutSpecial | null; drop?: boolean }) {
+  const [open, setOpen] = useState(true);
+  return (
+    <div
+      style={{
+        position: "absolute",
+        top: drop
+          ? "max(132px, calc(env(safe-area-inset-top) + 118px))"
+          : "max(42px, calc(env(safe-area-inset-top) + 30px))",
+        right: FELT_INSET_RIGHT,
+        zIndex: 93,
+        width: open ? 148 : "auto",
+        pointerEvents: "auto",
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          width: open ? "100%" : "auto",
+          padding: open ? "6px 10px 5px" : "7px 10px",
+          borderRadius: open ? "10px 10px 0 0" : 10,
+          border: "1px solid rgba(241,196,15,0.4)",
+          borderBottom: open ? "1px solid rgba(255,255,255,0.12)" : "1px solid rgba(241,196,15,0.4)",
+          background: "rgba(8, 18, 10, 0.88)",
+          color: "#f1c40f",
+          fontSize: 10,
+          fontWeight: 800,
+          letterSpacing: 1.2,
+          textTransform: "uppercase",
+          cursor: "pointer",
+          textAlign: "left",
+        }}
+      >
+        {open ? "Specials ▾" : "Specials"}
+      </button>
+      {open ? (
+        <div
+          style={{
+            padding: "6px 8px 8px",
+            borderRadius: "0 0 10px 10px",
+            background: "rgba(8, 18, 10, 0.88)",
+            border: "1px solid rgba(241,196,15,0.4)",
+            borderTop: "none",
+            display: "flex",
+            flexDirection: "column",
+            gap: 5,
+          }}
+        >
+          {SPECIALS_MEMO.map((row) => {
+            const on = active === row.id;
+            return (
+              <div
+                key={row.id}
+                style={{
+                  padding: "5px 6px",
+                  borderRadius: 7,
+                  background: on ? "rgba(241,196,15,0.18)" : "transparent",
+                  border: on ? "1px solid rgba(241,196,15,0.55)" : "1px solid transparent",
+                }}
+              >
+                <div style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
+                  <span
+                    style={{
+                      minWidth: 22,
+                      fontSize: 13,
+                      fontWeight: 800,
+                      color: on ? "#f1c40f" : "#f5f0e6",
+                      fontFamily: "ui-monospace, monospace",
+                    }}
+                  >
+                    {row.label}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: 10,
+                      lineHeight: 1.35,
+                      color: on ? "#f5f0e6" : "rgba(255,255,255,0.72)",
+                      fontWeight: on ? 700 : 500,
+                    }}
+                  >
+                    {row.text}
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 // ─── Table ───────────────────────────────────────────────────────────────────
 
 function Table({
@@ -3520,6 +3669,7 @@ function Table({
     hint: TutHint;
     rank?: string;
     faceRank?: string;
+    special?: TutSpecial | null;
     onNext: () => void;
     onSkip: () => void;
   } | null;
@@ -4150,6 +4300,9 @@ function Table({
           onNext={tutorial.onNext}
           onSkip={tutorial.onSkip}
         />
+      ) : null}
+      {phase !== "lobby" && phase !== "rules" ? (
+        <SpecialsMemo active={tutorial?.special} drop={!!tutorial} />
       ) : null}
       {winShow && winner ? (
         <WinnerOverlay
@@ -6535,6 +6688,13 @@ export default function CardGame() {
     if (tutLocked()) {
       const step = tutStepNow();
       if (step?.wait !== "play" || rank !== step.rank) return;
+      if (step.count && step.count > 1) {
+        const hand = pl.hand
+          .map((c, i) => (getRank(c) === step.rank ? i : -1))
+          .filter((i) => i >= 0);
+        setPlaySelected({ hand, faceUp: [] });
+        return;
+      }
     }
 
     setPlaySelected((prev) => {
@@ -6681,6 +6841,7 @@ export default function CardGame() {
       if (step?.wait !== "play") return;
       const cards = cardsFromSelection(pl, playSelected);
       if (!cards.length || getRank(cards[0]) !== step.rank) return;
+      if (step.count && cards.length !== step.count) return;
     }
 
     const result = applyPlay(
@@ -6839,7 +7000,8 @@ export default function CardGame() {
               let hint: TutHint = step.hint ?? "none";
               if (step.wait === "play" && step.rank && players[0]) {
                 const selected = cardsFromSelection(players[0], playSelected);
-                if (selected.some((c) => getRank(c) === step.rank)) hint = "play";
+                const n = selected.filter((c) => getRank(c) === step.rank).length;
+                if (step.count ? n >= step.count : n > 0) hint = "play";
               }
               if (step.wait === "swap" && selection?.zone === "hand" && players[0]) {
                 if (getRank(players[0].hand[selection.index]) === step.rank) hint = "faceUp";
@@ -6851,6 +7013,7 @@ export default function CardGame() {
                 hint,
                 rank: step.rank,
                 faceRank: step.faceRank,
+                special: step.special,
                 onNext: advanceTutorial,
                 onSkip: skipTutorial,
               };
