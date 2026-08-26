@@ -7,3 +7,5 @@ dist/
 agent-transcripts/
 mcps/
 canvases/node_modules/
+data/*.json
+data/*.json.tmp

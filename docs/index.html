@@ -2515,7 +2515,7 @@ function RulesScreen({ onBack }: { onBack: () => void }) {
   );
 }
 
-type LobbyView = "main" | "solo" | "multi";
+type LobbyView = "main" | "solo" | "multi" | "board";
 
 const LOBBY_MENU_BTN: CSSProperties = {
   width: "100%",
@@ -2533,6 +2533,13 @@ const LOBBY_GOLD_BTN: CSSProperties = {
   background: "#f1c40f",
   color: "#1a2e1a",
   boxShadow: "0 6px 16px rgba(0,0,0,0.28)",
+};
+
+const LOBBY_GHOST_BTN: CSSProperties = {
+  ...LOBBY_MENU_BTN,
+  border: "1.5px solid rgba(255,255,255,0.35)",
+  background: "transparent",
+  color: "#f5f0e6",
 };
 
 const LOBBY_CORNER_BTN: CSSProperties = {
@@ -2553,10 +2560,10 @@ const LOBBY_CORNER_BTN: CSSProperties = {
   pointerEvents: "auto",
 };
 
-function LobbyBack({ onClick }: { onClick: () => void }) {
+function LobbyBack({ onClick, label }: { onClick: () => void; label?: string }) {
   return (
     <button type="button" onClick={onClick} style={LOBBY_CORNER_BTN}>
-      ← Main menu
+      {label || "← Main menu"}
     </button>
   );
 }
@@ -2684,9 +2691,9 @@ function Lobby({
           </div>
         </div>
 
-        <LobbyCardFan />
+        {view !== "board" && <LobbyCardFan />}
 
-        <div style={{ flex: 1, minHeight: 12, width: "100%" }} />
+        {view !== "board" && <div style={{ flex: 1, minHeight: 12, width: "100%" }} />}
 
         <div
           key={view}
@@ -2698,10 +2705,12 @@ function Lobby({
             flexDirection: "column",
             alignItems: "center",
             gap: 12,
-            flexShrink: 0,
+            flexShrink: view === "board" ? 1 : 0,
+            flex: view === "board" ? 1 : undefined,
+            minHeight: view === "board" ? 0 : undefined,
             position: "relative",
             zIndex: 3,
-            marginTop: "auto",
+            marginTop: view === "board" ? 16 : "auto",
             paddingBottom: 4,
           }}
         >
@@ -2723,6 +2732,30 @@ function Lobby({
               >
                 Multiplayer
               </button>
+              <button
+                type="button"
+                className="lobby-ghost-btn"
+                onClick={() => setView("board")}
+                style={LOBBY_GHOST_BTN}
+              >
+                Leaderboard
+              </button>
+            </>
+          )}
+
+          {view === "board" && (
+            <>
+              <div
+                style={{
+                  fontSize: 22,
+                  fontWeight: 700,
+                  color: "#f5f0e6",
+                  fontFamily: 'Georgia, "Times New Roman", serif',
+                }}
+              >
+                Leaderboard
+              </div>
+              <LeaderboardPanel />
             </>
           )}
 
@@ -3808,6 +3841,182 @@ function OpenLobbyList({
   );
 }
 
+type BoardRow = {
+  rank: number;
+  id: string;
+  name: string;
+  avatar: string;
+  wins: number;
+  games: number;
+};
+
+function medalColor(rank: number): string {
+  if (rank === 1) return "#f1c40f";
+  if (rank === 2) return "#d5d8dc";
+  if (rank === 3) return "#cd7f32";
+  return "rgba(255,255,255,0.45)";
+}
+
+function LeaderboardPanel() {
+  const auth = useClerkAuth();
+  const [rows, setRows] = useState<BoardRow[] | null>(null);
+  const [fail, setFail] = useState("");
+
+  useEffect(() => {
+    let stop = false;
+    void (async () => {
+      try {
+        const res = await fetch(httpUrlFromWs(defaultWsUrl(), "/leaderboard"));
+        if (!res.ok) throw new Error("bad");
+        const data = await res.json();
+        if (stop) return;
+        const players = Array.isArray(data.players) ? data.players : [];
+        setRows(
+          players.map((p: { rank?: number; id?: string; name?: string; avatar?: string; wins?: number; games?: number }, i: number) => ({
+            rank: Number(p.rank) || i + 1,
+            id: String(p.id || ""),
+            name: String(p.name || "Player"),
+            avatar: String(p.avatar || ""),
+            wins: Number(p.wins) || 0,
+            games: Number(p.games) || 0,
+          }))
+        );
+        setFail("");
+      } catch {
+        if (!stop) {
+          setRows([]);
+          setFail("Couldn't load the board");
+        }
+      }
+    })();
+    return () => {
+      stop = true;
+    };
+  }, []);
+
+  const me = auth.user && auth.user.id ? String(auth.user.id) : "";
+
+  return (
+    <div style={{ width: "100%", maxWidth: 340, textAlign: "left" }}>
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 600,
+          letterSpacing: 0.3,
+          color: "rgba(255,255,255,0.55)",
+          marginBottom: 8,
+          textAlign: "center",
+          lineHeight: 1.4,
+        }}
+      >
+        Signed-in multiplayer wins
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: "52vh", overflowY: "auto" }}>
+        {rows === null ? (
+          <div
+            style={{
+              padding: "16px 12px",
+              borderRadius: 10,
+              background: "rgba(0,0,0,0.28)",
+              color: "rgba(255,255,255,0.62)",
+              fontSize: 13,
+              textAlign: "center",
+            }}
+          >
+            Loading…
+          </div>
+        ) : fail ? (
+          <div
+            style={{
+              padding: "16px 12px",
+              borderRadius: 10,
+              background: "rgba(0,0,0,0.28)",
+              color: "#f5b7b1",
+              fontSize: 13,
+              textAlign: "center",
+              lineHeight: 1.4,
+            }}
+          >
+            {fail}
+          </div>
+        ) : rows.length === 0 ? (
+          <div
+            style={{
+              padding: "16px 12px",
+              borderRadius: 10,
+              background: "rgba(0,0,0,0.28)",
+              color: "rgba(255,255,255,0.62)",
+              fontSize: 13,
+              textAlign: "center",
+              lineHeight: 1.4,
+            }}
+          >
+            Win a signed-in multiplayer game to appear here.
+          </div>
+        ) : (
+          rows.map((row) => {
+            const mine = me && row.id === me;
+            return (
+              <div
+                key={row.id || `${row.rank}-${row.name}`}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  padding: "8px 10px",
+                  borderRadius: 10,
+                  background: mine ? "rgba(241,196,15,0.16)" : "rgba(0,0,0,0.32)",
+                  border: mine ? "1px solid rgba(241,196,15,0.55)" : "1px solid rgba(255,255,255,0.12)",
+                }}
+              >
+                <div
+                  style={{
+                    width: 28,
+                    flexShrink: 0,
+                    fontWeight: 800,
+                    fontSize: 14,
+                    textAlign: "center",
+                    color: medalColor(row.rank),
+                  }}
+                >
+                  {row.rank}
+                </div>
+                <AvatarBubble src={row.avatar} name={row.name} size={32} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div
+                    style={{
+                      color: "#f5f0e6",
+                      fontWeight: 700,
+                      fontSize: 14,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {row.name}
+                    {mine ? " (you)" : ""}
+                  </div>
+                  <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 11 }}>
+                    {row.games} {row.games === 1 ? "game" : "games"}
+                  </div>
+                </div>
+                <div style={{ flexShrink: 0, textAlign: "right" }}>
+                  <div style={{ color: "#f1c40f", fontWeight: 800, fontSize: 16, lineHeight: 1 }}>
+                    {row.wins}
+                  </div>
+                  <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 10, fontWeight: 600 }}>
+                    {row.wins === 1 ? "win" : "wins"}
+                  </div>
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
 type NetAnim = {
   kind?: string;
   fromPlayer: number;
@@ -3905,7 +4114,7 @@ function fullDealProgress(n: number) {
 
 function OnlineGame({ onLeave }: { onLeave: () => void }) {
   const auth = useClerkAuth();
-  const [screen, setScreen] = useState<"pick" | "create" | "join" | "waiting" | "table">("pick");
+  const [screen, setScreen] = useState<"pick" | "create" | "join" | "waiting" | "table" | "board">("pick");
   const [name, setName] = useState(readSavedName);
   const [code, setCode] = useState("");
   const [wsUrl, setWsUrl] = useState(defaultWsUrl);
@@ -4701,7 +4910,48 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
             joinByCode(c);
           }}
         />
+        <button
+          type="button"
+          className="lobby-ghost-btn"
+          style={LOBBY_GHOST_BTN}
+          onClick={() => setScreen("board")}
+        >
+          Leaderboard
+        </button>
       </>
+    );
+  }
+
+  if (screen === "board") {
+    return (
+      <FeltShell
+        center
+        overlay={
+          <>
+            <LobbyBack onClick={() => setScreen("pick")} label="← Multiplayer" />
+            <ProfileButton />
+          </>
+        }
+        style={{ padding: "max(8px, env(safe-area-inset-top)) 16px max(28px, calc(env(safe-area-inset-bottom) + 10px))" }}
+      >
+        <div
+          style={{
+            width: "100%",
+            maxWidth: 440,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 12,
+            padding: "48px 8px 8px",
+            textAlign: "center",
+          }}
+        >
+          <div style={{ fontSize: 22, fontWeight: 700, color: "#f5f0e6", fontFamily: 'Georgia, "Times New Roman", serif' }}>
+            Leaderboard
+          </div>
+          <LeaderboardPanel />
+        </div>
+      </FeltShell>
     );
   }
 

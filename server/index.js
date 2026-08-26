@@ -5,6 +5,7 @@ const crypto = require("crypto");
 const { WebSocketServer } = require("ws");
 const engine = require("./engine");
 const clerk = require("./clerk");
+const leaderboard = require("./leaderboard");
 
 const PORT = Number(process.env.PORT) || 8787;
 const SWAP_SECONDS = 20;
@@ -285,6 +286,7 @@ async function createRoom(ws, name, avatar, clerkToken) {
     finishOrder: [],
     swapSeconds: SWAP_SECONDS,
     burnCount: 0,
+    boardSaved: false,
     statusMsg: "",
     createdAt: Date.now(),
     timers: [],
@@ -359,6 +361,7 @@ function startGame(room) {
   room.discard = [];
   room.finishOrder = [];
   room.burnCount = 0;
+  room.boardSaved = false;
   room.currentPlayer = 0;
   room.phase = "dealing";
   room.statusMsg = "Dealing...";
@@ -413,9 +416,21 @@ function resolveStandings(room, finisher) {
     if (left.length === 1 && !room.finishOrder.includes(left[0])) room.finishOrder.push(left[0]);
     room.phase = "finished";
     room.statusMsg = "Game over";
+    saveFinishedGame(room);
     return true;
   }
   return false;
+}
+
+function saveFinishedGame(room) {
+  if (room.boardSaved) return;
+  room.boardSaved = true;
+  try {
+    leaderboard.recordGame(room);
+  } catch (err) {
+    room.boardSaved = false;
+    console.error("leaderboard save failed", err);
+  }
 }
 
 function afterPlay(room, playerIndex, result) {
@@ -616,6 +631,11 @@ const server = http.createServer((req, res) => {
   if (path === "/lobbies") {
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
     res.end(JSON.stringify({ lobbies: publicLobbies() }));
+    return;
+  }
+  if (path === "/leaderboard") {
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ players: leaderboard.top() }));
     return;
   }
   if (path === "/health" || path === "/") {
