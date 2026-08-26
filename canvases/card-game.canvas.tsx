@@ -1710,7 +1710,7 @@ async function ensureClerk(): Promise<any> {
           afterSignInUrl: appUrl(),
           afterSignUpUrl: appUrl(),
           afterSignOutUrl: appUrl(),
-          allowedRedirectOrigins: ["https://identity1211.github.io"],
+          allowedRedirectOrigins: ["https://citrons.lat", "https://www.citrons.lat", "https://identity1211.github.io"],
         });
       }
       const fromCallback = isClerkCallbackUrl(callbackHref);
@@ -1733,7 +1733,7 @@ async function ensureClerk(): Promise<any> {
       afterSignInUrl: appUrl(),
       afterSignUpUrl: appUrl(),
       afterSignOutUrl: appUrl(),
-      allowedRedirectOrigins: ["https://identity1211.github.io"],
+      allowedRedirectOrigins: ["https://citrons.lat", "https://www.citrons.lat", "https://identity1211.github.io"],
     });
     w.Clerk = clerk;
     const fromCallback = isClerkCallbackUrl(callbackHref);
