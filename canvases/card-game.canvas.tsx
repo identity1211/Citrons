@@ -1606,6 +1606,7 @@ function clerkSignUpUrl(): string {
 function appUrl(): string {
   if (typeof window === "undefined") return "";
   const u = new URL(window.location.href);
+  if (u.hostname === "citrons.lat" || u.hostname === "www.citrons.lat") u.protocol = "https:";
   let path = u.pathname || "/";
   const last = path.split("/").pop() || "";
   if (!path.endsWith("/") && !last.includes(".")) path += "/";

@@ -92,6 +92,18 @@ my $html = <<"HTML";
       .lobby-play-btn, .lobby-ghost-btn { height: 42px !important; }
     }
   </style>
+  <script>
+    (function () {
+      var host = location.hostname;
+      if (host === "identity1211.github.io") {
+        location.replace("https://citrons.lat/" + location.search + location.hash);
+        return;
+      }
+      if ((host === "citrons.lat" || host === "www.citrons.lat") && location.protocol === "http:") {
+        location.replace("https://" + host + location.pathname + location.search + location.hash);
+      }
+    })();
+  </script>
 </head>
 <body>
   <script>window.CITRONS_WS = window.CITRONS_WS || "wss://web-production-b9cc89.up.railway.app"; window.CLERK_PK = window.CLERK_PK || "pk_live_Y2xlcmsuY2l0cm9ucy5sYXQk";</script>
