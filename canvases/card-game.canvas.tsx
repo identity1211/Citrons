@@ -1558,7 +1558,7 @@ function AvatarBubble({
 }
 
 // Publishable key is public. Prefer the baked key so a leftover localStorage value cannot hide it.
-const DEFAULT_CLERK_PK = "pk_test_YXB0LXR1cnRsZS00MTg3LmNsZXJrLmFjY291bnRzLmRldiQ";
+const DEFAULT_CLERK_PK = "pk_live_Y2xlcmsuY2l0cm9ucy5sYXQk";
 
 function isClerkPk(value: unknown): value is string {
   return typeof value === "string" && /^pk_(test|live)_/.test(value) && value.length > 20;
@@ -1586,6 +1586,9 @@ function clerkPortalOrigin(pk: string): string {
   if (!host) return "";
   if (host.endsWith(".clerk.accounts.dev")) {
     return `https://${host.replace(".clerk.accounts.dev", ".accounts.dev")}`;
+  }
+  if (host.startsWith("clerk.")) {
+    return `https://${host.replace(/^clerk\./, "accounts.")}`;
   }
   return host.startsWith("http") ? host.replace(/\/$/, "") : `https://${host}`;
 }
