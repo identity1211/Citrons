@@ -345,6 +345,27 @@ function later(room, fn, ms) {
   return t;
 }
 
+function resetRoomToLobby(room) {
+  if (room.phase !== "finished") return;
+  clearRoomTimers(room);
+  for (const p of room.seats) {
+    p.hand = [];
+    p.faceUp = [];
+    p.faceDown = [];
+    p.ready = false;
+  }
+  room.deck = [];
+  room.discard = [];
+  room.finishOrder = [];
+  room.burnCount = 0;
+  room.currentPlayer = 0;
+  room.swapSeconds = SWAP_SECONDS;
+  room.statusMsg = "";
+  room.phase = "waiting";
+  broadcast(room);
+  notifyLobbies();
+}
+
 function startGame(room) {
   if (room.phase !== "waiting") return;
   if (room.seats.length < MIN_PLAYERS) return;
@@ -593,6 +614,9 @@ function onMessage(ws, data) {
     if (player.id !== room.hostId) return error(ws, "Only the host can start");
     if (room.seats.length < MIN_PLAYERS) return error(ws, "Need at least 2 players");
     return startGame(room);
+  }
+  if (type === "lobby") {
+    return resetRoomToLobby(room);
   }
   if (type === "swap") return handleSwap(room, player, msg.hand, msg.faceUp);
   if (type === "ready") return handleReady(room, player);

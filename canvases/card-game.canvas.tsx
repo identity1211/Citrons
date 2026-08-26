@@ -1527,20 +1527,13 @@ function WinnerOverlay({
     round: i % 2 === 0,
   }));
   return (
-    <button
-      type="button"
-      onClick={onDismiss}
-      aria-label="Dismiss winner"
+    <div
       style={{
         position: "absolute",
         inset: 0,
         zIndex: 90,
-        border: "none",
-        padding: 0,
-        margin: 0,
-        background: "rgba(8, 22, 14, 0.58)",
-        cursor: "pointer",
         overflow: "hidden",
+        pointerEvents: "none",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -1577,23 +1570,28 @@ function WinnerOverlay({
           background: "radial-gradient(circle, rgba(241,196,15,0.45) 0%, transparent 70%)",
         }}
       />
-      <div
+      <button
+        type="button"
+        onClick={onDismiss}
+        aria-label="Dismiss winner"
         className="winner-banner"
         style={{
           position: "relative",
           zIndex: 1,
+          pointerEvents: "auto",
           minWidth: 200,
           maxWidth: "86%",
           padding: "18px 22px 14px",
           borderRadius: 16,
-          background: "linear-gradient(180deg, rgba(26,43,26,0.94), rgba(16,32,18,0.96))",
           border: "1.5px solid rgba(241,196,15,0.75)",
+          background: "linear-gradient(180deg, rgba(26,43,26,0.94), rgba(16,32,18,0.96))",
           boxShadow: "0 16px 40px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.08) inset",
           color: "#f5f0e6",
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
           gap: 8,
+          cursor: "pointer",
         }}
       >
         <div
@@ -1620,8 +1618,73 @@ function WinnerOverlay({
           {you ? "You win!" : `${name} wins!`}
         </div>
         <div style={{ fontSize: 11, color: "rgba(255,255,255,0.55)" }}>Tap to continue</div>
+      </button>
+    </div>
+  );
+}
+
+function FinishedLobbyOverlay({ onLobby }: { onLobby: () => void }) {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        inset: 0,
+        zIndex: 90,
+        background: "rgba(8, 22, 14, 0.58)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 20,
+      }}
+    >
+      <div
+        className="winner-banner"
+        style={{
+          position: "relative",
+          zIndex: 1,
+          minWidth: 200,
+          maxWidth: "86%",
+          padding: "18px 22px 16px",
+          borderRadius: 16,
+          background: "linear-gradient(180deg, rgba(26,43,26,0.94), rgba(16,32,18,0.96))",
+          border: "1.5px solid rgba(241,196,15,0.75)",
+          boxShadow: "0 16px 40px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.08) inset",
+          color: "#f5f0e6",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: 10,
+          textAlign: "center",
+        }}
+      >
+        <div
+          style={{
+            fontFamily: 'Georgia, "Times New Roman", serif',
+            fontSize: 26,
+            fontWeight: 700,
+            lineHeight: 1.15,
+          }}
+        >
+          Game over
+        </div>
+        <div style={{ fontSize: 13, color: "rgba(255,255,255,0.62)", lineHeight: 1.4, maxWidth: 240 }}>
+          Same room, same players. Host can start another game.
+        </div>
+        <button
+          type="button"
+          className="lobby-play-btn"
+          onClick={onLobby}
+          style={{
+            ...LOBBY_GOLD_BTN,
+            maxWidth: 220,
+            height: 48,
+            marginTop: 4,
+          }}
+        >
+          Lobby
+        </button>
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -2065,8 +2128,8 @@ function ProfileButton() {
       <div
         style={{
           position: "absolute",
-          top: "max(4px, env(safe-area-inset-top))",
-          right: "max(6px, env(safe-area-inset-right))",
+          top: FELT_INSET_TOP,
+          right: FELT_INSET_RIGHT,
           zIndex: 20,
           pointerEvents: "auto",
         }}
@@ -2474,23 +2537,16 @@ function RuleBlock({ title, children }: { title: string; children: ReactNode }) 
 
 function RulesScreen({ onBack }: { onBack: () => void }) {
   return (
-    <FeltShell style={{ padding: "28px 20px 40px" }}>
+    <FeltShell
+      overlay={
+        <>
+          <WindowButton />
+          <LobbyBack onClick={onBack} />
+        </>
+      }
+      style={{ padding: "max(40px, calc(env(safe-area-inset-top) + 22px)) 20px max(52px, calc(env(safe-area-inset-bottom) + 24px))" }}
+    >
       <div style={{ width: "100%", maxWidth: 560, padding: "0 4px" }}>
-        <button
-          onClick={onBack}
-          style={{
-            padding: "6px 14px",
-            borderRadius: 8,
-            border: "1px solid rgba(255,255,255,0.28)",
-            background: "rgba(0,0,0,0.25)",
-            color: "#f5f0e6",
-            cursor: "pointer",
-            fontSize: 12,
-            marginBottom: 20,
-          }}
-        >
-          ← Back
-        </button>
         <div
           style={{
             fontFamily: 'Georgia, "Times New Roman", serif',
@@ -2599,8 +2655,6 @@ const LOBBY_GHOST_BTN: CSSProperties = {
 
 const LOBBY_CORNER_BTN: CSSProperties = {
   position: "absolute",
-  top: "max(4px, env(safe-area-inset-top))",
-  left: "max(6px, env(safe-area-inset-left))",
   zIndex: 8,
   padding: "8px 12px",
   minHeight: 36,
@@ -2615,9 +2669,57 @@ const LOBBY_CORNER_BTN: CSSProperties = {
   pointerEvents: "auto",
 };
 
+const FELT_INSET_TOP = "max(18px, calc(env(safe-area-inset-top) + 4px))";
+const FELT_INSET_LEFT = "max(18px, calc(env(safe-area-inset-left) + 4px))";
+const FELT_INSET_RIGHT = "max(18px, calc(env(safe-area-inset-right) + 4px))";
+const FELT_INSET_BOTTOM = "max(18px, calc(env(safe-area-inset-bottom) + 4px))";
+
+function WindowButton({ style, onClick }: { style?: CSSProperties; onClick?: () => void }) {
+  const fsOn = useFullscreen();
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        if (onClick) onClick();
+        else void (fsOn ? exitFullscreen() : enterFullscreen());
+      }}
+      style={{
+        position: "absolute",
+        top: FELT_INSET_TOP,
+        left: FELT_INSET_LEFT,
+        zIndex: 8,
+        padding: "2px 0",
+        minHeight: 0,
+        border: "none",
+        background: "transparent",
+        color: fsOn ? "#f1c40f" : "rgba(245,240,230,0.88)",
+        cursor: "pointer",
+        fontSize: 11,
+        fontWeight: 700,
+        letterSpacing: 0.2,
+        touchAction: "manipulation",
+        pointerEvents: "auto",
+        textShadow: "0 1px 3px rgba(0,0,0,0.55)",
+        ...style,
+      }}
+    >
+      {fsOn ? "Window" : "Fullscreen"}
+    </button>
+  );
+}
+
 function LobbyBack({ onClick, label }: { onClick: () => void; label?: string }) {
   return (
-    <button type="button" onClick={onClick} style={LOBBY_CORNER_BTN}>
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        ...LOBBY_CORNER_BTN,
+        top: "auto",
+        left: FELT_INSET_LEFT,
+        bottom: FELT_INSET_BOTTOM,
+      }}
+    >
       {label || "← Main menu"}
     </button>
   );
@@ -2635,16 +2737,10 @@ function Lobby({
   const [view, setView] = useState<LobbyView>("main");
   const [selected, setSelected] = useState(4);
   const [popKey, setPopKey] = useState(0);
-  const fsOn = useFullscreen();
 
   function pickCount(n: number) {
     setSelected(n);
     setPopKey((k) => k + 1);
-  }
-
-  async function toggleFullscreen() {
-    if (fsOn) await exitFullscreen();
-    else await enterFullscreen();
   }
 
   return (
@@ -2653,37 +2749,25 @@ function Lobby({
       overlay={
         <>
           <ProfileButton />
+          <WindowButton />
           {view === "main" && (
-            <>
-              <button
-                type="button"
-                onClick={() => void toggleFullscreen()}
-                style={{
-                  ...LOBBY_CORNER_BTN,
-                  background: fsOn ? "rgba(241,196,15,0.9)" : "rgba(0,0,0,0.35)",
-                  color: fsOn ? "#1a2e1a" : "#f5f0e6",
-                }}
-              >
-                {fsOn ? "Window" : "Fullscreen"}
-              </button>
-              <div
-                className="lobby-fs-hint"
-                style={{
-                  position: "absolute",
-                  top: "max(40px, calc(env(safe-area-inset-top) + 36px))",
-                  left: "max(6px, env(safe-area-inset-left))",
-                  zIndex: 8,
-                  maxWidth: 148,
-                  fontSize: 11,
-                  lineHeight: 1.35,
-                  color: "rgba(255,255,255,0.55)",
-                  textAlign: "left",
-                  pointerEvents: "none",
-                }}
-              >
-                Hides the browser chrome. On iPhone: Share → Add to Home Screen.
-              </div>
-            </>
+            <div
+              className="lobby-fs-hint"
+              style={{
+                position: "absolute",
+                top: "max(36px, calc(env(safe-area-inset-top) + 22px))",
+                left: FELT_INSET_LEFT,
+                zIndex: 8,
+                maxWidth: 148,
+                fontSize: 11,
+                lineHeight: 1.35,
+                color: "rgba(255,255,255,0.55)",
+                textAlign: "left",
+                pointerEvents: "none",
+              }}
+            >
+              Hides the browser chrome. On iPhone: Share → Add to Home Screen.
+            </div>
           )}
           {view !== "main" && <LobbyBack onClick={() => setView("main")} />}
           <div
@@ -2705,7 +2789,7 @@ function Lobby({
           </div>
         </>
       }
-      style={{ padding: "max(8px, env(safe-area-inset-top)) 16px max(28px, calc(env(safe-area-inset-bottom) + 10px))" }}
+      style={{ padding: "max(40px, calc(env(safe-area-inset-top) + 22px)) 16px max(56px, calc(env(safe-area-inset-bottom) + 40px))" }}
     >
       <div
         style={{
@@ -2725,7 +2809,7 @@ function Lobby({
           style={{
             animationDelay: "0.05s",
             flexShrink: 0,
-            paddingTop: 2,
+            paddingTop: 12,
             position: "relative",
             zIndex: 1,
           }}
@@ -3065,6 +3149,8 @@ function Table({
   onPickUpOnly,
   onCancelPickupAwait,
   onReset,
+  onToLobby,
+  resetLabel,
 }: {
   players: PlayerState[];
   drawDeck: string[];
@@ -3096,6 +3182,8 @@ function Table({
   onPickUpOnly: () => void;
   onCancelPickupAwait: () => void;
   onReset: () => void;
+  onToLobby?: () => void;
+  resetLabel?: string;
 }) {
   const theme = useHostTheme();
   const n = players.length;
@@ -3196,7 +3284,7 @@ function Table({
       setWinShow(false);
       return;
     }
-    const hold = phase === "finished" ? 4200 : 2800;
+    const hold = 2200;
     const show = window.setTimeout(() => setWinShow(true), 280);
     const hide = window.setTimeout(() => setWinShow(false), 280 + hold);
     return () => {
@@ -3318,46 +3406,33 @@ function Table({
       <div
         style={{
           position: "absolute",
-          top: "max(4px, env(safe-area-inset-top))",
-          left: "max(6px, env(safe-area-inset-left))",
-          zIndex: 8,
+          top: FELT_INSET_TOP,
+          left: FELT_INSET_LEFT,
+          zIndex: 96,
           display: "flex",
-          gap: 6,
+          alignItems: "center",
+          gap: 10,
         }}
       >
-        <button
-          onClick={onReset}
-          style={{
-            padding: "8px 12px",
-            minHeight: 36,
-            borderRadius: 6,
-            border: `1px solid ${theme.stroke.secondary}`,
-            background: "rgba(0,0,0,0.35)",
-            color: theme.text.primary,
-            cursor: "pointer",
-            fontSize: 12,
-            touchAction: "manipulation",
-          }}
-        >
-          ← Lobby
-        </button>
-        <button
-          onClick={() => void toggleFullscreen()}
-          style={{
-            padding: "8px 12px",
-            minHeight: 36,
-            borderRadius: 6,
-            border: `1px solid ${theme.stroke.secondary}`,
-            background: fsOn ? "rgba(241,196,15,0.9)" : "rgba(0,0,0,0.35)",
-            color: fsOn ? "#1a2e1a" : theme.text.primary,
-            cursor: "pointer",
-            fontSize: 12,
-            fontWeight: 700,
-            touchAction: "manipulation",
-          }}
-        >
-          {fsOn ? "Window" : "Fullscreen"}
-        </button>
+        <WindowButton style={{ position: "static", top: "auto", left: "auto" }} onClick={() => void toggleFullscreen()} />
+        {!(phase === "finished" && onToLobby) ? (
+          <button
+            onClick={onReset}
+            style={{
+              padding: "6px 10px",
+              minHeight: 0,
+              borderRadius: 6,
+              border: `1px solid ${theme.stroke.secondary}`,
+              background: "rgba(0,0,0,0.35)",
+              color: theme.text.primary,
+              cursor: "pointer",
+              fontSize: 12,
+              touchAction: "manipulation",
+            }}
+          >
+            {resetLabel || "← Lobby"}
+          </button>
+        ) : null}
       </div>
       {fsNote ? (
         <div
@@ -3723,6 +3798,7 @@ function Table({
           onDismiss={() => setWinShow(false)}
         />
       ) : null}
+      {phase === "finished" && onToLobby && !winShow ? <FinishedLobbyOverlay onLobby={onToLobby} /> : null}
     </div>
   );
 }
@@ -4194,7 +4270,7 @@ function fullDealProgress(n: number) {
 
 function OnlineGame({ onLeave }: { onLeave: () => void }) {
   const auth = useClerkAuth();
-  const [screen, setScreen] = useState<"pick" | "create" | "join" | "waiting" | "table" | "board">("pick");
+  const [screen, setScreen] = useState<"pick" | "create" | "join" | "waiting" | "table">("pick");
   const [name, setName] = useState(readSavedName);
   const [code, setCode] = useState("");
   const [wsUrl, setWsUrl] = useState(defaultWsUrl);
@@ -4837,11 +4913,12 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       center
       overlay={
         <>
+          <WindowButton />
           <LobbyBack onClick={exitToMenu} />
           <ProfileButton />
         </>
       }
-      style={{ padding: "max(8px, env(safe-area-inset-top)) 16px max(28px, calc(env(safe-area-inset-bottom) + 10px))" }}
+      style={{ padding: "max(40px, calc(env(safe-area-inset-top) + 22px)) 16px max(56px, calc(env(safe-area-inset-bottom) + 40px))" }}
     >
       <div
         style={{
@@ -4851,7 +4928,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
           flexDirection: "column",
           alignItems: "center",
           gap: 12,
-          padding: "48px 8px 8px",
+          padding: "20px 8px 8px",
           textAlign: "center",
         }}
       >
@@ -4990,48 +5067,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
             joinByCode(c);
           }}
         />
-        <button
-          type="button"
-          className="lobby-ghost-btn"
-          style={LOBBY_GHOST_BTN}
-          onClick={() => setScreen("board")}
-        >
-          Leaderboard
-        </button>
       </>
-    );
-  }
-
-  if (screen === "board") {
-    return (
-      <FeltShell
-        center
-        overlay={
-          <>
-            <LobbyBack onClick={() => setScreen("pick")} label="← Multiplayer" />
-            <ProfileButton />
-          </>
-        }
-        style={{ padding: "max(8px, env(safe-area-inset-top)) 16px max(28px, calc(env(safe-area-inset-bottom) + 10px))" }}
-      >
-        <div
-          style={{
-            width: "100%",
-            maxWidth: 440,
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            gap: 12,
-            padding: "48px 8px 8px",
-            textAlign: "center",
-          }}
-        >
-          <div style={{ fontSize: 22, fontWeight: 700, color: "#f5f0e6", fontFamily: 'Georgia, "Times New Roman", serif' }}>
-            Leaderboard
-          </div>
-          <LeaderboardPanel />
-        </div>
-      </FeltShell>
     );
   }
 
@@ -5219,7 +5255,9 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
           setPickupAwaitTable(false);
         }}
         onCancelPickupAwait={() => setPickupAwaitTable(false)}
-        onReset={view.phase === "finished" ? leaveOnline : exitToMenu}
+        onReset={leaveOnline}
+        resetLabel="← Leave"
+        onToLobby={view.phase === "finished" ? () => send({ type: "lobby" }) : undefined}
       />
       </>
     );
