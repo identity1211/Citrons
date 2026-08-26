@@ -354,12 +354,190 @@ function aiChoosePlay(
   return { kind: "cards", hand: best.hand, faceUp: best.faceUp };
 }
 
+// ─── Solo tutorial ───────────────────────────────────────────────────────────
+
+type TutWait = "dealing" | "continue" | "swap" | "ready" | "play" | "coach" | "take" | "free";
+type TutHint = "hand" | "faceUp" | "ready" | "play" | "take" | "none";
+
+interface TutStep {
+  text: string;
+  wait: TutWait;
+  hint?: TutHint;
+  rank?: string;
+  faceRank?: string;
+  coachRank?: string;
+}
+
+const TUTORIAL_STEPS: TutStep[] = [
+  {
+    text: "Each player gets 3 face-down cards, then 3 face-up on top, then 3 in hand.",
+    wait: "dealing",
+  },
+  {
+    text: "Before play, swap hand cards with your face-up cards. Strong cards on the table are played last.",
+    wait: "continue",
+  },
+  {
+    text: "Try it: tap the Ace in your hand, then the 3 on the table.",
+    wait: "swap",
+    hint: "hand",
+    rank: "A",
+    faceRank: "3",
+  },
+  {
+    text: "Ace is waiting on the table. Tap Ready when the swap looks good.",
+    wait: "ready",
+    hint: "ready",
+  },
+  {
+    text: "Ranks go 2 < 3 < \u2026 < K < A. Suits don't count. Empty pile \u2014 any card works. Tap your 4, then Play.",
+    wait: "play",
+    hint: "hand",
+    rank: "4",
+  },
+  {
+    text: "Watch Coach play a 5. Your next card must be equal or higher \u2014 unless it is a special.",
+    wait: "coach",
+    coachRank: "5",
+  },
+  {
+    text: "Play your 8 \u2014 it beats the 5.",
+    wait: "play",
+    hint: "hand",
+    rank: "8",
+  },
+  {
+    text: "Watch Coach play a King.",
+    wait: "coach",
+    coachRank: "K",
+  },
+  {
+    text: "King is high. Your 3 loses. But 2 plays on anything and resets the pile. Play your 2.",
+    wait: "play",
+    hint: "hand",
+    rank: "2",
+  },
+  {
+    text: "Pile is a 2. Play your 6 \u2014 after a 6, only 6 or lower (or a 7) can be played. No 10s.",
+    wait: "play",
+    hint: "hand",
+    rank: "6",
+  },
+  {
+    text: "Watch Coach play a 7. It is transparent \u2014 the 6 underneath still counts.",
+    wait: "coach",
+    coachRank: "7",
+  },
+  {
+    text: "The pile still counts as 6, so a 10 cannot burn it. Play your 3.",
+    wait: "play",
+    hint: "hand",
+    rank: "3",
+  },
+  {
+    text: "Watch Coach play a 9.",
+    wait: "coach",
+    coachRank: "9",
+  },
+  {
+    text: "10 plays on anything except a 6 and burns the discard. You go again. Play your 10.",
+    wait: "play",
+    hint: "hand",
+    rank: "10",
+  },
+  {
+    text: "Pile burned. Four of a kind in a row also burns. Empty pile \u2014 play your 4.",
+    wait: "play",
+    hint: "hand",
+    rank: "4",
+  },
+  {
+    text: "Watch Coach play an Ace.",
+    wait: "coach",
+    coachRank: "A",
+  },
+  {
+    text: "Ace beats 8, J, and 5. You have no 2, 7, or 10. Take the discard.",
+    wait: "take",
+    hint: "take",
+  },
+  {
+    text: "Play from your hand first. When the deck and hand are empty, play face-up, then flip face-down. First to empty all cards takes 1st place.",
+    wait: "continue",
+  },
+  {
+    text: "That's the rules. Keep playing against Coach, or leave with \u2190 Lobby.",
+    wait: "free",
+  },
+];
+
+function buildTutorialDeck(): string[] {
+  const slots: (string | null)[] = Array.from({ length: 52 }, () => null);
+  const used = new Set<string>();
+  const put = (i: number, card: string) => {
+    used.add(card);
+    slots[i] = card;
+  };
+  // Deal order for 2 players: FD 0,2,4 / 1,3,5 then FU 6,8,10 / 7,9,11 then hand 12,14,16 / 13,15,17
+  put(0, "5♣");
+  put(2, "8♦");
+  put(4, "J♥");
+  put(1, "5♦");
+  put(3, "Q♥");
+  put(5, "J♠");
+  put(6, "3♠");
+  put(8, "9♥");
+  put(10, "K♣");
+  put(7, "4♣");
+  put(9, "9♦");
+  put(11, "Q♠");
+  put(12, "4♦");
+  put(14, "8♠");
+  put(16, "A♥");
+  put(13, "5♥");
+  put(15, "7♣");
+  put(17, "K♦");
+  put(18, "6♥");
+  put(19, "9♣");
+  put(20, "2♣");
+  put(21, "4♥");
+  put(22, "10♠");
+  put(23, "8♥");
+  put(24, "A♠");
+  put(25, "J♣");
+  put(26, "8♣");
+  put(27, "4♠");
+  put(28, "5♠");
+  const rest: string[] = [];
+  for (const r of RANKS) {
+    for (const s of SUITS) {
+      const c = `${r}${s}`;
+      if (!used.has(c)) rest.push(c);
+    }
+  }
+  let k = 0;
+  for (let i = 0; i < 52; i++) {
+    if (!slots[i]) slots[i] = rest[k++];
+  }
+  return slots as string[];
+}
+
+function tutorialFreeIndex(): number {
+  const i = TUTORIAL_STEPS.findIndex((s) => s.wait === "free");
+  return i >= 0 ? i : TUTORIAL_STEPS.length - 1;
+}
+
+function tutorialLockedAt(step: number): boolean {
+  const s = TUTORIAL_STEPS[step];
+  return !!s && s.wait !== "free";
+}
+
 // ─── CSS keyframes ───────────────────────────────────────────────────────────
 
-const STYLE_ID = "card-game-keyframes-v12";
+const STYLE_ID = "card-game-keyframes-v13";
 function ensureKeyframes() {
   if (typeof document === "undefined") return;
-  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7", "card-game-keyframes-v8", "card-game-keyframes-v9", "card-game-keyframes-v10", "card-game-keyframes-v11"]) {
+  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7", "card-game-keyframes-v8", "card-game-keyframes-v9", "card-game-keyframes-v10", "card-game-keyframes-v11", "card-game-keyframes-v12"]) {
     document.getElementById(id)?.remove();
   }
   if (document.getElementById(STYLE_ID)) return;
@@ -451,6 +629,12 @@ function ensureKeyframes() {
     .card-draw-reveal { animation: cardDrawReveal 0.62s cubic-bezier(0.22, 1, 0.36, 1) both; transform-style: preserve-3d; }
     .card-reveal { animation: revealPop 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
     .timer-urgent { animation: timerPulse 0.8s ease-in-out infinite; }
+    @keyframes tutGlow {
+      0%, 100% { box-shadow: 0 0 0 2px rgba(241,196,15,0.4), 0 0 10px rgba(241,196,15,0.28); }
+      50% { box-shadow: 0 0 0 3px rgba(241,196,15,0.95), 0 0 18px rgba(241,196,15,0.55); }
+    }
+    .tut-glow { animation: tutGlow 1.15s ease-in-out infinite; }
+    .tut-glow-chip { animation: tutGlow 1.15s ease-in-out infinite; }
     .lobby-felt-glow {
       position: absolute;
       inset: -10%;
@@ -673,6 +857,7 @@ interface CardProps {
   selectable?: boolean;
   locked?: boolean;
   dimmed?: boolean;
+  highlighted?: boolean;
   onClick?: () => void;
 }
 
@@ -688,11 +873,13 @@ function PlayingCard({
   selectable,
   locked,
   dimmed,
+  highlighted,
   onClick,
 }: CardProps) {
   const w = wProp ?? (small ? 38 : 56);
   const h = hProp ?? (small ? 54 : 78);
   const box = cardBox(w, h);
+  const cls = [animClass, highlighted ? "tut-glow" : ""].filter(Boolean).join(" ") || undefined;
 
   const base: CSSProperties = {
     width: w,
@@ -715,7 +902,7 @@ function PlayingCard({
   if (!faceVisible) {
     return (
       <div
-        className={animClass}
+        className={cls}
         onClick={selectable && !locked ? onClick : undefined}
         style={{
           ...base,
@@ -742,7 +929,7 @@ function PlayingCard({
 
   return (
     <div
-      className={animClass}
+      className={cls}
       onClick={selectable && !locked ? onClick : undefined}
       style={{
         ...base,
@@ -792,6 +979,7 @@ interface TableStackProps {
   locked?: boolean;
   selectedFaceUp?: number[];
   faceUpLegal?: boolean[];
+  glowFaceUp?: boolean[];
   onSelectFaceUp?: (index: number) => void;
   onSelectFaceDown?: (index: number) => void;
   swapKey?: number;
@@ -811,6 +999,7 @@ function TableStack({
   locked,
   selectedFaceUp = [],
   faceUpLegal,
+  glowFaceUp,
   onSelectFaceUp,
   onSelectFaceDown,
   swapKey = 0,
@@ -860,7 +1049,14 @@ function TableStack({
                 selected={selectedFaceUp.includes(i)}
                 selectable={selectableFaceUp}
                 locked={locked}
-                dimmed={faceUpLegal ? !faceUpLegal[i] : false}
+                dimmed={
+                  glowFaceUp
+                    ? !glowFaceUp[i]
+                    : faceUpLegal
+                      ? !faceUpLegal[i]
+                      : false
+                }
+                highlighted={!!glowFaceUp?.[i]}
                 onClick={() => onSelectFaceUp?.(i)}
                 animClass={
                   animating && i === fuAnimSlots - 1
@@ -893,6 +1089,7 @@ interface HandProps {
   locked?: boolean;
   selectedIndices?: number[];
   legalMask?: boolean[];
+  glowMask?: boolean[];
   onSelect?: (index: number) => void;
   swapKey?: number;
   seatId?: number;
@@ -911,6 +1108,7 @@ function Hand({
   locked,
   selectedIndices = [],
   legalMask,
+  glowMask,
   onSelect,
   swapKey = 0,
   seatId,
@@ -951,7 +1149,14 @@ function Hand({
             selected={selectedIndices.includes(i)}
             selectable={selectable && isOwner}
             locked={locked}
-            dimmed={isOwner && legalMask ? !legalMask[i] : false}
+            dimmed={
+              isOwner && glowMask
+                ? !glowMask[i]
+                : isOwner && legalMask
+                  ? !legalMask[i]
+                  : false
+            }
+            highlighted={!!isOwner && !!glowMask?.[i]}
             onClick={() => onSelect?.(i)}
             animClass={
               animating && i === cards.length - 1
@@ -2730,7 +2935,7 @@ function Lobby({
   onRules,
   onOnline,
 }: {
-  onStart: (count: number) => void;
+  onStart: (count: number, tutorial?: boolean) => void;
   onRules: () => void;
   onOnline: () => void;
 }) {
@@ -2976,6 +3181,23 @@ function Lobby({
                 </button>
                 <button
                   type="button"
+                  className="lobby-ghost-btn"
+                  onClick={() => onStart(2, true)}
+                  style={{
+                    padding: "12px 18px",
+                    borderRadius: 10,
+                    border: "1.5px solid #f1c40f",
+                    background: "transparent",
+                    color: "#f1c40f",
+                    fontSize: 14,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                  }}
+                >
+                  Tutorial
+                </button>
+                <button
+                  type="button"
                   className="lobby-play-btn"
                   onClick={() => onStart(selected)}
                   style={{
@@ -3051,12 +3273,14 @@ function FeltChip({
   disabled,
   kind,
   style,
+  glow,
 }: {
   label: ReactNode;
   onClick: () => void;
   disabled?: boolean;
   kind: "play" | "take" | "ready" | "ghost";
   style?: CSSProperties;
+  glow?: boolean;
 }) {
   const palettes = {
     play: {
@@ -3090,7 +3314,7 @@ function FeltChip({
   return (
     <button
       type="button"
-      className="felt-chip"
+      className={glow ? "felt-chip tut-glow-chip" : "felt-chip"}
       onClick={onClick}
       disabled={disabled}
       style={{
@@ -3113,6 +3337,110 @@ function FeltChip({
     >
       {label}
     </button>
+  );
+}
+
+function TutorialBar({
+  text,
+  showNext,
+  showSkip,
+  onNext,
+  onSkip,
+}: {
+  text: string;
+  showNext: boolean;
+  showSkip: boolean;
+  onNext: () => void;
+  onSkip: () => void;
+}) {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: "50%",
+        top: "max(42px, calc(env(safe-area-inset-top) + 30px))",
+        transform: "translateX(-50%)",
+        zIndex: 92,
+        width: "min(420px, calc(100% - 24px))",
+        minWidth: 160,
+        pointerEvents: "auto",
+      }}
+    >
+      <div
+        style={{
+          padding: "8px 12px 8px",
+          borderRadius: 12,
+          background: "rgba(8, 18, 10, 0.86)",
+          border: "1px solid rgba(241,196,15,0.45)",
+          boxShadow: "0 10px 28px rgba(0,0,0,0.38)",
+        }}
+      >
+        <div
+          style={{
+            fontSize: 10,
+            fontWeight: 800,
+            letterSpacing: 1.4,
+            textTransform: "uppercase",
+            color: "#f1c40f",
+            marginBottom: 4,
+          }}
+        >
+          Tutorial
+        </div>
+        <div style={{ color: "#f5f0e6", fontSize: 13, lineHeight: 1.4, fontWeight: 600 }}>
+          {text}
+        </div>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 10,
+            marginTop: 8,
+          }}
+        >
+          {showSkip ? (
+            <button
+              type="button"
+              onClick={onSkip}
+              style={{
+                border: "none",
+                background: "transparent",
+                color: "rgba(255,255,255,0.55)",
+                fontSize: 11,
+                fontWeight: 700,
+                cursor: "pointer",
+                padding: "4px 0",
+              }}
+            >
+              Skip
+            </button>
+          ) : (
+            <span />
+          )}
+          {showNext ? (
+            <button
+              type="button"
+              onClick={onNext}
+              style={{
+                padding: "7px 14px",
+                borderRadius: 8,
+                border: "none",
+                background: "#f1c40f",
+                color: "#1a2e1a",
+                fontSize: 12,
+                fontWeight: 800,
+                cursor: "pointer",
+              }}
+            >
+              Next
+            </button>
+          ) : (
+            <span />
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -3151,6 +3479,7 @@ function Table({
   onReset,
   onToLobby,
   resetLabel,
+  tutorial,
 }: {
   players: PlayerState[];
   drawDeck: string[];
@@ -3184,6 +3513,16 @@ function Table({
   onReset: () => void;
   onToLobby?: () => void;
   resetLabel?: string;
+  tutorial?: {
+    text: string;
+    showNext: boolean;
+    showSkip: boolean;
+    hint: TutHint;
+    rank?: string;
+    faceRank?: string;
+    onNext: () => void;
+    onSkip: () => void;
+  } | null;
 }) {
   const theme = useHostTheme();
   const n = players.length;
@@ -3195,6 +3534,15 @@ function Table({
     isPlaying && currentPlayer === 0 && phase === "playing" && !flyAnim && !burnAnim && !pickupAnim && !revealCard && !drawAnim;
   const humanZone = players[0] ? activePlayZone(players[0], drawDeck.length) : null;
   const selRank = players[0] ? playSelectionRank(players[0], playSelected) : null;
+  const tutHint = tutorial?.hint ?? "none";
+  const handGlow =
+    tutHint === "hand" && tutorial?.rank && players[0]
+      ? players[0].hand.map((c) => getRank(c) === tutorial.rank)
+      : undefined;
+  const faceUpGlow =
+    tutHint === "faceUp" && tutorial?.faceRank && players[0]
+      ? players[0].faceUp.map((c) => !!c && getRank(c) === tutorial.faceRank)
+      : undefined;
 
   function playerFaceDown(p: number) {
     if (isPlaying) return players[p].faceDown;
@@ -3466,7 +3814,7 @@ function Table({
           lineHeight: 1.25,
         }}
       >
-        {statusMsg}
+        {tutorial ? null : statusMsg}
       </div>
 
       {(finishOrder.length > 0 || phase === "finished") && (
@@ -3626,14 +3974,14 @@ function Table({
               pointerEvents: "auto",
             }}
           >
-            {isSwap && (
+            {isSwap && !tutorial && (
               <div style={{ transform: short ? "scale(0.78)" : undefined, transformOrigin: "center" }}>
                 <SwapTimer seconds={swapSeconds} />
               </div>
             )}
             {isPlaying && <DiscardPile cards={displayDiscard} />}
             {isSwap && (
-              <FeltChip onClick={onReady} disabled={humanReady} kind="ready" label="Ready" />
+              <FeltChip onClick={onReady} disabled={humanReady} kind="ready" label="Ready" glow={tutHint === "ready"} />
             )}
             {pickupAwaitTable && isHumanTurn && (
               <FeltChip onClick={onCancelPickupAwait} kind="ghost" label="Cancel" />
@@ -3716,6 +4064,7 @@ function Table({
                   : playSelected.faceUp
             }
             faceUpLegal={faceUpLegal}
+            glowFaceUp={faceUpGlow}
             onSelectFaceUp={onSelectFaceUp}
             onSelectFaceDown={onSelectFaceDown}
             swapKey={swapTick}
@@ -3738,6 +4087,7 @@ function Table({
                   : playSelected.hand
               }
               legalMask={handLegal}
+              glowMask={handGlow}
               onSelect={onSelectHand}
               swapKey={swapTick}
               seatId={0}
@@ -3750,6 +4100,7 @@ function Table({
         kind={myTurn ? "play" : "ghost"}
         disabled={!myTurn}
         label="Play"
+        glow={tutHint === "play"}
         onClick={() => {
           if (playClickable) onPlay();
         }}
@@ -3767,6 +4118,7 @@ function Table({
       <FeltChip
         kind={myTurn ? "take" : "ghost"}
         disabled={!myTurn}
+        glow={tutHint === "take"}
         label={
           <>
             Take
@@ -3790,6 +4142,15 @@ function Table({
           pointerEvents: "auto",
         }}
       />
+      {tutorial ? (
+        <TutorialBar
+          text={tutorial.text}
+          showNext={tutorial.showNext}
+          showSkip={tutorial.showSkip}
+          onNext={tutorial.onNext}
+          onSkip={tutorial.onSkip}
+        />
+      ) : null}
       {winShow && winner ? (
         <WinnerOverlay
           name={winner.name}
@@ -5295,6 +5656,8 @@ export default function CardGame() {
   const [drawAnim, setDrawAnim] = useState<DrawAnim | null>(null);
   const [revealCard, setRevealCard] = useState<string | null>(null);
   const [pickupAwaitTable, setPickupAwaitTable] = useState(false);
+  const [tutorial, setTutorial] = useState(false);
+  const [tutStep, setTutStep] = useState(0);
 
   const stepRef = useRef(0);
   const dealStepsRef = useRef<DealStep[]>([]);
@@ -5309,12 +5672,52 @@ export default function CardGame() {
   const currentPlayerRef = useRef(currentPlayer);
   const finishOrderRef = useRef(finishOrder);
   const phaseRef = useRef(phase);
+  const tutorialRef = useRef(tutorial);
+  const tutStepRef = useRef(tutStep);
   playersRef.current = players;
   finishOrderRef.current = finishOrder;
   drawDeckRef.current = drawDeck;
   discardRef.current = discard;
   currentPlayerRef.current = currentPlayer;
   phaseRef.current = phase;
+  tutorialRef.current = tutorial;
+  tutStepRef.current = tutStep;
+
+  function tutStepNow(): TutStep | null {
+    if (!tutorialRef.current) return null;
+    return TUTORIAL_STEPS[tutStepRef.current] ?? null;
+  }
+
+  function tutLocked(): boolean {
+    return !!(tutorialRef.current && tutorialLockedAt(tutStepRef.current));
+  }
+
+  function advanceTutorial() {
+    setTutStep((n) => Math.min(n + 1, TUTORIAL_STEPS.length - 1));
+  }
+
+  function skipTutorial() {
+    if (!tutorialRef.current) return;
+    const free = tutorialFreeIndex();
+    tutStepRef.current = free;
+    setTutStep(free);
+    const ph = phaseRef.current;
+    if (ph === "dealing" || ph === "swap") {
+      clearTimers();
+      playLockRef.current = false;
+      setDealing(false);
+      setLastStep(null);
+      const n = Math.max(playersRef.current.length, 2);
+      setDealProgress({
+        faceDown: Array(n).fill(3),
+        faceUp: Array(n).fill(3),
+        hand: Array(n).fill(3),
+      });
+      const ready = playersRef.current.map((p) => ({ ...p, ready: true }));
+      setPlayers(ready);
+      beginPlaying(ready);
+    }
+  }
 
   useEffect(() => {
     ensureKeyframes();
@@ -5574,7 +5977,7 @@ export default function CardGame() {
   }
 
   function beginPlaying(pls: PlayerState[]) {
-    const first = Math.floor(Math.random() * pls.length);
+    const first = tutorialRef.current ? 0 : Math.floor(Math.random() * pls.length);
     setCurrentPlayer(first);
     setDiscard([]);
     setBurnCount(0);
@@ -5601,8 +6004,16 @@ export default function CardGame() {
 
   function beginSwapPhase(playerCount: number) {
     setPhase("swap");
-    setSwapSeconds(SWAP_SECONDS);
     setSelection(null);
+
+    if (tutorialRef.current) {
+      setStatusMsg("Card swap");
+      const t = setTimeout(() => markReady(1), 350);
+      aiTimersRef.current.push(t);
+      return;
+    }
+
+    setSwapSeconds(SWAP_SECONDS);
     setStatusMsg("Card swap — 20 seconds");
 
     swapIntervalRef.current = setInterval(() => {
@@ -5938,6 +6349,7 @@ export default function CardGame() {
   useEffect(() => {
     if (phase !== "playing") return;
     if (currentPlayer === 0) return;
+    if (tutorialRef.current && tutorialLockedAt(tutStepRef.current)) return;
     if (flyAnim || burnAnim || pickupAnim || revealCard || drawAnim) return;
     if (playerFinished(players[currentPlayer])) return;
 
@@ -5948,6 +6360,7 @@ export default function CardGame() {
       const pIdx = currentPlayerRef.current;
       if (pIdx === 0 || phaseRef.current !== "playing") return;
       if (playLockRef.current) return;
+      if (tutorialRef.current && tutorialLockedAt(tutStepRef.current)) return;
 
       const choice = aiChoosePlay(pls[pIdx], pile, deck.length);
       if (!choice) {
@@ -5972,16 +6385,51 @@ export default function CardGame() {
     }, 700 + Math.random() * 500);
 
     return () => clearTimeout(t);
-  }, [phase, currentPlayer, finishOrder, discard, players, drawDeck, flyAnim, burnAnim, pickupAnim, revealCard, drawAnim]);
+  }, [phase, currentPlayer, finishOrder, discard, players, drawDeck, flyAnim, burnAnim, pickupAnim, revealCard, drawAnim, tutorial, tutStep]);
 
-  const startGame = useCallback((playerCount: number) => {
+  useEffect(() => {
+    if (!tutorial) return;
+    const step = TUTORIAL_STEPS[tutStep];
+    if (step?.wait === "dealing" && phase === "swap") {
+      advanceTutorial();
+    }
+  }, [tutorial, tutStep, phase]);
+
+  useEffect(() => {
+    if (!tutorial) return;
+    if (phase !== "playing") return;
+    if (flyAnim || burnAnim || pickupAnim || revealCard || drawAnim) return;
+    const step = TUTORIAL_STEPS[tutStep];
+    if (step?.wait !== "coach" || !step.coachRank) return;
+    if (currentPlayer !== 1) return;
+
+    const t = setTimeout(() => {
+      if (playLockRef.current) return;
+      if (currentPlayerRef.current !== 1 || phaseRef.current !== "playing") return;
+      const pls = playersRef.current;
+      const idx = pls[1]?.hand.findIndex((c) => getRank(c) === step.coachRank) ?? -1;
+      if (idx < 0) return;
+      const result = applyPlay(1, { hand: [idx], faceUp: [] }, pls, drawDeckRef.current, discardRef.current);
+      runPlayResult(1, result, true);
+      advanceTutorial();
+    }, 950);
+
+    return () => clearTimeout(t);
+  }, [tutorial, tutStep, phase, currentPlayer, flyAnim, burnAnim, pickupAnim, revealCard, drawAnim]);
+
+  const startGame = useCallback((playerCount: number, asTutorial = false) => {
     void enterFullscreen();
     clearTimers();
-    const deck = shuffle(buildDeck());
+    tutorialRef.current = asTutorial;
+    tutStepRef.current = asTutorial ? 0 : 0;
+    setTutorial(asTutorial);
+    setTutStep(asTutorial ? 0 : 0);
+    const count = asTutorial ? 2 : playerCount;
+    const deck = asTutorial ? buildTutorialDeck() : shuffle(buildDeck());
     let cursor = 0;
 
-    const newPlayers: PlayerState[] = Array.from({ length: playerCount }, (_, i) => ({
-      name: i === 0 ? "You" : `Player ${i + 1}`,
+    const newPlayers: PlayerState[] = Array.from({ length: count }, (_, i) => ({
+      name: i === 0 ? "You" : asTutorial ? "Coach" : `Player ${i + 1}`,
       faceDown: [],
       faceUp: [],
       hand: [],
@@ -5989,11 +6437,11 @@ export default function CardGame() {
     }));
 
     for (let slot = 0; slot < 3; slot++)
-      for (let p = 0; p < playerCount; p++) newPlayers[p].faceDown.push(deck[cursor++]);
+      for (let p = 0; p < count; p++) newPlayers[p].faceDown.push(deck[cursor++]);
     for (let slot = 0; slot < 3; slot++)
-      for (let p = 0; p < playerCount; p++) newPlayers[p].faceUp.push(deck[cursor++]);
+      for (let p = 0; p < count; p++) newPlayers[p].faceUp.push(deck[cursor++]);
     for (let slot = 0; slot < 3; slot++)
-      for (let p = 0; p < playerCount; p++) newPlayers[p].hand.push(deck[cursor++]);
+      for (let p = 0; p < count; p++) newPlayers[p].hand.push(deck[cursor++]);
 
     for (const p of newPlayers) p.hand = sortHand(p.hand);
 
@@ -6018,7 +6466,7 @@ export default function CardGame() {
     setPickupAwaitTable(false);
     setPhase("dealing");
 
-    const steps = buildDealSequence(playerCount);
+    const steps = buildDealSequence(count);
     dealStepsRef.current = steps;
     stepRef.current = 0;
 
@@ -6027,7 +6475,7 @@ export default function CardGame() {
       if (!step || step.type === "done") {
         setDealing(false);
         setLastStep(null);
-        beginSwapPhase(playerCount);
+        beginSwapPhase(count);
         return;
       }
       setLastStep(step);
@@ -6052,6 +6500,18 @@ export default function CardGame() {
   function handleSelectHand(index: number) {
     if (phase === "swap") {
       if (playersRef.current[0]?.ready) return;
+      const step = tutStepNow();
+      const pl = playersRef.current[0];
+      if (tutLocked()) {
+        if (step?.wait !== "swap" || !step.rank || !step.faceRank) return;
+        const handRank = getRank(pl.hand[index]);
+        if (selection?.zone === "faceUp") {
+          const face = pl.faceUp[selection.index];
+          if (!face || handRank !== step.rank || getRank(face) !== step.faceRank) return;
+        } else if (handRank !== step.rank) {
+          return;
+        }
+      }
       const sel = selection;
       if (sel?.zone === "faceUp") {
         setPlayers((prev) =>
@@ -6059,6 +6519,7 @@ export default function CardGame() {
         );
         setSwapTick((t) => t + 1);
         setSelection(null);
+        if (tutLocked() && step?.wait === "swap") advanceTutorial();
       } else if (sel?.zone === "hand" && sel.index === index) {
         setSelection(null);
       } else {
@@ -6071,6 +6532,10 @@ export default function CardGame() {
     const pl = playersRef.current[0];
     if (activePlayZone(pl, drawDeckRef.current.length) !== "hand") return;
     const rank = getRank(pl.hand[index]);
+    if (tutLocked()) {
+      const step = tutStepNow();
+      if (step?.wait !== "play" || rank !== step.rank) return;
+    }
 
     setPlaySelected((prev) => {
       const curRank = playSelectionRank(pl, prev);
@@ -6103,6 +6568,16 @@ export default function CardGame() {
   function handleSelectFaceUp(index: number) {
     if (phase === "swap") {
       if (playersRef.current[0]?.ready) return;
+      const step = tutStepNow();
+      const pl = playersRef.current[0];
+      if (tutLocked()) {
+        if (step?.wait !== "swap" || !step.rank || !step.faceRank) return;
+        const face = pl.faceUp[index];
+        if (!face || getRank(face) !== step.faceRank) return;
+        if (selection?.zone === "hand") {
+          if (getRank(pl.hand[selection.index]) !== step.rank) return;
+        }
+      }
       const sel = selection;
       if (sel?.zone === "hand") {
         setPlayers((prev) =>
@@ -6110,6 +6585,7 @@ export default function CardGame() {
         );
         setSwapTick((t) => t + 1);
         setSelection(null);
+        if (tutLocked() && step?.wait === "swap") advanceTutorial();
       } else if (sel?.zone === "faceUp" && sel.index === index) {
         setSelection(null);
       } else {
@@ -6119,6 +6595,7 @@ export default function CardGame() {
     }
 
     if (phase !== "playing" || currentPlayerRef.current !== 0 || playLockRef.current) return;
+    if (tutLocked()) return;
 
     if (pickupAwaitTable) {
       executePickUp({ zone: "faceUp", index });
@@ -6165,6 +6642,7 @@ export default function CardGame() {
 
   function handleSelectFaceDown(index: number) {
     if (phase !== "playing" || currentPlayerRef.current !== 0 || playLockRef.current) return;
+    if (tutLocked()) return;
 
     if (pickupAwaitTable) {
       executePickUp({ zone: "faceDown", index });
@@ -6186,7 +6664,9 @@ export default function CardGame() {
 
   function handleReady() {
     if (phase !== "swap" || playersRef.current[0]?.ready) return;
+    if (tutLocked() && tutStepNow()?.wait !== "ready") return;
     markReady(0);
+    if (tutLocked() && tutStepNow()?.wait === "ready") advanceTutorial();
   }
 
   function handlePlay() {
@@ -6196,6 +6676,12 @@ export default function CardGame() {
     const pl = playersRef.current[0];
     const zone = activePlayZone(pl, drawDeckRef.current.length);
     if (!zone || zone === "faceDown") return;
+    const step = tutStepNow();
+    if (tutLocked()) {
+      if (step?.wait !== "play") return;
+      const cards = cardsFromSelection(pl, playSelected);
+      if (!cards.length || getRank(cards[0]) !== step.rank) return;
+    }
 
     const result = applyPlay(
       0,
@@ -6213,6 +6699,7 @@ export default function CardGame() {
       return;
     }
     runPlayResult(0, result, true);
+    if (tutLocked() && step?.wait === "play") advanceTutorial();
   }
 
   function executePickUp(tableTake?: TableTake | null) {
@@ -6226,10 +6713,12 @@ export default function CardGame() {
     setPickupAwaitTable(false);
     setPlayers(result.players);
     runPickUpResult(0, result.pickupCards, result.players, result.message);
+    if (tutLocked() && tutStepNow()?.wait === "take") advanceTutorial();
   }
 
   function handlePickUp() {
     if (phase !== "playing" || currentPlayerRef.current !== 0 || playLockRef.current) return;
+    if (tutLocked() && tutStepNow()?.wait !== "take") return;
     const pl = playersRef.current[0];
     const pile = discardRef.current;
     if (pile.length === 0 && activePlayZone(pl, drawDeckRef.current.length) === "faceDown") {
@@ -6279,6 +6768,10 @@ export default function CardGame() {
     setBurnCount(0);
     setPickupAwaitTable(false);
     setStatusMsg("");
+    tutorialRef.current = false;
+    tutStepRef.current = 0;
+    setTutorial(false);
+    setTutStep(0);
   }
 
   useEffect(() => () => clearTimers(), []);
@@ -6339,6 +6832,31 @@ export default function CardGame() {
       onPickUpOnly={handlePickUpOnly}
       onCancelPickupAwait={handleCancelPickupAwait}
       onReset={resetToLobby}
+      tutorial={
+        tutorial && TUTORIAL_STEPS[tutStep]
+          ? (() => {
+              const step = TUTORIAL_STEPS[tutStep];
+              let hint: TutHint = step.hint ?? "none";
+              if (step.wait === "play" && step.rank && players[0]) {
+                const selected = cardsFromSelection(players[0], playSelected);
+                if (selected.some((c) => getRank(c) === step.rank)) hint = "play";
+              }
+              if (step.wait === "swap" && selection?.zone === "hand" && players[0]) {
+                if (getRank(players[0].hand[selection.index]) === step.rank) hint = "faceUp";
+              }
+              return {
+                text: step.text,
+                showNext: step.wait === "continue",
+                showSkip: step.wait !== "free",
+                hint,
+                rank: step.rank,
+                faceRank: step.faceRank,
+                onNext: advanceTutorial,
+                onSkip: skipTutorial,
+              };
+            })()
+          : null
+      }
     />
     </VisualFrame>
   );
