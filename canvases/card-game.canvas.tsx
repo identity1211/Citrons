@@ -2876,6 +2876,192 @@ function TableSkinPicker({
   );
 }
 
+type ChatLine = { id: string; fromId: string; name: string; text: string; at: number };
+
+function RoomChat({
+  lines,
+  youId,
+  onSend,
+  variant,
+}: {
+  lines: ChatLine[];
+  youId?: string;
+  onSend: (text: string) => void;
+  variant: "lobby" | "table";
+}) {
+  const [draft, setDraft] = useState("");
+  const [open, setOpen] = useState(variant === "lobby");
+  const logRef = useRef<HTMLDivElement | null>(null);
+  const seenRef = useRef(0);
+  const [unread, setUnread] = useState(0);
+
+  useEffect(() => {
+    if (open) {
+      seenRef.current = lines.length;
+      setUnread(0);
+      const el = logRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+      return;
+    }
+    const extra = Math.max(0, lines.length - seenRef.current);
+    setUnread(extra);
+  }, [lines, open]);
+
+  function submit() {
+    const text = draft.trim();
+    if (!text) return;
+    onSend(text);
+    setDraft("");
+  }
+
+  const log = (
+    <div
+      ref={logRef}
+      style={{
+        height: variant === "lobby" ? 112 : 132,
+        overflowY: "auto",
+        padding: "6px 8px",
+        background: "rgba(0,0,0,0.28)",
+        borderRadius: variant === "lobby" ? 8 : "0",
+        textAlign: "left",
+      }}
+    >
+      {lines.length === 0 ? (
+        <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, lineHeight: 1.4 }}>
+          {variant === "lobby" ? "Say hi before the game starts." : "Table chat"}
+        </div>
+      ) : (
+        lines.map((line) => {
+          const mine = !!youId && line.fromId === youId;
+          return (
+            <div key={line.id} style={{ marginBottom: 5, lineHeight: 1.3 }}>
+              <span style={{ color: mine ? "#f1c40f" : "rgba(255,255,255,0.62)", fontSize: 11, fontWeight: 800 }}>
+                {mine ? "You" : line.name}
+              </span>
+              <span style={{ color: "#f5f0e6", fontSize: 12 }}> {line.text}</span>
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+
+  const composer = (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        submit();
+      }}
+      style={{ display: "flex", gap: 6, marginTop: variant === "lobby" ? 6 : 0 }}
+    >
+      <input
+        value={draft}
+        onChange={(e) => setDraft(e.target.value.slice(0, 120))}
+        placeholder="Message"
+        maxLength={120}
+        autoComplete="off"
+        style={{
+          flex: 1,
+          height: 36,
+          borderRadius: 8,
+          border: "1.5px solid rgba(255,255,255,0.22)",
+          background: "rgba(0,0,0,0.35)",
+          color: "#f5f0e6",
+          padding: "0 10px",
+          fontSize: 16,
+          minWidth: 0,
+        }}
+      />
+      <button
+        type="submit"
+        className="lobby-ghost-btn"
+        style={{
+          height: 36,
+          padding: "0 12px",
+          borderRadius: 8,
+          border: "1.5px solid rgba(241,196,15,0.45)",
+          background: "rgba(241,196,15,0.18)",
+          color: "#f1c40f",
+          fontWeight: 800,
+          fontSize: 12,
+          cursor: "pointer",
+        }}
+      >
+        Send
+      </button>
+    </form>
+  );
+
+  if (variant === "lobby") {
+    return (
+      <div style={{ width: "100%", maxWidth: 300 }}>
+        <div
+          style={{
+            fontSize: 11,
+            fontWeight: 800,
+            letterSpacing: 1.3,
+            textTransform: "uppercase",
+            color: "rgba(255,255,255,0.62)",
+            marginBottom: 8,
+            textAlign: "left",
+          }}
+        >
+          Chat
+        </div>
+        {log}
+        {composer}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: FELT_INSET_LEFT,
+        bottom: "max(64px, calc(env(safe-area-inset-bottom) + 58px))",
+        zIndex: 91,
+        width: open ? "min(260px, calc(100% - 140px))" : "auto",
+        pointerEvents: "auto",
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          padding: "7px 10px",
+          borderRadius: open ? "10px 10px 0 0" : 10,
+          border: "1px solid rgba(241,196,15,0.4)",
+          borderBottom: open ? "1px solid rgba(255,255,255,0.12)" : "1px solid rgba(241,196,15,0.4)",
+          background: "rgba(8, 18, 10, 0.88)",
+          color: "#f1c40f",
+          fontSize: 10,
+          fontWeight: 800,
+          letterSpacing: 1.2,
+          textTransform: "uppercase",
+          cursor: "pointer",
+        }}
+      >
+        {open ? "Chat ▾" : unread > 0 ? `Chat · ${unread}` : "Chat"}
+      </button>
+      {open ? (
+        <div
+          style={{
+            borderRadius: "0 0 10px 10px",
+            background: "rgba(8, 18, 10, 0.92)",
+            border: "1px solid rgba(241,196,15,0.4)",
+            borderTop: "none",
+            padding: 6,
+          }}
+        >
+          {log}
+          {composer}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function LobbyCardFan() {
   return (
     <div
@@ -3769,6 +3955,9 @@ function Table({
   resetLabel,
   tutorial,
   tableSkin = "felt",
+  chat,
+  youId,
+  onSendChat,
 }: {
   players: PlayerState[];
   drawDeck: string[];
@@ -3803,6 +3992,9 @@ function Table({
   onToLobby?: () => void;
   resetLabel?: string;
   tableSkin?: TableSkinId;
+  chat?: ChatLine[];
+  youId?: string;
+  onSendChat?: (text: string) => void;
   tutorial?: {
     text: string;
     showNext: boolean;
@@ -4434,6 +4626,9 @@ function Table({
           pointerEvents: "auto",
         }}
       />
+      {onSendChat ? (
+        <RoomChat variant="table" lines={chat ?? []} youId={youId} onSend={onSendChat} />
+      ) : null}
       {tutorial ? (
         <TutorialBar
           text={tutorial.text}
@@ -4532,6 +4727,7 @@ type OnlineView = {
   statusMsg: string;
   canStart: boolean;
   tableSkin: TableSkinId;
+  chat?: ChatLine[];
   lobby: { id: string; name: string; avatar?: string; ready: boolean; connected: boolean; host: boolean }[];
 };
 
@@ -4950,6 +5146,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   const [drawAnim, setDrawAnim] = useState<DrawAnim | null>(null);
   const [dropped, setDropped] = useState(false);
   const [savedGame, setSavedGame] = useState<MpSession | null>(() => readMpSession());
+  const [chat, setChat] = useState<ChatLine[]>([]);
 
   const wsRef = useRef<WebSocket | null>(null);
   const pingRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -5123,6 +5320,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       card?: string;
       anim?: NetAnim;
       lobbies?: LobbyInfo[];
+      line?: ChatLine;
     };
     try {
       msg = JSON.parse(raw);
@@ -5141,6 +5339,13 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     if (msg.type === "lobbies" && Array.isArray(msg.lobbies)) {
       setLobbies(msg.lobbies);
       if (!sessionRef.current) setBusy(false);
+      return;
+    }
+    if (msg.type === "chat" && msg.line && msg.line.id && msg.line.text) {
+      setChat((prev) => {
+        if (prev.some((l) => l.id === msg.line!.id)) return prev;
+        return [...prev, msg.line!].slice(-50);
+      });
       return;
     }
     if (msg.type === "joined") {
@@ -5166,6 +5371,15 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       setError("");
       setDropped(false);
       reconnectTriesRef.current = 0;
+      if (Array.isArray(msg.view.chat)) {
+        const incoming = msg.view.chat;
+        setChat((prev) => {
+          const byId = new Map<string, ChatLine>();
+          for (const line of prev) byId.set(line.id, line);
+          for (const line of incoming) byId.set(line.id, line);
+          return [...byId.values()].sort((a, b) => a.at - b.at).slice(-50);
+        });
+      }
       if (msg.view.phase === "waiting") {
         clearTableAnims();
         setView(msg.view);
@@ -5218,6 +5432,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       forgetSession();
       setDropped(false);
       setView(null);
+      setChat([]);
       setScreen("pick");
     }
   }
@@ -5383,6 +5598,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   function exitToMenu() {
     closeSocket();
     if (dealTimerRef.current) clearTimeout(dealTimerRef.current);
+    setChat([]);
     onLeave();
   }
 
@@ -5391,6 +5607,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     forgetSession();
     closeSocket();
     if (dealTimerRef.current) clearTimeout(dealTimerRef.current);
+    setChat([]);
     onLeave();
   }
 
@@ -5864,6 +6081,12 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
           disabled={!view.host}
           onChange={(id) => send({ type: "skin", skin: id })}
         />
+        <RoomChat
+          variant="lobby"
+          lines={chat}
+          youId={view.youId}
+          onSend={(text) => send({ type: "chat", text })}
+        />
         {view.host ? (
           <button
             type="button"
@@ -5923,6 +6146,9 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         onReset={leaveOnline}
         resetLabel="← Leave"
         tableSkin={isTableSkin(view.tableSkin) ? view.tableSkin : "felt"}
+        chat={chat}
+        youId={view.youId}
+        onSendChat={(text) => send({ type: "chat", text })}
         onToLobby={view.phase === "finished" ? () => send({ type: "lobby" }) : undefined}
       />
       </>

@@ -17,6 +17,9 @@ const ROOM_TTL_MS = 3 * 60 * 60 * 1000;
 const REJOIN_MS = 10 * 60 * 1000;
 const WAITING_REJOIN_MS = 2 * 60 * 1000;
 const TABLE_SKINS = new Set(["felt", "peli"]);
+const CHAT_MAX_LEN = 120;
+const CHAT_MAX_LOG = 50;
+const CHAT_GAP_MS = 400;
 
 const rooms = new Map();
 const browsers = new Set();
@@ -112,6 +115,7 @@ function viewFor(room, playerId) {
     statusMsg: room.statusMsg,
     canStart: room.hostId === playerId && room.phase === "waiting" && room.seats.length >= MIN_PLAYERS,
     tableSkin: TABLE_SKINS.has(room.tableSkin) ? room.tableSkin : "felt",
+    chat: Array.isArray(room.chat) ? room.chat : [],
     lobby: room.seats.map((p) => ({
       id: p.id,
       name: p.id === playerId ? `${p.name} (you)` : p.name,
@@ -290,6 +294,7 @@ async function createRoom(ws, name, avatar, clerkToken) {
     burnCount: 0,
     boardSaved: false,
     tableSkin: "felt",
+    chat: [],
     statusMsg: "",
     createdAt: Date.now(),
     timers: [],
@@ -346,6 +351,36 @@ function later(room, fn, ms) {
   const t = setTimeout(fn, ms);
   room.timers.push(t);
   return t;
+}
+
+function sanitizeChat(text) {
+  return String(text || "")
+    .replace(/[\u0000-\u001F\u007F]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, CHAT_MAX_LEN);
+}
+
+function handleChat(room, player, text) {
+  const body = sanitizeChat(text);
+  if (!body) return;
+  const now = Date.now();
+  if (player.lastChatAt && now - player.lastChatAt < CHAT_GAP_MS) return;
+  player.lastChatAt = now;
+  const line = {
+    id: id(),
+    fromId: player.id,
+    name: player.name,
+    text: body,
+    at: now,
+  };
+  if (!Array.isArray(room.chat)) room.chat = [];
+  room.chat.push(line);
+  if (room.chat.length > CHAT_MAX_LOG) room.chat = room.chat.slice(-CHAT_MAX_LOG);
+  for (const p of room.seats) {
+    if (!p.ws) continue;
+    send(p.ws, { type: "chat", line });
+  }
 }
 
 function resetRoomToLobby(room) {
@@ -626,6 +661,9 @@ function onMessage(ws, data) {
     room.tableSkin = skin;
     broadcast(room);
     return;
+  }
+  if (type === "chat") {
+    return handleChat(room, player, msg.text);
   }
   if (type === "lobby") {
     return resetRoomToLobby(room);
