@@ -721,6 +721,10 @@ const server = http.createServer((req, res) => {
         rooms: rooms.size,
         waiting: publicLobbies().length,
         clerk: clerk.clerkConfigured(),
+        leaderboard: (() => {
+          const board = leaderboard.info();
+          return { clerk: board.clerk, players: board.players };
+        })(),
       })
     );
     return;

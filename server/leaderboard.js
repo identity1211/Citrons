@@ -130,13 +130,19 @@ async function pushUserToClerk(id, row) {
   });
 }
 
+function clerkUsersFromResponse(batch) {
+  if (Array.isArray(batch)) return batch;
+  if (batch && Array.isArray(batch.data)) return batch.data;
+  return [];
+}
+
 async function hydrateFromClerk() {
   if (!clerkKey()) return;
   let offset = 0;
   let found = 0;
   for (;;) {
     const batch = await clerkApi("GET", `/users?limit=100&offset=${offset}&order_by=-updated_at`);
-    const list = Array.isArray(batch) ? batch : [];
+    const list = clerkUsersFromResponse(batch);
     if (list.length === 0) break;
     for (const user of list) {
       const parsed = rowFromClerkUser(user);
@@ -157,6 +163,7 @@ async function hydrateFromClerk() {
       console.error("leaderboard file save after clerk hydrate failed", err);
     }
   }
+  console.log(`leaderboard hydrate clerk users with scores=${found} store=${Object.keys(store.users).length}`);
 }
 
 function recordGame(room) {
