@@ -5853,7 +5853,17 @@ export default function CardGame() {
   }
 
   function advanceTutorial() {
-    setTutStep((n) => Math.min(n + 1, TUTORIAL_STEPS.length - 1));
+    const next = Math.min(tutStepRef.current + 1, TUTORIAL_STEPS.length - 1);
+    tutStepRef.current = next;
+    setTutStep(next);
+  }
+
+  function maybeAdvanceTutorialAfterPlay(playerIndex: number) {
+    if (!tutorialRef.current) return;
+    const step = TUTORIAL_STEPS[tutStepRef.current];
+    if (!step) return;
+    if (playerIndex === 0 && step.wait === "play") advanceTutorial();
+    if (playerIndex === 1 && step.wait === "coach") advanceTutorial();
   }
 
   function skipTutorial() {
@@ -5926,6 +5936,7 @@ export default function CardGame() {
     }
 
     advanceTurn(playerIndex, result.players, result.extraTurn);
+    maybeAdvanceTutorialAfterPlay(playerIndex);
   }
 
   function runPickupSequence(
@@ -6560,21 +6571,45 @@ export default function CardGame() {
     if (phase !== "playing") return;
     if (flyAnim || burnAnim || pickupAnim || revealCard || drawAnim) return;
     const step = TUTORIAL_STEPS[tutStep];
-    if (step?.wait !== "coach" || !step.coachRank) return;
+    if (!step || (step.wait !== "coach" && step.wait !== "play")) return;
     if (currentPlayer !== 1) return;
 
-    const t = setTimeout(() => {
-      if (playLockRef.current) return;
+    let cancelled = false;
+    const tryCoachPlay = () => {
+      if (cancelled || playLockRef.current) return;
       if (currentPlayerRef.current !== 1 || phaseRef.current !== "playing") return;
       const pls = playersRef.current;
-      const idx = pls[1]?.hand.findIndex((c) => getRank(c) === step.coachRank) ?? -1;
-      if (idx < 0) return;
-      const result = applyPlay(1, { hand: [idx], faceUp: [] }, pls, drawDeckRef.current, discardRef.current);
-      runPlayResult(1, result, true);
-      advanceTutorial();
-    }, 950);
+      const deck = drawDeckRef.current;
+      const pile = discardRef.current;
+      const coach = pls[1];
+      if (!coach || playerFinished(coach)) return;
 
-    return () => clearTimeout(t);
+      let play: { hand: number[]; faceUp: number[] } | { faceDown: number } | null = null;
+      if (step.wait === "coach" && step.coachRank) {
+        const idx = coach.hand.findIndex((c) => getRank(c) === step.coachRank);
+        if (idx >= 0) play = { hand: [idx], faceUp: [] };
+      }
+      if (!play) {
+        const choice = aiChoosePlay(coach, pile, deck.length);
+        if (!choice) return;
+        play =
+          choice.kind === "faceDown"
+            ? { faceDown: choice.index }
+            : { hand: choice.hand, faceUp: choice.faceUp };
+      }
+
+      const result = applyPlay(1, play, pls, deck, pile);
+      if (result.played.length === 0 && !result.pickup) return;
+      runPlayResult(1, result, true);
+    };
+
+    const t = setTimeout(tryCoachPlay, 700);
+    const iv = setInterval(tryCoachPlay, 850);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+      clearInterval(iv);
+    };
   }, [tutorial, tutStep, phase, currentPlayer, flyAnim, burnAnim, pickupAnim, revealCard, drawAnim]);
 
   const startGame = useCallback((playerCount: number, asTutorial = false) => {
@@ -6867,7 +6902,6 @@ export default function CardGame() {
       return;
     }
     runPlayResult(0, result, true);
-    if (tutLocked() && step?.wait === "play") advanceTutorial();
   }
 
   function executePickUp(tableTake?: TableTake | null) {
