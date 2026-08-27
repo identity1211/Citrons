@@ -2671,6 +2671,57 @@ const FELT_BG =
 const FELT_TEXTURE =
   "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px), repeating-linear-gradient(90deg, transparent, transparent 2px, rgba(255,255,255,0.02) 2px, rgba(255,255,255,0.02) 4px)";
 const WOOD_EDGE = "#3e2723";
+const PELI_SKIN_SRC = "skins/peli.jpg";
+
+type TableSkinId = "felt" | "peli";
+
+const TABLE_SKINS: { id: TableSkinId; name: string; src?: string }[] = [
+  { id: "felt", name: "Felt" },
+  { id: "peli", name: "Peli case", src: PELI_SKIN_SRC },
+];
+
+function isTableSkin(id: unknown): id is TableSkinId {
+  return id === "felt" || id === "peli";
+}
+
+function feltShellStyle(skin: TableSkinId): CSSProperties {
+  if (skin === "peli") {
+    return {
+      backgroundColor: "#121212",
+      backgroundImage: `url(${PELI_SKIN_SRC})`,
+      backgroundSize: "cover",
+      backgroundPosition: "center 30%",
+      backgroundRepeat: "no-repeat",
+      boxShadow: "inset 0 0 0 10px #0a0a0a, inset 0 0 0 12px #2a2a2a",
+      ["--felt" as string]: "#1a1a1a",
+      ["--wood" as string]: "#0a0a0a",
+    };
+  }
+  return {
+    background: FELT_BG,
+    backgroundImage: `${FELT_TEXTURE}, ${FELT_BG}`,
+    boxShadow: `inset 0 0 0 12px ${WOOD_EDGE}, inset 0 0 0 14px #5d4037`,
+    ["--felt" as string]: "#1a6b3c",
+    ["--wood" as string]: WOOD_EDGE,
+  };
+}
+
+function tableBoardStyle(skin: TableSkinId, short: boolean): CSSProperties {
+  if (skin === "peli") {
+    return {
+      backgroundColor: "#141414",
+      backgroundImage: `url(${PELI_SKIN_SRC})`,
+      backgroundSize: "cover",
+      backgroundPosition: "center 28%",
+      backgroundRepeat: "no-repeat",
+      border: short ? "6px solid #0d0d0d" : "10px solid #0d0d0d",
+    };
+  }
+  return {
+    background: "#1a6b3c",
+    border: short ? "6px solid #145230" : "10px solid #145230",
+  };
+}
 const LOBBY_FAN: { card: string; rot: number; x: number; y: number; delay: number }[] = [
   { card: "2♦", rot: -28, x: -78, y: 14, delay: 0 },
   { card: "6♠", rot: -14, x: -40, y: 4, delay: 0.07 },
@@ -2684,11 +2735,13 @@ function FeltShell({
   overlay,
   center,
   style,
+  skin = "felt",
 }: {
   children: ReactNode;
   overlay?: ReactNode;
   center?: boolean;
   style?: CSSProperties;
+  skin?: TableSkinId;
 }) {
   return (
     <div
@@ -2700,14 +2753,19 @@ function FeltShell({
         overflow: "hidden",
         display: "flex",
         flexDirection: "column",
-        background: FELT_BG,
-        backgroundImage: `${FELT_TEXTURE}, ${FELT_BG}`,
-        boxShadow: `inset 0 0 0 12px ${WOOD_EDGE}, inset 0 0 0 14px #5d4037`,
-        ["--felt" as string]: "#1a6b3c",
-        ["--wood" as string]: WOOD_EDGE,
+        ...feltShellStyle(skin),
       }}
     >
-      <div className="lobby-felt-glow" />
+      {skin === "felt" ? <div className="lobby-felt-glow" /> : (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            background: "rgba(0,0,0,0.42)",
+            pointerEvents: "none",
+          }}
+        />
+      )}
       <div id="clerk-captcha" style={{ position: "absolute", left: 0, bottom: 0, zIndex: 50 }} />
       {overlay ? (
         <div
@@ -2740,6 +2798,80 @@ function FeltShell({
       >
         {children}
       </div>
+    </div>
+  );
+}
+
+function TableSkinPicker({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: TableSkinId;
+  onChange?: (id: TableSkinId) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div style={{ width: "100%", maxWidth: 300 }}>
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 800,
+          letterSpacing: 1.3,
+          textTransform: "uppercase",
+          color: "rgba(255,255,255,0.62)",
+          marginBottom: 8,
+          textAlign: "left",
+        }}
+      >
+        Table
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        {TABLE_SKINS.map((s) => {
+          const on = value === s.id;
+          return (
+            <button
+              key={s.id}
+              type="button"
+              disabled={disabled}
+              onClick={() => onChange?.(s.id)}
+              style={{
+                flex: 1,
+                height: 64,
+                borderRadius: 10,
+                border: on ? "2px solid #f1c40f" : "1.5px solid rgba(255,255,255,0.28)",
+                padding: 0,
+                overflow: "hidden",
+                cursor: disabled ? "default" : "pointer",
+                background:
+                  s.id === "peli"
+                    ? `#1a1a1a url(${PELI_SKIN_SRC}) center 30% / cover no-repeat`
+                    : FELT_BG,
+                position: "relative",
+              }}
+            >
+              <span
+                style={{
+                  position: "absolute",
+                  left: 8,
+                  bottom: 6,
+                  color: "#f5f0e6",
+                  fontSize: 11,
+                  fontWeight: 800,
+                  textShadow: "0 1px 4px rgba(0,0,0,0.8)",
+                }}
+              >
+                {s.name}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      {disabled ? (
+        <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", marginTop: 6, textAlign: "left" }}>
+          Host chooses the table
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -3636,6 +3768,7 @@ function Table({
   onToLobby,
   resetLabel,
   tutorial,
+  tableSkin = "felt",
 }: {
   players: PlayerState[];
   drawDeck: string[];
@@ -3669,6 +3802,7 @@ function Table({
   onReset: () => void;
   onToLobby?: () => void;
   resetLabel?: string;
+  tableSkin?: TableSkinId;
   tutorial?: {
     text: string;
     showNext: boolean;
@@ -3901,7 +4035,7 @@ function Table({
       style={{
         width: "100%",
         height: "100%",
-        background: "#145230",
+        background: tableSkin === "peli" ? "#111" : "#145230",
         position: "relative",
         overflow: "hidden",
         boxSizing: "border-box",
@@ -4011,8 +4145,7 @@ function Table({
           width: "100%",
           height: "100%",
           borderRadius: short ? 18 : 48,
-          background: "#1a6b3c",
-          border: short ? "6px solid #145230" : "10px solid #145230",
+          ...tableBoardStyle(tableSkin, short),
           display: "grid",
           gridTemplateColumns: `${sideColW}px minmax(0, 1fr) ${sideColW}px`,
           gridTemplateRows: "auto minmax(0, 1fr) auto",
@@ -4027,6 +4160,7 @@ function Table({
           minHeight: 0,
         }}
       >
+        {tableSkin === "felt" ? (
         <div
           style={{
             position: "absolute",
@@ -4037,6 +4171,7 @@ function Table({
             pointerEvents: "none",
           }}
         />
+        ) : null}
 
         <div
           style={{
@@ -4396,6 +4531,7 @@ type OnlineView = {
   burnCount: number;
   statusMsg: string;
   canStart: boolean;
+  tableSkin: TableSkinId;
   lobby: { id: string; name: string; avatar?: string; ready: boolean; connected: boolean; host: boolean }[];
 };
 
@@ -5429,8 +5565,9 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     send({ type: "pickup", tableTake: null });
   }
 
-  const formShell = (children: ReactNode) => (
+  const formShell = (children: ReactNode, skin: TableSkinId = "felt") => (
     <FeltShell
+      skin={skin}
       center
       overlay={
         <>
@@ -5671,6 +5808,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   }
 
   if (screen === "waiting" && view) {
+    const waitSkin = isTableSkin(view.tableSkin) ? view.tableSkin : "felt";
     return formShell(
       <>
         <div style={{ fontSize: 22, fontWeight: 700, color: "#f5f0e6", fontFamily: 'Georgia, "Times New Roman", serif' }}>
@@ -5721,6 +5859,11 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
             </div>
           ))}
         </div>
+        <TableSkinPicker
+          value={waitSkin}
+          disabled={!view.host}
+          onChange={(id) => send({ type: "skin", skin: id })}
+        />
         {view.host ? (
           <button
             type="button"
@@ -5735,7 +5878,8 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
           <div style={{ color: "rgba(255,255,255,0.7)", fontSize: 14 }}>Waiting for the host to start</div>
         )}
         {droppedOverlay}
-      </>
+      </>,
+      waitSkin
     );
   }
 
@@ -5778,6 +5922,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         onCancelPickupAwait={() => setPickupAwaitTable(false)}
         onReset={leaveOnline}
         resetLabel="← Leave"
+        tableSkin={isTableSkin(view.tableSkin) ? view.tableSkin : "felt"}
         onToLobby={view.phase === "finished" ? () => send({ type: "lobby" }) : undefined}
       />
       </>

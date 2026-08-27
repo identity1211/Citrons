@@ -16,6 +16,7 @@ const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const ROOM_TTL_MS = 3 * 60 * 60 * 1000;
 const REJOIN_MS = 10 * 60 * 1000;
 const WAITING_REJOIN_MS = 2 * 60 * 1000;
+const TABLE_SKINS = new Set(["felt", "peli"]);
 
 const rooms = new Map();
 const browsers = new Set();
@@ -110,6 +111,7 @@ function viewFor(room, playerId) {
     burnCount: room.burnCount,
     statusMsg: room.statusMsg,
     canStart: room.hostId === playerId && room.phase === "waiting" && room.seats.length >= MIN_PLAYERS,
+    tableSkin: TABLE_SKINS.has(room.tableSkin) ? room.tableSkin : "felt",
     lobby: room.seats.map((p) => ({
       id: p.id,
       name: p.id === playerId ? `${p.name} (you)` : p.name,
@@ -287,6 +289,7 @@ async function createRoom(ws, name, avatar, clerkToken) {
     swapSeconds: SWAP_SECONDS,
     burnCount: 0,
     boardSaved: false,
+    tableSkin: "felt",
     statusMsg: "",
     createdAt: Date.now(),
     timers: [],
@@ -614,6 +617,15 @@ function onMessage(ws, data) {
     if (player.id !== room.hostId) return error(ws, "Only the host can start");
     if (room.seats.length < MIN_PLAYERS) return error(ws, "Need at least 2 players");
     return startGame(room);
+  }
+  if (type === "skin") {
+    if (player.id !== room.hostId) return error(ws, "Only the host can change the table");
+    if (room.phase !== "waiting") return error(ws, "Table can only be changed before the game starts");
+    const skin = String(msg.skin || "");
+    if (!TABLE_SKINS.has(skin)) return error(ws, "Unknown table skin");
+    room.tableSkin = skin;
+    broadcast(room);
+    return;
   }
   if (type === "lobby") {
     return resetRoomToLobby(room);
