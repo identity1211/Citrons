@@ -597,10 +597,10 @@ function tutorialLockedAt(step: number): boolean {
 
 // ─── CSS keyframes ───────────────────────────────────────────────────────────
 
-const STYLE_ID = "card-game-keyframes-v13";
+const STYLE_ID = "card-game-keyframes-v15";
 function ensureKeyframes() {
   if (typeof document === "undefined") return;
-  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7", "card-game-keyframes-v8", "card-game-keyframes-v9", "card-game-keyframes-v10", "card-game-keyframes-v11", "card-game-keyframes-v12"]) {
+  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7", "card-game-keyframes-v8", "card-game-keyframes-v9", "card-game-keyframes-v10", "card-game-keyframes-v11", "card-game-keyframes-v12", "card-game-keyframes-v13", "card-game-keyframes-v14"]) {
     document.getElementById(id)?.remove();
   }
   if (document.getElementById(STYLE_ID)) return;
@@ -758,9 +758,23 @@ function ensureKeyframes() {
     .winner-banner { animation: winnerBannerIn 0.55s cubic-bezier(0.22, 1, 0.36, 1) both; }
     .winner-burst { animation: winnerBurst 0.9s ease-out both; pointer-events: none; }
     .winner-confetti { animation: winnerConfetti var(--cdur) linear var(--cdelay) both; pointer-events: none; }
+    @keyframes chatToastIn {
+      0% { opacity: 0; transform: translateY(12px); }
+      100% { opacity: 1; transform: translateY(0); }
+    }
+    .chat-toast { animation: chatToastIn 0.22s ease-out both; }
+    .chat-toast-stack {
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      gap: 6px;
+      pointer-events: none;
+      width: 100%;
+    }
     @media (prefers-reduced-motion: reduce) {
       .winner-banner { animation: none !important; }
       .winner-burst, .winner-confetti { animation: none !important; opacity: 0 !important; }
+      .chat-toast { animation: none !important; }
     }
   `;
   document.head.appendChild(style);
@@ -788,14 +802,45 @@ function cardBox(w: number, h: number) {
   };
 }
 
+function pinLayoutScroll() {
+  try {
+    window.scrollTo(0, 0);
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+  } catch {
+    /* ignore */
+  }
+}
+
+function readVisualMetrics() {
+  const innerW = window.innerWidth;
+  const innerH = window.innerHeight;
+  const vv = window.visualViewport;
+  const vvW = vv?.width ?? innerW;
+  const vvH = vv?.height ?? innerH;
+  const offsetTop = vv?.offsetTop ?? 0;
+  const offsetLeft = vv?.offsetLeft ?? 0;
+  const covered = Math.max(0, innerH - (vvH + offsetTop));
+  return {
+    innerW,
+    innerH,
+    vvW,
+    vvH,
+    offsetTop,
+    offsetLeft,
+    covered,
+    keyboard: covered > 120,
+  };
+}
+
 function useViewport() {
   const [vp, setVp] = useState({ w: 1024, h: 700 });
   useEffect(() => {
     const fit = () => {
-      const vv = window.visualViewport;
+      const m = readVisualMetrics();
       setVp({
-        w: Math.max(1, Math.round(vv?.width ?? window.innerWidth)),
-        h: Math.max(1, Math.round(vv?.height ?? window.innerHeight)),
+        w: Math.max(1, Math.round(m.keyboard ? m.innerW : m.vvW)),
+        h: Math.max(1, Math.round(m.keyboard ? m.innerH : m.vvH)),
       });
     };
     fit();
@@ -811,6 +856,33 @@ function useViewport() {
     };
   }, []);
   return vp;
+}
+
+function useVisualInset() {
+  const [inset, setInset] = useState({ bottom: 0, left: 0, width: 1024, height: 700 });
+  useEffect(() => {
+    const fit = () => {
+      const m = readVisualMetrics();
+      setInset({
+        bottom: Math.round(m.covered),
+        left: Math.round(m.offsetLeft),
+        width: Math.max(1, Math.round(m.vvW)),
+        height: Math.max(1, Math.round(m.vvH)),
+      });
+    };
+    fit();
+    window.addEventListener("resize", fit);
+    window.addEventListener("orientationchange", fit);
+    window.visualViewport?.addEventListener("resize", fit);
+    window.visualViewport?.addEventListener("scroll", fit);
+    return () => {
+      window.removeEventListener("resize", fit);
+      window.removeEventListener("orientationchange", fit);
+      window.visualViewport?.removeEventListener("resize", fit);
+      window.visualViewport?.removeEventListener("scroll", fit);
+    };
+  }, []);
+  return inset;
 }
 
 function isStandaloneDisplay() {
@@ -2877,6 +2949,7 @@ function TableSkinPicker({
 }
 
 type ChatLine = { id: string; fromId: string; name: string; text: string; at: number };
+type ChatToast = { id: string; name: string; text: string; until: number };
 
 function RoomChat({
   lines,
@@ -2892,8 +2965,14 @@ function RoomChat({
   const [draft, setDraft] = useState("");
   const [open, setOpen] = useState(variant === "lobby");
   const logRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const seenRef = useRef(0);
+  const seenIdsRef = useRef<Set<string>>(new Set());
+  const primedRef = useRef(false);
   const [unread, setUnread] = useState(0);
+  const [toasts, setToasts] = useState<ChatToast[]>([]);
+  const [kbGuess, setKbGuess] = useState(0);
+  const inset = useVisualInset();
 
   useEffect(() => {
     if (open) {
@@ -2907,6 +2986,56 @@ function RoomChat({
     setUnread(extra);
   }, [lines, open]);
 
+  useEffect(() => {
+    if (!primedRef.current) {
+      primedRef.current = true;
+      for (const line of lines) seenIdsRef.current.add(line.id);
+      return;
+    }
+    const fresh = lines.filter((line) => !seenIdsRef.current.has(line.id));
+    for (const line of fresh) seenIdsRef.current.add(line.id);
+    if (variant !== "table" || open || fresh.length === 0) return;
+    const incoming = fresh.filter((line) => !youId || line.fromId !== youId);
+    if (incoming.length === 0) return;
+    const until = Date.now() + 5000;
+    setToasts((prev) =>
+      [...prev, ...incoming.map((line) => ({ id: line.id, name: line.name, text: line.text, until }))].slice(-4)
+    );
+  }, [lines, open, variant, youId]);
+
+  useEffect(() => {
+    if (toasts.length === 0) return;
+    const tick = window.setInterval(() => {
+      const now = Date.now();
+      setToasts((prev) => prev.filter((t) => t.until > now));
+    }, 200);
+    return () => window.clearInterval(tick);
+  }, [toasts.length]);
+
+  useEffect(() => {
+    if (open) setToasts([]);
+  }, [open]);
+
+  function pinChat() {
+    pinLayoutScroll();
+    window.setTimeout(pinLayoutScroll, 50);
+    window.setTimeout(pinLayoutScroll, 180);
+    window.setTimeout(pinLayoutScroll, 400);
+  }
+
+  function onComposerFocus() {
+    pinChat();
+    const m = readVisualMetrics();
+    const touch = window.matchMedia("(pointer: coarse)").matches || "ontouchstart" in window;
+    if (touch && m.covered < 80) {
+      setKbGuess(Math.round(Math.min(380, window.innerHeight * 0.45)));
+    }
+  }
+
+  function onComposerBlur() {
+    window.setTimeout(() => setKbGuess(0), 80);
+  }
+
   function submit() {
     const text = draft.trim();
     if (!text) return;
@@ -2918,8 +3047,11 @@ function RoomChat({
     <div
       ref={logRef}
       style={{
-        height: variant === "lobby" ? 112 : 132,
+        height: variant === "lobby" ? 112 : undefined,
+        flex: variant === "table" ? 1 : undefined,
+        minHeight: variant === "table" ? 48 : undefined,
         overflowY: "auto",
+        WebkitOverflowScrolling: "touch",
         padding: "6px 8px",
         background: "rgba(0,0,0,0.28)",
         borderRadius: variant === "lobby" ? 8 : "0",
@@ -2952,14 +3084,20 @@ function RoomChat({
         e.preventDefault();
         submit();
       }}
-      style={{ display: "flex", gap: 6, marginTop: variant === "lobby" ? 6 : 0 }}
+      style={{ display: "flex", gap: 6, marginTop: variant === "lobby" ? 6 : 0, flexShrink: 0 }}
     >
       <input
+        ref={inputRef}
         value={draft}
         onChange={(e) => setDraft(e.target.value.slice(0, 120))}
+        onFocus={onComposerFocus}
+        onBlur={onComposerBlur}
         placeholder="Message"
         maxLength={120}
         autoComplete="off"
+        autoCorrect="off"
+        enterKeyHint="send"
+        inputMode="text"
         style={{
           flex: 1,
           height: 36,
@@ -3014,21 +3152,73 @@ function RoomChat({
     );
   }
 
+  const kbLift = Math.max(inset.bottom, kbGuess);
+  const showToasts = !open && toasts.length > 0;
+  const dockWidth = open || showToasts ? Math.min(260, Math.max(168, inset.width - 24)) : undefined;
+  const bottom = open
+    ? `max(${kbLift + 8}px, calc(env(safe-area-inset-bottom, 0px) + env(keyboard-inset-bottom, 0px) + 8px))`
+    : `max(${kbLift + 64}px, calc(env(safe-area-inset-bottom, 0px) + env(keyboard-inset-bottom, 0px) + 58px))`;
+
   return (
     <div
       style={{
-        position: "absolute",
-        left: FELT_INSET_LEFT,
-        bottom: "max(64px, calc(env(safe-area-inset-bottom) + 58px))",
-        zIndex: 91,
-        width: open ? "min(260px, calc(100% - 140px))" : "auto",
-        pointerEvents: "auto",
+        position: "fixed",
+        left: `max(${8 + inset.left}px, env(safe-area-inset-left))`,
+        bottom,
+        zIndex: 120,
+        width: dockWidth,
+        maxWidth: "min(260px, calc(100% - 16px))",
+        maxHeight: open ? Math.max(148, inset.height - 16) : undefined,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "flex-start",
+        pointerEvents: "none",
       }}
     >
+      {showToasts ? (
+        <div className="chat-toast-stack" style={{ marginBottom: 6 }}>
+          {toasts.map((toast) => (
+            <div
+              key={toast.id}
+              className="chat-toast"
+              style={{
+                width: "100%",
+                boxSizing: "border-box",
+                padding: "7px 10px",
+                borderRadius: 10,
+                background: "rgba(8, 18, 10, 0.92)",
+                border: "1px solid rgba(241,196,15,0.4)",
+                boxShadow: "0 8px 20px rgba(0,0,0,0.35)",
+                textAlign: "left",
+              }}
+            >
+              <div style={{ color: "#f1c40f", fontSize: 10, fontWeight: 800, letterSpacing: 0.4, marginBottom: 2 }}>
+                {toast.name}
+              </div>
+              <div
+                style={{
+                  color: "#f5f0e6",
+                  fontSize: 13,
+                  lineHeight: 1.3,
+                  overflow: "hidden",
+                  maxHeight: 52,
+                  overflowWrap: "anywhere",
+                }}
+              >
+                {toast.text}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          setOpen((v) => !v);
+          pinChat();
+        }}
         style={{
+          pointerEvents: "auto",
           padding: "7px 10px",
           borderRadius: open ? "10px 10px 0 0" : 10,
           border: "1px solid rgba(241,196,15,0.4)",
@@ -3047,11 +3237,20 @@ function RoomChat({
       {open ? (
         <div
           style={{
-            borderRadius: "0 0 10px 10px",
-            background: "rgba(8, 18, 10, 0.92)",
+            pointerEvents: "auto",
+            width: "100%",
+            minWidth: 168,
+            boxSizing: "border-box",
+            borderRadius: "0 10px 10px 10px",
+            background: "rgba(8, 18, 10, 0.94)",
             border: "1px solid rgba(241,196,15,0.4)",
             borderTop: "none",
             padding: 6,
+            display: "flex",
+            flexDirection: "column",
+            minHeight: 0,
+            flex: 1,
+            overflow: "hidden",
           }}
         >
           {log}
