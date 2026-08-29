@@ -686,10 +686,10 @@ function tutorialLockedAt(step: number): boolean {
 
 // ─── CSS keyframes ───────────────────────────────────────────────────────────
 
-const STYLE_ID = "card-game-keyframes-v15";
+const STYLE_ID = "card-game-keyframes-v16";
 function ensureKeyframes() {
   if (typeof document === "undefined") return;
-  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7", "card-game-keyframes-v8", "card-game-keyframes-v9", "card-game-keyframes-v10", "card-game-keyframes-v11", "card-game-keyframes-v12", "card-game-keyframes-v13", "card-game-keyframes-v14"]) {
+  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7", "card-game-keyframes-v8", "card-game-keyframes-v9", "card-game-keyframes-v10", "card-game-keyframes-v11", "card-game-keyframes-v12", "card-game-keyframes-v13", "card-game-keyframes-v14", "card-game-keyframes-v15"]) {
     document.getElementById(id)?.remove();
   }
   if (document.getElementById(STYLE_ID)) return;
@@ -860,10 +860,33 @@ function ensureKeyframes() {
       pointer-events: none;
       width: 100%;
     }
+    .emoji-rail {
+      display: flex;
+      gap: 4px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      scroll-snap-type: x mandatory;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+      overscroll-behavior-x: contain;
+    }
+    .emoji-rail::-webkit-scrollbar { display: none; }
+    .emoji-rail button { scroll-snap-align: start; flex: 0 0 40px; }
+    @keyframes emojiReactFly {
+      0% { opacity: 0; transform: translate3d(0, 10px, 0) scale(0.45); }
+      12% { opacity: 1; transform: translate3d(-8px, -28px, 0) scale(1.22); }
+      72% { opacity: 1; }
+      100% { opacity: 0; transform: translate3d(var(--ex), var(--ey), 0) scale(0.92) rotate(var(--erot)); }
+    }
+    .emoji-react-fly {
+      animation: emojiReactFly 1.65s ease-out both;
+      pointer-events: none;
+    }
     @media (prefers-reduced-motion: reduce) {
       .winner-banner { animation: none !important; }
       .winner-burst, .winner-confetti { animation: none !important; opacity: 0 !important; }
       .chat-toast { animation: none !important; }
+      .emoji-react-fly { animation: none !important; opacity: 0 !important; }
     }
   `;
   document.head.appendChild(style);
@@ -3318,6 +3341,158 @@ function RoomChat({
   );
 }
 
+const REACT_EMOJIS = [
+  "🍋",
+  "😂",
+  "🔥",
+  "💀",
+  "😎",
+  "😭",
+  "👏",
+  "🃏",
+  "😱",
+  "🤡",
+  "💪",
+  "👀",
+  "🫠",
+  "🫡",
+  "🫣",
+  "🤣",
+  "😈",
+  "😤",
+  "👑",
+  "🍀",
+  "🎯",
+  "💤",
+  "🤔",
+  "💩",
+  "❤️",
+  "🤝",
+  "🙃",
+  "🥴",
+  "😬",
+  "🤙",
+];
+
+type ReactBurst = { id: string; emoji: string; fromId: string };
+type EmojiFly = { id: string; emoji: string; x: number; rot: number };
+
+function driftFromId(id: string) {
+  let n = 0;
+  for (let i = 0; i < id.length; i++) n = (n * 33 + id.charCodeAt(i)) | 0;
+  return { x: (Math.abs(n) % 72) - 36, rot: (Math.abs(n >> 8) % 44) - 22 };
+}
+
+function EmojiDock({ onPick }: { onPick: (emoji: string) => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div
+      style={{
+        position: "absolute",
+        right: "max(8px, env(safe-area-inset-right))",
+        bottom: "max(64px, calc(env(safe-area-inset-bottom) + 56px))",
+        zIndex: 88,
+        display: "flex",
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 6,
+        pointerEvents: "auto",
+      }}
+    >
+      {open ? (
+        <div
+          style={{
+            width: 5 * 44,
+            padding: "6px 6px",
+            borderRadius: 12,
+            background: "rgba(8, 18, 10, 0.92)",
+            border: "1px solid rgba(241,196,15,0.4)",
+            boxShadow: "0 8px 20px rgba(0,0,0,0.35)",
+          }}
+        >
+          <div className="emoji-rail">
+            {REACT_EMOJIS.map((face) => (
+              <button
+                key={face}
+                type="button"
+                onClick={() => onPick(face)}
+                aria-label={`React ${face}`}
+                style={{
+                  width: 40,
+                  height: 40,
+                  borderRadius: 10,
+                  border: "none",
+                  background: "transparent",
+                  fontSize: 26,
+                  lineHeight: "40px",
+                  cursor: "pointer",
+                  padding: 0,
+                }}
+              >
+                {face}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      <button
+        type="button"
+        aria-label={open ? "Close reactions" : "Reactions"}
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          width: 44,
+          height: 44,
+          borderRadius: 12,
+          border: "1px solid rgba(241,196,15,0.45)",
+          background: "rgba(8, 18, 10, 0.9)",
+          color: "#f5f0e6",
+          fontSize: 22,
+          cursor: "pointer",
+          boxShadow: "0 6px 16px rgba(0,0,0,0.3)",
+          flexShrink: 0,
+        }}
+      >
+        {open ? "×" : "😂"}
+      </button>
+    </div>
+  );
+}
+
+function EmojiFlyLayer({ flies }: { flies: EmojiFly[] }) {
+  if (flies.length === 0) return null;
+  return (
+    <div
+      style={{
+        position: "absolute",
+        inset: 0,
+        zIndex: 125,
+        pointerEvents: "none",
+        overflow: "hidden",
+      }}
+    >
+      {flies.map((fly) => (
+        <div
+          key={fly.id}
+          className="emoji-react-fly"
+          style={{
+            position: "absolute",
+            right: 22,
+            bottom: 72,
+            fontSize: 42,
+            lineHeight: 1,
+            ["--ex" as string]: `${fly.x}px`,
+            ["--ey" as string]: "-78vh",
+            ["--erot" as string]: `${fly.rot}deg`,
+            textShadow: "0 6px 16px rgba(0,0,0,0.35)",
+          }}
+        >
+          {fly.emoji}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function LobbyCardFan() {
   return (
     <div
@@ -4214,6 +4389,8 @@ function Table({
   chat,
   youId,
   onSendChat,
+  reacts,
+  onSendReact,
 }: {
   players: PlayerState[];
   drawDeck: string[];
@@ -4251,6 +4428,8 @@ function Table({
   chat?: ChatLine[];
   youId?: string;
   onSendChat?: (text: string) => void;
+  reacts?: ReactBurst[];
+  onSendReact?: (emoji: string) => void;
   tutorial?: {
     text: string;
     showNext: boolean;
@@ -4367,6 +4546,8 @@ function Table({
   const [peekDown, setPeekDown] = useState<Record<number, boolean>>({});
   const [outNote, setOutNote] = useState("");
   const seenFinishRef = useRef(0);
+  const [emojiFlies, setEmojiFlies] = useState<EmojiFly[]>([]);
+  const seenReactRef = useRef(new Set<string>());
   const winnerIdx = finishOrder.length > 0 ? finishOrder[0] : null;
   const winner = winnerIdx != null ? players[winnerIdx] : null;
   const tableBusy = !!(flyAnim || burnAnim || pickupAnim || revealCard || drawAnim);
@@ -4413,6 +4594,30 @@ function Table({
     const t = window.setTimeout(() => setOutNote(""), 2400);
     return () => window.clearTimeout(t);
   }, [finishOrder, phase, players]);
+
+  function spawnEmojiFly(id: string, emoji: string) {
+    const drift = driftFromId(id);
+    setEmojiFlies((prev) => [...prev, { id, emoji, x: drift.x, rot: drift.rot }].slice(-10));
+    window.setTimeout(() => {
+      setEmojiFlies((prev) => prev.filter((f) => f.id !== id));
+    }, 1700);
+  }
+
+  useEffect(() => {
+    for (const burst of reacts ?? []) {
+      if (seenReactRef.current.has(burst.id)) continue;
+      seenReactRef.current.add(burst.id);
+      if (youId && burst.fromId === youId) continue;
+      spawnEmojiFly(burst.id, burst.emoji);
+    }
+  }, [reacts, youId]);
+
+  function pickReact(emoji: string) {
+    const id = `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    seenReactRef.current.add(id);
+    spawnEmojiFly(id, emoji);
+    onSendReact?.(emoji);
+  }
   const short = vp.h < 560;
   const ownerH = short ? Math.round(clamp(vp.h * 0.26, 64, 86)) : 78;
   const ownerW = Math.round(ownerH * 0.72);
@@ -4950,6 +5155,8 @@ function Table({
           pointerEvents: "auto",
         }}
       />
+      {phase === "playing" || phase === "swap" || phase === "finished" ? <EmojiDock onPick={pickReact} /> : null}
+      <EmojiFlyLayer flies={emojiFlies} />
       {onSendChat ? (
         <RoomChat variant="table" lines={chat ?? []} youId={youId} onSend={onSendChat} />
       ) : null}
@@ -5474,6 +5681,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   const [dropped, setDropped] = useState(false);
   const [savedGame, setSavedGame] = useState<MpSession | null>(() => readMpSession());
   const [chat, setChat] = useState<ChatLine[]>([]);
+  const [reacts, setReacts] = useState<ReactBurst[]>([]);
 
   const wsRef = useRef<WebSocket | null>(null);
   const pingRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -5648,6 +5856,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       anim?: NetAnim;
       lobbies?: LobbyInfo[];
       line?: ChatLine;
+      react?: ReactBurst;
     };
     try {
       msg = JSON.parse(raw);
@@ -5672,6 +5881,13 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       setChat((prev) => {
         if (prev.some((l) => l.id === msg.line!.id)) return prev;
         return [...prev, msg.line!].slice(-50);
+      });
+      return;
+    }
+    if (msg.type === "react" && msg.react && msg.react.id && msg.react.emoji) {
+      setReacts((prev) => {
+        if (prev.some((r) => r.id === msg.react!.id)) return prev;
+        return [...prev, msg.react!].slice(-20);
       });
       return;
     }
@@ -5760,6 +5976,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       setDropped(false);
       setView(null);
       setChat([]);
+      setReacts([]);
       setScreen("pick");
     }
   }
@@ -5926,6 +6143,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     closeSocket();
     if (dealTimerRef.current) clearTimeout(dealTimerRef.current);
     setChat([]);
+    setReacts([]);
     onLeave();
   }
 
@@ -5935,6 +6153,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     closeSocket();
     if (dealTimerRef.current) clearTimeout(dealTimerRef.current);
     setChat([]);
+    setReacts([]);
     onLeave();
   }
 
@@ -6476,6 +6695,8 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         chat={chat}
         youId={view.youId}
         onSendChat={(text) => send({ type: "chat", text })}
+        reacts={reacts}
+        onSendReact={(emoji) => send({ type: "react", emoji })}
         onToLobby={view.phase === "finished" ? () => send({ type: "lobby" }) : undefined}
       />
       </>

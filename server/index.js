@@ -20,6 +20,39 @@ const TABLE_SKINS = new Set(["felt", "peli"]);
 const CHAT_MAX_LEN = 120;
 const CHAT_MAX_LOG = 50;
 const CHAT_GAP_MS = 400;
+const REACT_GAP_MS = 450;
+const REACT_EMOJIS = new Set([
+  "🍋",
+  "😂",
+  "🔥",
+  "💀",
+  "😎",
+  "😭",
+  "👏",
+  "🃏",
+  "😱",
+  "🤡",
+  "💪",
+  "👀",
+  "🫠",
+  "🫡",
+  "🫣",
+  "🤣",
+  "😈",
+  "😤",
+  "👑",
+  "🍀",
+  "🎯",
+  "💤",
+  "🤔",
+  "💩",
+  "❤️",
+  "🤝",
+  "🙃",
+  "🥴",
+  "😬",
+  "🤙",
+]);
 
 const rooms = new Map();
 const browsers = new Set();
@@ -361,6 +394,19 @@ function sanitizeChat(text) {
     .slice(0, CHAT_MAX_LEN);
 }
 
+function handleReact(room, player, emoji) {
+  const face = String(emoji || "");
+  if (!REACT_EMOJIS.has(face)) return;
+  const now = Date.now();
+  if (player.lastReactAt && now - player.lastReactAt < REACT_GAP_MS) return;
+  player.lastReactAt = now;
+  const react = { id: id(), emoji: face, fromId: player.id, name: player.name, at: now };
+  for (const p of room.seats) {
+    if (!p.ws) continue;
+    send(p.ws, { type: "react", react });
+  }
+}
+
 function handleChat(room, player, text) {
   const body = sanitizeChat(text);
   if (!body) return;
@@ -667,6 +713,9 @@ function onMessage(ws, data) {
   }
   if (type === "chat") {
     return handleChat(room, player, msg.text);
+  }
+  if (type === "react") {
+    return handleReact(room, player, msg.emoji);
   }
   if (type === "lobby") {
     return resetRoomToLobby(room);
