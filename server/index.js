@@ -24,6 +24,7 @@ const REACT_GAP_MS = 450;
 const REACT_EMOJIS = new Set([
   "🍋",
   "😂",
+  "⁶🤷⁷",
   "🔥",
   "💀",
   "😎",

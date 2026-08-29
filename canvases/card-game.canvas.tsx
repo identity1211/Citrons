@@ -597,10 +597,10 @@ function tutorialLockedAt(step: number): boolean {
 
 // ─── CSS keyframes ───────────────────────────────────────────────────────────
 
-const STYLE_ID = "card-game-keyframes-v16";
+const STYLE_ID = "card-game-keyframes-v17";
 function ensureKeyframes() {
   if (typeof document === "undefined") return;
-  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7", "card-game-keyframes-v8", "card-game-keyframes-v9", "card-game-keyframes-v10", "card-game-keyframes-v11", "card-game-keyframes-v12", "card-game-keyframes-v13", "card-game-keyframes-v14", "card-game-keyframes-v15"]) {
+  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7", "card-game-keyframes-v8", "card-game-keyframes-v9", "card-game-keyframes-v10", "card-game-keyframes-v11", "card-game-keyframes-v12", "card-game-keyframes-v13", "card-game-keyframes-v14", "card-game-keyframes-v15", "card-game-keyframes-v16"]) {
     document.getElementById(id)?.remove();
   }
   if (document.getElementById(STYLE_ID)) return;
@@ -782,7 +782,7 @@ function ensureKeyframes() {
       overscroll-behavior-x: contain;
     }
     .emoji-rail::-webkit-scrollbar { display: none; }
-    .emoji-rail button { scroll-snap-align: start; flex: 0 0 40px; }
+    .emoji-rail button { scroll-snap-align: start; flex: 0 0 auto; min-width: 40px; }
     @keyframes emojiReactFly {
       0% { opacity: 0; transform: translate3d(0, 10px, 0) scale(0.45); }
       12% { opacity: 1; transform: translate3d(-8px, -28px, 0) scale(1.22); }
@@ -880,6 +880,7 @@ function readVisualMetrics() {
     offsetTop,
     offsetLeft,
     covered,
+    vkH,
     keyboard: covered > 80,
   };
 }
@@ -910,20 +911,77 @@ function useViewport() {
 }
 
 function useVisualInset() {
-  const [inset, setInset] = useState({ bottom: 0, left: 0, top: 0, width: 1024, height: 700 });
+  const stable = useRef({ w: 1024, h: 700 });
+  const [inset, setInset] = useState({
+    bottom: 0,
+    left: 0,
+    top: 0,
+    width: 1024,
+    height: 700,
+    keyboard: false,
+    vkH: 0,
+    android: false,
+  });
   useEffect(() => {
+    const android = /Android/i.test(navigator.userAgent);
     const fit = () => {
       const m = readVisualMetrics();
+      const layoutH = m.vvH + m.offsetTop;
+      if (Math.abs(m.innerW - stable.current.w) > 60) {
+        stable.current = {
+          w: Math.max(1, Math.round(m.innerW)),
+          h: Math.max(1, Math.round(Math.max(m.innerH, layoutH))),
+        };
+      }
+      const shrunk = layoutH < stable.current.h - 100;
+      const keyboard = m.covered > 80 || m.vkH > 80 || shrunk;
+      if (!keyboard) {
+        stable.current = {
+          w: Math.max(1, Math.round(m.innerW)),
+          h: Math.max(1, Math.round(Math.max(m.innerH, layoutH))),
+        };
+      }
       setInset({
         bottom: Math.round(m.covered),
         left: Math.round(m.offsetLeft),
         top: Math.round(m.offsetTop),
         width: Math.max(1, Math.round(m.vvW)),
         height: Math.max(1, Math.round(m.vvH)),
+        keyboard,
+        vkH: Math.round(m.vkH),
+        android,
       });
     };
     fit();
-    return subscribeViewport(fit);
+    let burstId: number | undefined;
+    const burst = () => {
+      fit();
+      if (burstId) window.clearInterval(burstId);
+      let n = 0;
+      burstId = window.setInterval(() => {
+        fit();
+        n += 1;
+        if (n >= 24) {
+          window.clearInterval(burstId);
+          burstId = undefined;
+        }
+      }, 50);
+    };
+    const onFocus = () => burst();
+    document.addEventListener("focusin", onFocus);
+    document.addEventListener("focusout", onFocus);
+    const unsub = subscribeViewport(fit);
+    const poll = window.setInterval(() => {
+      const el = document.activeElement;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA")) fit();
+    }, 250);
+    return () => {
+      unsub();
+      document.removeEventListener("focusin", onFocus);
+      document.removeEventListener("focusout", onFocus);
+      window.clearInterval(poll);
+      if (burstId) window.clearInterval(burstId);
+    };
   }, []);
   return inset;
 }
@@ -2982,13 +3040,8 @@ function RoomChat({
   const primedRef = useRef(false);
   const [unread, setUnread] = useState(0);
   const [toasts, setToasts] = useState<ChatToast[]>([]);
-  const [composerFocus, setComposerFocus] = useState(false);
-  const [touchUi, setTouchUi] = useState(false);
   const inset = useVisualInset();
-
-  useEffect(() => {
-    setTouchUi(window.matchMedia("(pointer: coarse)").matches || "ontouchstart" in window);
-  }, []);
+  const wasKeyboard = useRef(false);
 
   useEffect(() => {
     if (open) {
@@ -3040,14 +3093,18 @@ function RoomChat({
   }
 
   function onComposerFocus() {
-    setComposerFocus(true);
     pinChat();
   }
 
   function onComposerBlur() {
-    setComposerFocus(false);
     pinChat();
   }
+
+  useEffect(() => {
+    if (variant !== "table") return;
+    if (wasKeyboard.current && !inset.keyboard) pinChat();
+    wasKeyboard.current = inset.keyboard;
+  }, [inset.keyboard, variant]);
 
   function submit() {
     const text = draft.trim();
@@ -3167,23 +3224,24 @@ function RoomChat({
 
   const showToasts = !open && toasts.length > 0;
   const dockWidth = open || showToasts ? Math.min(260, Math.max(168, inset.width - 24)) : undefined;
-  const focusedKb = open && composerFocus && touchUi && inset.bottom <= 40 && inset.height >= 560;
-  const kbOpen = open && (inset.bottom > 40 || inset.height < 560 || focusedKb);
-  const openHeight = Math.max(168, focusedKb ? Math.round(inset.height * 0.48) : inset.height - 16);
+  const kbOpen = open && inset.keyboard;
+  const imePad = !kbOpen ? 0 : inset.android ? (inset.vkH > 80 ? 28 : 80) : 16;
+  const panelH = Math.min(260, Math.max(168, inset.height - imePad - 12));
+  const kbTop = Math.max(8, inset.height - panelH - imePad);
 
   return (
     <div
       style={{
         position: "fixed",
         left: kbOpen ? 8 : `max(8px, env(safe-area-inset-left))`,
-        top: kbOpen ? 8 : undefined,
+        top: kbOpen ? kbTop : undefined,
         bottom: kbOpen ? "auto" : "max(64px, calc(env(safe-area-inset-bottom) + 58px))",
-        height: kbOpen ? openHeight : undefined,
-        transform: kbOpen ? `translate3d(${inset.left}px, ${inset.top}px, 0)` : undefined,
+        height: kbOpen ? panelH : undefined,
+        transform: kbOpen ? `translate3d(${inset.left}px, ${inset.top}px, 0)` : "none",
         zIndex: 120,
         width: dockWidth,
         maxWidth: "min(260px, calc(100% - 16px))",
-        maxHeight: open ? (kbOpen ? openHeight : 280) : undefined,
+        maxHeight: open ? (kbOpen ? panelH : 280) : undefined,
         display: "flex",
         flexDirection: "column",
         alignItems: "flex-start",
@@ -3281,6 +3339,7 @@ function RoomChat({
 const REACT_EMOJIS = [
   "🍋",
   "😂",
+  "⁶🤷⁷",
   "🔥",
   "💀",
   "😎",
@@ -3348,27 +3407,31 @@ function EmojiDock({ onPick }: { onPick: (emoji: string) => void }) {
           }}
         >
           <div className="emoji-rail">
-            {REACT_EMOJIS.map((face) => (
+            {REACT_EMOJIS.map((face) => {
+              const wide = [...face].length >= 3;
+              return (
               <button
                 key={face}
                 type="button"
                 onClick={() => onPick(face)}
                 aria-label={`React ${face}`}
                 style={{
-                  width: 40,
+                  width: wide ? 58 : 40,
                   height: 40,
                   borderRadius: 10,
                   border: "none",
                   background: "transparent",
-                  fontSize: 26,
+                  fontSize: wide ? 16 : 26,
                   lineHeight: "40px",
                   cursor: "pointer",
                   padding: 0,
+                  whiteSpace: "nowrap",
                 }}
               >
                 {face}
               </button>
-            ))}
+              );
+            })}
           </div>
         </div>
       ) : null}
