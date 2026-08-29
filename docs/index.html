@@ -914,14 +914,41 @@ function cardBox(w: number, h: number) {
   };
 }
 
+type VirtualKeyboardNav = Navigator & {
+  virtualKeyboard?: {
+    overlaysContent: boolean;
+    boundingRect?: DOMRect;
+    addEventListener: (type: string, listener: () => void) => void;
+    removeEventListener: (type: string, listener: () => void) => void;
+  };
+};
+
 function pinLayoutScroll() {
   try {
     window.scrollTo(0, 0);
     document.documentElement.scrollTop = 0;
     document.body.scrollTop = 0;
+    const vk = (navigator as VirtualKeyboardNav).virtualKeyboard;
+    if (vk) vk.overlaysContent = true;
   } catch {
     /* ignore */
   }
+}
+
+function subscribeViewport(fit: () => void) {
+  window.addEventListener("resize", fit);
+  window.addEventListener("orientationchange", fit);
+  window.visualViewport?.addEventListener("resize", fit);
+  window.visualViewport?.addEventListener("scroll", fit);
+  const vk = (navigator as VirtualKeyboardNav).virtualKeyboard;
+  vk?.addEventListener("geometrychange", fit);
+  return () => {
+    window.removeEventListener("resize", fit);
+    window.removeEventListener("orientationchange", fit);
+    window.visualViewport?.removeEventListener("resize", fit);
+    window.visualViewport?.removeEventListener("scroll", fit);
+    vk?.removeEventListener("geometrychange", fit);
+  };
 }
 
 function readVisualMetrics() {
@@ -932,7 +959,8 @@ function readVisualMetrics() {
   const vvH = vv?.height ?? innerH;
   const offsetTop = vv?.offsetTop ?? 0;
   const offsetLeft = vv?.offsetLeft ?? 0;
-  const covered = Math.max(0, innerH - (vvH + offsetTop));
+  const vkH = (navigator as VirtualKeyboardNav).virtualKeyboard?.boundingRect?.height ?? 0;
+  const covered = Math.max(0, innerH - (vvH + offsetTop), vkH);
   return {
     innerW,
     innerH,
@@ -941,58 +969,50 @@ function readVisualMetrics() {
     offsetTop,
     offsetLeft,
     covered,
-    keyboard: covered > 120,
+    keyboard: covered > 80,
   };
 }
 
 function useViewport() {
+  const stable = useRef({ w: 1024, h: 700 });
   const [vp, setVp] = useState({ w: 1024, h: 700 });
   useEffect(() => {
     const fit = () => {
       const m = readVisualMetrics();
+      const layoutH = m.vvH + m.offsetTop;
+      const kb = m.covered > 80 || layoutH < stable.current.h - 100;
+      if (!kb) {
+        stable.current = {
+          w: Math.max(1, Math.round(m.innerW)),
+          h: Math.max(1, Math.round(Math.max(m.innerH, layoutH))),
+        };
+      }
       setVp({
-        w: Math.max(1, Math.round(m.keyboard ? m.innerW : m.vvW)),
-        h: Math.max(1, Math.round(m.keyboard ? m.innerH : m.vvH)),
+        w: kb ? stable.current.w : Math.max(1, Math.round(m.vvW)),
+        h: kb ? stable.current.h : Math.max(1, Math.round(m.vvH)),
       });
     };
     fit();
-    window.addEventListener("resize", fit);
-    window.addEventListener("orientationchange", fit);
-    window.visualViewport?.addEventListener("resize", fit);
-    window.visualViewport?.addEventListener("scroll", fit);
-    return () => {
-      window.removeEventListener("resize", fit);
-      window.removeEventListener("orientationchange", fit);
-      window.visualViewport?.removeEventListener("resize", fit);
-      window.visualViewport?.removeEventListener("scroll", fit);
-    };
+    return subscribeViewport(fit);
   }, []);
   return vp;
 }
 
 function useVisualInset() {
-  const [inset, setInset] = useState({ bottom: 0, left: 0, width: 1024, height: 700 });
+  const [inset, setInset] = useState({ bottom: 0, left: 0, top: 0, width: 1024, height: 700 });
   useEffect(() => {
     const fit = () => {
       const m = readVisualMetrics();
       setInset({
         bottom: Math.round(m.covered),
         left: Math.round(m.offsetLeft),
+        top: Math.round(m.offsetTop),
         width: Math.max(1, Math.round(m.vvW)),
         height: Math.max(1, Math.round(m.vvH)),
       });
     };
     fit();
-    window.addEventListener("resize", fit);
-    window.addEventListener("orientationchange", fit);
-    window.visualViewport?.addEventListener("resize", fit);
-    window.visualViewport?.addEventListener("scroll", fit);
-    return () => {
-      window.removeEventListener("resize", fit);
-      window.removeEventListener("orientationchange", fit);
-      window.visualViewport?.removeEventListener("resize", fit);
-      window.visualViewport?.removeEventListener("scroll", fit);
-    };
+    return subscribeViewport(fit);
   }, []);
   return inset;
 }
@@ -3051,8 +3071,13 @@ function RoomChat({
   const primedRef = useRef(false);
   const [unread, setUnread] = useState(0);
   const [toasts, setToasts] = useState<ChatToast[]>([]);
-  const [kbGuess, setKbGuess] = useState(0);
+  const [composerFocus, setComposerFocus] = useState(false);
+  const [touchUi, setTouchUi] = useState(false);
   const inset = useVisualInset();
+
+  useEffect(() => {
+    setTouchUi(window.matchMedia("(pointer: coarse)").matches || "ontouchstart" in window);
+  }, []);
 
   useEffect(() => {
     if (open) {
@@ -3104,16 +3129,13 @@ function RoomChat({
   }
 
   function onComposerFocus() {
+    setComposerFocus(true);
     pinChat();
-    const m = readVisualMetrics();
-    const touch = window.matchMedia("(pointer: coarse)").matches || "ontouchstart" in window;
-    if (touch && m.covered < 80) {
-      setKbGuess(Math.round(Math.min(380, window.innerHeight * 0.45)));
-    }
   }
 
   function onComposerBlur() {
-    window.setTimeout(() => setKbGuess(0), 80);
+    setComposerFocus(false);
+    pinChat();
   }
 
   function submit() {
@@ -3232,27 +3254,30 @@ function RoomChat({
     );
   }
 
-  const kbLift = Math.max(inset.bottom, kbGuess);
   const showToasts = !open && toasts.length > 0;
   const dockWidth = open || showToasts ? Math.min(260, Math.max(168, inset.width - 24)) : undefined;
-  const bottom = open
-    ? `max(${kbLift + 8}px, calc(env(safe-area-inset-bottom, 0px) + env(keyboard-inset-bottom, 0px) + 8px))`
-    : `max(${kbLift + 64}px, calc(env(safe-area-inset-bottom, 0px) + env(keyboard-inset-bottom, 0px) + 58px))`;
+  const focusedKb = open && composerFocus && touchUi && inset.bottom <= 40 && inset.height >= 560;
+  const kbOpen = open && (inset.bottom > 40 || inset.height < 560 || focusedKb);
+  const openHeight = Math.max(168, focusedKb ? Math.round(inset.height * 0.48) : inset.height - 16);
 
   return (
     <div
       style={{
         position: "fixed",
-        left: `max(${8 + inset.left}px, env(safe-area-inset-left))`,
-        bottom,
+        left: kbOpen ? 8 : `max(8px, env(safe-area-inset-left))`,
+        top: kbOpen ? 8 : undefined,
+        bottom: kbOpen ? "auto" : "max(64px, calc(env(safe-area-inset-bottom) + 58px))",
+        height: kbOpen ? openHeight : undefined,
+        transform: kbOpen ? `translate3d(${inset.left}px, ${inset.top}px, 0)` : undefined,
         zIndex: 120,
         width: dockWidth,
         maxWidth: "min(260px, calc(100% - 16px))",
-        maxHeight: open ? Math.max(148, inset.height - 16) : undefined,
+        maxHeight: open ? (kbOpen ? openHeight : 280) : undefined,
         display: "flex",
         flexDirection: "column",
         alignItems: "flex-start",
         pointerEvents: "none",
+        boxSizing: "border-box",
       }}
     >
       {showToasts ? (
@@ -3299,6 +3324,7 @@ function RoomChat({
         }}
         style={{
           pointerEvents: "auto",
+          flexShrink: 0,
           padding: "7px 10px",
           borderRadius: open ? "10px 10px 0 0" : 10,
           border: "1px solid rgba(241,196,15,0.4)",
