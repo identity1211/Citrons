@@ -19,6 +19,7 @@ const WAITING_REJOIN_MS = 2 * 60 * 1000;
 const TABLE_SKINS = new Set(["felt", "peli"]);
 const CHAT_MAX_LEN = 120;
 const CHAT_MAX_LOG = 50;
+const ROOM_TITLE_MAX = 28;
 const CHAT_GAP_MS = 400;
 const REACT_GAP_MS = 450;
 const REACT_EMOJIS = new Set([
@@ -65,6 +66,7 @@ function publicLobbies() {
     const host = room.seats.find((p) => p.id === room.hostId) || room.seats[0];
     list.push({
       code: room.code,
+      title: room.title || (host ? `${host.name}'s lobby` : "Lobby"),
       host: host ? host.name : "Host",
       hostAvatar: (host && host.avatar) || "",
       players: room.seats.map((p) => ({ name: p.name, avatar: p.avatar || "" })),
@@ -72,7 +74,7 @@ function publicLobbies() {
       max: MAX_PLAYERS,
     });
   }
-  list.sort((a, b) => b.count - a.count || a.code.localeCompare(b.code));
+  list.sort((a, b) => b.count - a.count || String(a.title).localeCompare(String(b.title)));
   return list;
 }
 
@@ -135,6 +137,7 @@ function viewFor(room, playerId) {
   });
   return {
     code: room.code,
+    title: room.title || "",
     you: 0,
     youId: playerId,
     host: room.hostId === playerId,
@@ -234,6 +237,16 @@ function sanitizeName(name) {
   return n || "Player";
 }
 
+function sanitizeTitle(title, fallback) {
+  const n = String(title || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, ROOM_TITLE_MAX);
+  if (n) return n;
+  const host = sanitizeName(fallback);
+  return host === "Player" ? "Lobby" : `${host}'s lobby`;
+}
+
 function sanitizeAvatar(url) {
   const u = String(url || "").trim();
   if (!u || u.length > 800) return "";
@@ -307,7 +320,7 @@ async function identifyClerk(ws, clerkToken, { required }) {
   return { userId: result.userId };
 }
 
-async function createRoom(ws, name, avatar, clerkToken) {
+async function createRoom(ws, name, avatar, clerkToken, title) {
   const auth = await identifyClerk(ws, clerkToken, { required: true });
   if (!auth) return;
   const clerkUserId = auth.userId;
@@ -317,6 +330,7 @@ async function createRoom(ws, name, avatar, clerkToken) {
   const player = makePlayer(ws, name, avatar, clerkUserId);
   const room = {
     code,
+    title: sanitizeTitle(title, player.name),
     hostId: player.id,
     phase: "waiting",
     seats: [player],
@@ -680,7 +694,7 @@ function onMessage(ws, data) {
   const player = room && room.seats.find((p) => p.id === ws.playerId);
 
   if (type === "create") {
-    void createRoom(ws, msg.name, msg.avatar, msg.clerkToken);
+    void createRoom(ws, msg.name, msg.avatar, msg.clerkToken, msg.title);
     return;
   }
   if (type === "join") {

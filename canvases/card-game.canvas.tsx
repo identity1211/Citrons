@@ -4150,17 +4150,6 @@ function Lobby({
               </div>
             </>
           )}
-
-          {view === "multi" && (
-            <>
-              <button type="button" className="lobby-play-btn" style={LOBBY_GOLD_BTN}>
-                Create lobby
-              </button>
-              <button type="button" className="lobby-play-btn" style={LOBBY_GOLD_BTN}>
-                Join lobby
-              </button>
-            </>
-          )}
         </div>
       </div>
     </FeltShell>
@@ -5310,6 +5299,8 @@ function Table({
 }
 
 const NAME_KEY = "citrons-name";
+const ROOM_TITLE_KEY = "citrons-room-title";
+const ROOM_TITLE_MAX = 28;
 const WS_KEY = "citrons-ws";
 const SESSION_KEY = "citrons-mp-session";
 const REJOIN_KEEP_MS = 10 * 60 * 1000;
@@ -5368,6 +5359,7 @@ function clearMpSession() {
 
 type OnlineView = {
   code: string;
+  title?: string;
   you: number;
   youId: string;
   host: boolean;
@@ -5388,6 +5380,7 @@ type OnlineView = {
 
 type LobbyInfo = {
   code: string;
+  title?: string;
   host: string;
   hostAvatar?: string;
   players: { name: string; avatar?: string }[];
@@ -5419,7 +5412,7 @@ function OpenLobbyList({
       >
         Open lobbies
       </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: "38vh", overflowY: "auto" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: "48vh", overflowY: "auto" }}>
         {lobbies.length === 0 ? (
           <div
             style={{
@@ -5432,7 +5425,7 @@ function OpenLobbyList({
               lineHeight: 1.4,
             }}
           >
-            Searching for open lobbies…
+            No open lobbies yet
           </div>
         ) : (
           lobbies.map((lobby) => {
@@ -5463,7 +5456,7 @@ function OpenLobbyList({
                       whiteSpace: "nowrap",
                     }}
                   >
-                    {lobby.host}
+                    {lobby.title || lobby.host}
                   </div>
                   <div
                     style={{
@@ -5474,7 +5467,7 @@ function OpenLobbyList({
                       whiteSpace: "nowrap",
                     }}
                   >
-                    {lobby.count}/{lobby.max} · {names || lobby.code}
+                    {lobby.host} · {lobby.count}/{lobby.max}{names ? ` · ${names}` : ""}
                   </div>
                 </div>
                 <button
@@ -5754,6 +5747,14 @@ function readSavedName(): string {
   }
 }
 
+function readSavedRoomTitle(): string {
+  try {
+    return localStorage.getItem(ROOM_TITLE_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
 const LOBBY_INPUT: CSSProperties = {
   width: "100%",
   maxWidth: 300,
@@ -5778,9 +5779,9 @@ function fullDealProgress(n: number) {
 
 function OnlineGame({ onLeave }: { onLeave: () => void }) {
   const auth = useClerkAuth();
-  const [screen, setScreen] = useState<"pick" | "create" | "join" | "waiting" | "table">("pick");
+  const [screen, setScreen] = useState<"pick" | "waiting" | "table">("pick");
   const [name, setName] = useState(readSavedName);
-  const [code, setCode] = useState("");
+  const [roomTitle, setRoomTitle] = useState(readSavedRoomTitle);
   const [wsUrl, setWsUrl] = useState(defaultWsUrl);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -5794,7 +5795,6 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   const [dealing, setDealing] = useState(false);
   const [dealProgress, setDealProgress] = useState(fullDealProgress(2));
   const [lastStep, setLastStep] = useState<DealStep | null>(null);
-  const [copied, setCopied] = useState(false);
   const [flyAnim, setFlyAnim] = useState<FlyAnim | null>(null);
   const [burnAnim, setBurnAnim] = useState<BurnAnim | null>(null);
   const [pickupAnim, setPickupAnim] = useState<PickupAnim | null>(null);
@@ -5821,6 +5821,16 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     setName(n);
     try {
       localStorage.setItem(NAME_KEY, n);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function persistRoomTitle(t: string) {
+    const next = String(t || "").slice(0, ROOM_TITLE_MAX);
+    setRoomTitle(next);
+    try {
+      localStorage.setItem(ROOM_TITLE_KEY, next);
     } catch {
       /* ignore */
     }
@@ -6146,10 +6156,10 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         }
         return;
       }
-      if (screenRef.current === "pick" || screenRef.current === "join") {
+      if (screenRef.current === "pick") {
         window.setTimeout(() => {
           if (wsRef.current) return;
-          if (screenRef.current !== "pick" && screenRef.current !== "join") return;
+          if (screenRef.current !== "pick") return;
           connect((next) => next.send(JSON.stringify({ type: "browse" })), { silent: true });
         }, 1200);
       }
@@ -6170,19 +6180,18 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     void (async () => {
       try {
         const payload = await clerkPayload();
-        connect((ws) => ws.send(JSON.stringify({ type: "create", ...payload })));
+        connect((ws) =>
+          ws.send(JSON.stringify({ type: "create", ...payload, title: roomTitle.trim() }))
+        );
       } catch (e) {
         setError(clerkErrorText(e));
       }
     })();
   }
 
-  function joinByCode(raw: string) {
-    const c = raw.trim().toUpperCase();
-    if (c.length < 4) {
-      setError("Enter a lobby code");
-      return;
-    }
+  function joinOpenLobby(roomCode: string) {
+    const c = String(roomCode || "").trim().toUpperCase();
+    if (!c) return;
     void (async () => {
       try {
         const payload = await clerkPayload();
@@ -6197,10 +6206,6 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         setError(clerkErrorText(e));
       }
     })();
-  }
-
-  function joinLobby() {
-    joinByCode(code);
   }
 
   function startBrowse() {
@@ -6279,7 +6284,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   }
 
   useEffect(() => {
-    if (screen !== "pick" && screen !== "join") return;
+    if (screen !== "pick") return;
     startBrowse();
     void fetchLobbies();
     const t = window.setInterval(() => {
@@ -6515,7 +6520,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
           disabled={busy}
           onClick={rejoinSavedGame}
         >
-          {busy ? "Rejoining…" : savedGame ? `Rejoin ${savedGame.code}` : "Rejoin game"}
+          {busy ? "Rejoining…" : "Rejoin game"}
         </button>
         <button
           type="button"
@@ -6553,33 +6558,36 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
             Sign in with Google first — button at the top right.
           </div>
         )}
+        <input
+          value={roomTitle}
+          onChange={(e) => persistRoomTitle(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key !== "Enter") return;
+            e.preventDefault();
+            if (!auth.user) {
+              setError("Sign in with Google first");
+              return;
+            }
+            createLobby();
+          }}
+          placeholder="Room name (optional)"
+          maxLength={ROOM_TITLE_MAX}
+          style={LOBBY_INPUT}
+        />
         <button
           type="button"
           className="lobby-play-btn"
           style={LOBBY_GOLD_BTN}
+          disabled={busy}
           onClick={() => {
             if (!auth.user) {
               setError("Sign in with Google first");
               return;
             }
-            setScreen("create");
+            createLobby();
           }}
         >
-          Create lobby
-        </button>
-        <button
-          type="button"
-          className="lobby-play-btn"
-          style={LOBBY_GOLD_BTN}
-          onClick={() => {
-            if (!auth.user) {
-              setError("Sign in with Google first");
-              return;
-            }
-            setScreen("join");
-          }}
-        >
-          Join lobby
+          {busy ? "Connecting…" : "Create lobby"}
         </button>
         {savedGame ? (
           <button
@@ -6595,7 +6603,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
               rejoinSavedGame();
             }}
           >
-            {busy ? "Rejoining…" : `Rejoin ${savedGame.code}`}
+            {busy ? "Rejoining…" : "Rejoin game"}
           </button>
         ) : null}
         <OpenLobbyList
@@ -6606,87 +6614,9 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
               setError("Sign in with Google first");
               return;
             }
-            joinByCode(c);
+            joinOpenLobby(c);
           }}
         />
-      </>
-    );
-  }
-
-  if (screen === "create") {
-    return formShell(
-      <>
-        <div style={{ fontSize: 22, fontWeight: 700, color: "#f5f0e6", fontFamily: 'Georgia, "Times New Roman", serif' }}>
-          New lobby
-        </div>
-        {auth.user ? (
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <AvatarBubble src={auth.user.imageUrl} name={clerkNickname(auth.user)} size={36} />
-            <div style={{ color: "#f5f0e6", fontWeight: 700 }}>{clerkNickname(auth.user)}</div>
-          </div>
-        ) : (
-          <input
-            value={name}
-            onChange={(e) => persistName(e.target.value)}
-            placeholder="Your name"
-            maxLength={18}
-            style={LOBBY_INPUT}
-          />
-        )}
-        <button
-          type="button"
-          className="lobby-play-btn"
-          style={LOBBY_GOLD_BTN}
-          disabled={busy}
-          onClick={createLobby}
-        >
-          {busy ? "Connecting…" : "Create"}
-        </button>
-      </>
-    );
-  }
-
-  if (screen === "join") {
-    return formShell(
-      <>
-        <div style={{ fontSize: 22, fontWeight: 700, color: "#f5f0e6", fontFamily: 'Georgia, "Times New Roman", serif' }}>
-          Join lobby
-        </div>
-        {auth.user ? (
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <AvatarBubble src={auth.user.imageUrl} name={clerkNickname(auth.user)} size={36} />
-            <div style={{ color: "#f5f0e6", fontWeight: 700 }}>{clerkNickname(auth.user)}</div>
-          </div>
-        ) : (
-          <input
-            value={name}
-            onChange={(e) => persistName(e.target.value)}
-            placeholder="Your name"
-            maxLength={18}
-            style={LOBBY_INPUT}
-          />
-        )}
-        <OpenLobbyList lobbies={lobbies} busy={busy} onJoin={joinByCode} />
-        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.4, textTransform: "uppercase", color: "rgba(255,255,255,0.55)" }}>
-          Or enter a code
-        </div>
-        <input
-          value={code}
-          onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8))}
-          placeholder="Code"
-          maxLength={8}
-          autoCapitalize="characters"
-          style={{ ...LOBBY_INPUT, letterSpacing: 4, fontWeight: 700 }}
-        />
-        <button
-          type="button"
-          className="lobby-play-btn"
-          style={LOBBY_GOLD_BTN}
-          disabled={busy}
-          onClick={joinLobby}
-        >
-          {busy ? "Connecting…" : "Join"}
-        </button>
       </>
     );
   }
@@ -6696,27 +6626,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     return formShell(
       <>
         <div style={{ fontSize: 22, fontWeight: 700, color: "#f5f0e6", fontFamily: 'Georgia, "Times New Roman", serif' }}>
-          Lobby code
-        </div>
-        <button
-          type="button"
-          onClick={() => {
-            void navigator.clipboard?.writeText(view.code);
-            setCopied(true);
-            window.setTimeout(() => setCopied(false), 1200);
-          }}
-          style={{
-            ...LOBBY_GOLD_BTN,
-            height: 64,
-            fontSize: 32,
-            letterSpacing: 8,
-            fontFamily: "ui-monospace, Menlo, monospace",
-          }}
-        >
-          {view.code}
-        </button>
-        <div style={{ fontSize: 12, color: "rgba(255,255,255,0.55)" }}>
-          {copied ? "Copied" : "Tap the code to copy"}
+          {view.title || "Waiting room"}
         </div>
         <div style={{ width: "100%", maxWidth: 300, display: "flex", flexDirection: "column", gap: 6 }}>
           {view.lobby.map((p) => (
