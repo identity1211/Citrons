@@ -694,10 +694,10 @@ function tutorialLockedAt(step: number): boolean {
 
 // ─── CSS keyframes ───────────────────────────────────────────────────────────
 
-const STYLE_ID = "card-game-keyframes-v19";
+const STYLE_ID = "card-game-keyframes-v20";
 function ensureKeyframes() {
   if (typeof document === "undefined") return;
-  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7", "card-game-keyframes-v8", "card-game-keyframes-v9", "card-game-keyframes-v10", "card-game-keyframes-v11", "card-game-keyframes-v12", "card-game-keyframes-v13", "card-game-keyframes-v14", "card-game-keyframes-v15", "card-game-keyframes-v16", "card-game-keyframes-v17", "card-game-keyframes-v18"]) {
+  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7", "card-game-keyframes-v8", "card-game-keyframes-v9", "card-game-keyframes-v10", "card-game-keyframes-v11", "card-game-keyframes-v12", "card-game-keyframes-v13", "card-game-keyframes-v14", "card-game-keyframes-v15", "card-game-keyframes-v16", "card-game-keyframes-v17", "card-game-keyframes-v18", "card-game-keyframes-v19"]) {
     document.getElementById(id)?.remove();
   }
   if (document.getElementById(STYLE_ID)) return;
@@ -918,6 +918,16 @@ function ensureKeyframes() {
       border-top: 1px solid rgba(241,196,15,0.5);
       border-radius: 0;
       bottom: max(env(keyboard-inset-bottom, 0px), var(--kb-h, 0px));
+    }
+    .chat-ime-bar.is-docked.is-lobby {
+      left: auto;
+      right: max(12px, env(safe-area-inset-right));
+      width: min(380px, calc(50% - 18px));
+      padding: 6px;
+      background: rgba(8, 18, 10, 0.94);
+      border: 1px solid rgba(241,196,15,0.4);
+      border-radius: 10px;
+      bottom: max(56px, calc(env(safe-area-inset-bottom) + 48px), env(keyboard-inset-bottom, 0px), var(--kb-h, 0px));
     }
     @keyframes emojiReactFly {
       0% { opacity: 0; transform: translate3d(0, 10px, 0) scale(0.45); }
@@ -3141,7 +3151,7 @@ function TableSkinPicker({
               onClick={() => onChange?.(s.id)}
               style={{
                 flex: 1,
-                height: 64,
+                height: fill ? 52 : 64,
                 borderRadius: 10,
                 border: on ? "2px solid #f1c40f" : "1.5px solid rgba(255,255,255,0.28)",
                 padding: 0,
@@ -3266,10 +3276,9 @@ function RoomChat({
   }
 
   useEffect(() => {
-    if (variant !== "table") return;
     if (wasKeyboard.current && !inset.keyboard) pinChat();
     wasKeyboard.current = inset.keyboard;
-  }, [inset.keyboard, variant]);
+  }, [inset.keyboard]);
 
   function submit() {
     const text = draft.trim();
@@ -3313,18 +3322,16 @@ function RoomChat({
     </div>
   );
 
-  const composerStyle =
-    variant === "lobby"
-      ? { display: "flex" as const, gap: 6, marginTop: 6, flexShrink: 0 }
-      : undefined;
+  const kbLift = Math.max(inset.bottom, inset.vkH);
+  const kbOpen = (variant === "lobby" || open) && (inset.keyboard || kbLift > 40);
 
-  const composer = (
+  const imeBar = (
     <form
+      className={`chat-ime-bar ${kbOpen ? "is-ime" : variant === "lobby" ? "is-docked is-lobby" : "is-docked"}`}
       onSubmit={(e) => {
         e.preventDefault();
         submit();
       }}
-      style={composerStyle}
     >
       <input
         ref={inputRef}
@@ -3343,7 +3350,7 @@ function RoomChat({
           height: 40,
           borderRadius: 8,
           border: "1.5px solid rgba(255,255,255,0.22)",
-          background: "rgba(0,0,0,0.35)",
+          background: "rgba(0,0,0,0.45)",
           color: "#f5f0e6",
           padding: "0 10px",
           fontSize: 16,
@@ -3355,7 +3362,7 @@ function RoomChat({
         className="lobby-ghost-btn"
         style={{
           height: 40,
-          padding: "0 12px",
+          padding: "0 14px",
           borderRadius: 8,
           border: "1.5px solid rgba(241,196,15,0.45)",
           background: "rgba(241,196,15,0.18)",
@@ -3373,40 +3380,41 @@ function RoomChat({
 
   if (variant === "lobby") {
     return (
-      <div
-        style={{
-          width: "100%",
-          maxWidth: fill ? "none" : 300,
-          flex: fill ? 1 : undefined,
-          minHeight: fill ? 0 : undefined,
-          display: "flex",
-          flexDirection: "column",
-        }}
-      >
+      <>
         <div
           style={{
-            fontSize: 11,
-            fontWeight: 800,
-            letterSpacing: 1.3,
-            textTransform: "uppercase",
-            color: "rgba(255,255,255,0.62)",
-            marginBottom: 8,
-            textAlign: "left",
-            flexShrink: 0,
+            width: "100%",
+            maxWidth: fill ? "none" : 300,
+            flex: fill ? 1 : undefined,
+            minHeight: fill ? 0 : undefined,
+            display: "flex",
+            flexDirection: "column",
+            paddingBottom: kbOpen ? 0 : 52,
           }}
         >
-          Chat
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 800,
+              letterSpacing: 1.3,
+              textTransform: "uppercase",
+              color: "rgba(255,255,255,0.62)",
+              marginBottom: 8,
+              textAlign: "left",
+              flexShrink: 0,
+            }}
+          >
+            Chat
+          </div>
+          {log}
         </div>
-        {log}
-        {composer}
-      </div>
+        {imeBar}
+      </>
     );
   }
 
   const showToasts = !open && toasts.length > 0;
   const dockWidth = open || showToasts ? Math.min(260, Math.max(168, inset.width - 24)) : undefined;
-  const kbLift = Math.max(inset.bottom, inset.vkH);
-  const kbOpen = open && (inset.keyboard || kbLift > 40);
 
   return (
     <>
@@ -3512,58 +3520,7 @@ function RoomChat({
           </div>
         ) : null}
       </div>
-      {open ? (
-        <form
-          className={`chat-ime-bar ${kbOpen ? "is-ime" : "is-docked"}`}
-          onSubmit={(e) => {
-            e.preventDefault();
-            submit();
-          }}
-        >
-          <input
-            ref={inputRef}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value.slice(0, 120))}
-            onFocus={onComposerFocus}
-            onBlur={onComposerBlur}
-            placeholder="Message"
-            maxLength={120}
-            autoComplete="off"
-            autoCorrect="off"
-            enterKeyHint="send"
-            inputMode="text"
-            style={{
-              flex: 1,
-              height: 40,
-              borderRadius: 8,
-              border: "1.5px solid rgba(255,255,255,0.22)",
-              background: "rgba(0,0,0,0.45)",
-              color: "#f5f0e6",
-              padding: "0 10px",
-              fontSize: 16,
-              minWidth: 0,
-            }}
-          />
-          <button
-            type="submit"
-            className="lobby-ghost-btn"
-            style={{
-              height: 40,
-              padding: "0 14px",
-              borderRadius: 8,
-              border: "1.5px solid rgba(241,196,15,0.45)",
-              background: "rgba(241,196,15,0.18)",
-              color: "#f1c40f",
-              fontWeight: 800,
-              fontSize: 12,
-              cursor: "pointer",
-              flexShrink: 0,
-            }}
-          >
-            Send
-          </button>
-        </form>
-      ) : null}
+      {open ? imeBar : null}
     </>
   );
 }
@@ -5890,6 +5847,7 @@ function fullDealProgress(n: number) {
 
 function OnlineGame({ onLeave }: { onLeave: () => void }) {
   const auth = useClerkAuth();
+  const inset = useVisualInset();
   const [screen, setScreen] = useState<"pick" | "waiting" | "table">("pick");
   const [name, setName] = useState(readSavedName);
   const [roomTitle, setRoomTitle] = useState(readSavedRoomTitle);
@@ -6686,6 +6644,13 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       }
       createLobby();
     };
+    const createKb = createOpen && (inset.keyboard || Math.max(inset.bottom, inset.vkH) > 40);
+    const pinCreate = () => {
+      pinLayoutScroll();
+      window.setTimeout(pinLayoutScroll, 50);
+      window.setTimeout(pinLayoutScroll, 180);
+      window.setTimeout(pinLayoutScroll, 400);
+    };
     return (
       <>
         {formShell(
@@ -6752,46 +6717,93 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
             style={{
               position: "fixed",
               inset: 0,
-              zIndex: 50,
+              zIndex: 150,
               background: "rgba(0,0,0,0.58)",
               display: "flex",
-              alignItems: "center",
+              alignItems: createKb ? "flex-end" : "center",
               justifyContent: "center",
-              padding: 24,
+              padding: createKb ? "12px 0 0" : 24,
+              paddingBottom: createKb
+                ? "calc(52px + max(env(keyboard-inset-bottom, 0px), var(--kb-h, 0px)))"
+                : 24,
             }}
           >
             <div
               onClick={(e) => e.stopPropagation()}
               style={{
                 width: "100%",
-                maxWidth: 320,
-                borderRadius: 14,
+                maxWidth: createKb ? 480 : 320,
+                borderRadius: createKb ? "14px 14px 0 0" : 14,
                 background: "#145230",
                 border: "1px solid rgba(255,255,255,0.22)",
-                padding: "22px 18px",
+                borderBottom: createKb ? "none" : "1px solid rgba(255,255,255,0.22)",
+                padding: createKb ? "16px 14px 12px" : "22px 18px",
                 textAlign: "center",
               }}
             >
               <div
                 id="create-lobby-title"
-                style={{ color: "#f5f0e6", fontWeight: 800, fontSize: 18, marginBottom: 14 }}
+                style={{ color: "#f5f0e6", fontWeight: 800, fontSize: 18, marginBottom: 12 }}
               >
                 New lobby
               </div>
-              <input
-                ref={titleInputRef}
-                value={roomTitle}
-                onChange={(e) => persistRoomTitle(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key !== "Enter") return;
+              <form
+                className={createKb ? "chat-ime-bar is-ime" : undefined}
+                onSubmit={(e) => {
                   e.preventDefault();
                   confirmCreate();
                 }}
-                placeholder="Room name"
-                maxLength={ROOM_TITLE_MAX}
-                autoComplete="off"
-                style={{ ...LOBBY_INPUT, maxWidth: "100%", marginBottom: 12 }}
-              />
+                style={createKb ? undefined : { marginBottom: 12 }}
+              >
+                <input
+                  ref={titleInputRef}
+                  value={roomTitle}
+                  onChange={(e) => persistRoomTitle(e.target.value)}
+                  onFocus={pinCreate}
+                  placeholder="Room name"
+                  maxLength={ROOM_TITLE_MAX}
+                  autoComplete="off"
+                  autoCorrect="off"
+                  enterKeyHint="done"
+                  inputMode="text"
+                  style={
+                    createKb
+                      ? {
+                          flex: 1,
+                          height: 40,
+                          borderRadius: 8,
+                          border: "1.5px solid rgba(255,255,255,0.22)",
+                          background: "rgba(0,0,0,0.45)",
+                          color: "#f5f0e6",
+                          padding: "0 10px",
+                          fontSize: 16,
+                          minWidth: 0,
+                          textAlign: "left",
+                        }
+                      : { ...LOBBY_INPUT, maxWidth: "100%" }
+                  }
+                />
+                {createKb ? (
+                  <button
+                    type="submit"
+                    disabled={busy}
+                    style={{
+                      height: 40,
+                      padding: "0 14px",
+                      borderRadius: 8,
+                      border: "none",
+                      background: "#f1c40f",
+                      color: "#1a2e1a",
+                      fontWeight: 800,
+                      fontSize: 12,
+                      cursor: busy ? "default" : "pointer",
+                      flexShrink: 0,
+                    }}
+                  >
+                    {busy ? "…" : "Create"}
+                  </button>
+                ) : null}
+              </form>
               <div style={{ display: "flex", gap: 10, width: "100%" }}>
                 <button
                   type="button"
@@ -6839,6 +6851,47 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
           <>
             <WindowButton />
             <LobbyBack onClick={exitToMenu} />
+            <div
+              style={{
+                position: "absolute",
+                right: FELT_INSET_RIGHT,
+                bottom: FELT_INSET_BOTTOM,
+                zIndex: 8,
+                pointerEvents: "auto",
+                display: inset.keyboard ? "none" : "block",
+              }}
+            >
+              {view.host ? (
+                <button
+                  type="button"
+                  className="lobby-play-btn"
+                  disabled={!view.canStart}
+                  onClick={() => send({ type: "start" })}
+                  style={{
+                    ...LOBBY_CORNER_BTN,
+                    position: "static",
+                    background: view.canStart ? "#f1c40f" : "rgba(0,0,0,0.35)",
+                    color: view.canStart ? "#1a2e1a" : "rgba(245,240,230,0.72)",
+                    border: view.canStart ? "none" : "1px solid rgba(255,255,255,0.28)",
+                    boxShadow: view.canStart ? "0 4px 12px rgba(0,0,0,0.28)" : "none",
+                    cursor: view.canStart ? "pointer" : "default",
+                  }}
+                >
+                  {view.canStart ? "Start game" : "Waiting…"}
+                </button>
+              ) : (
+                <div
+                  style={{
+                    ...LOBBY_CORNER_BTN,
+                    position: "static",
+                    color: "rgba(245,240,230,0.72)",
+                    fontWeight: 700,
+                  }}
+                >
+                  Waiting for host
+                </div>
+              )}
+            </div>
             <ProfileButton />
           </>
         }
@@ -6957,38 +7010,6 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
                 youId={view.youId}
                 onSend={(text) => send({ type: "chat", text })}
               />
-              <div style={{ flexShrink: 0, display: "flex", justifyContent: "flex-end" }}>
-                {view.host ? (
-                  <button
-                    type="button"
-                    className="lobby-play-btn"
-                    style={{
-                      ...LOBBY_GOLD_BTN,
-                      width: "auto",
-                      maxWidth: "none",
-                      minWidth: 148,
-                      height: 44,
-                      padding: "0 18px",
-                      fontSize: 15,
-                    }}
-                    disabled={!view.canStart}
-                    onClick={() => send({ type: "start" })}
-                  >
-                    {view.canStart ? "Start game" : "Waiting…"}
-                  </button>
-                ) : (
-                  <div
-                    style={{
-                      color: "rgba(255,255,255,0.7)",
-                      fontSize: 13,
-                      textAlign: "right",
-                      padding: "10px 4px",
-                    }}
-                  >
-                    Waiting for the host to start
-                  </div>
-                )}
-              </div>
             </div>
           </div>
           {error ? <div style={{ color: "#f5b7b1", fontSize: 13, lineHeight: 1.4, textAlign: "center" }}>{error}</div> : null}
