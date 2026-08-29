@@ -1207,6 +1207,7 @@ interface TableStackProps {
   onSelectFaceUp?: (index: number) => void;
   onSelectFaceDown?: (index: number) => void;
   swapKey?: number;
+  peekedDown?: boolean[];
 }
 
 function TableStack({
@@ -1227,6 +1228,7 @@ function TableStack({
   onSelectFaceUp,
   onSelectFaceDown,
   swapKey = 0,
+  peekedDown,
 }: TableStackProps) {
   const w = cardW ?? (small ? 38 : 56);
   const h = cardH ?? (small ? 54 : 78);
@@ -1253,7 +1255,7 @@ function TableStack({
             {showFaceDown && (
               <PlayingCard
                 card={down}
-                faceVisible={false}
+                faceVisible={!!peekedDown?.[i]}
                 style={{ top: 0, left: 0 }}
                 w={w}
                 h={h}
@@ -1449,12 +1451,14 @@ function DeckPile({ count }: { count: number }) {
 }
 
 const FLY_MS = 640;
-const LAND_PAUSE_MS = 320;
+const LAND_PAUSE_MS = 550;
 const BURN_MS = 600;
 const PICKUP_MS = 600;
 const REVEAL_MS = 900;
 const DRAW_MS = 680;
 const DRAW_STAGGER_MS = 80;
+const END_LINGER_MS = 1800;
+const WIN_BANNER_MS = 2800;
 
 interface FlyAnim {
   id: number;
@@ -2057,62 +2061,26 @@ function FinishedLobbyOverlay({ onLobby }: { onLobby: () => void }) {
     <div
       style={{
         position: "absolute",
-        inset: 0,
-        zIndex: 90,
-        background: "rgba(8, 22, 14, 0.58)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 20,
+        left: "50%",
+        bottom: "max(64px, calc(env(safe-area-inset-bottom) + 58px))",
+        transform: "translateX(-50%)",
+        zIndex: 85,
+        pointerEvents: "auto",
       }}
     >
-      <div
-        className="winner-banner"
+      <button
+        type="button"
+        className="lobby-play-btn"
+        onClick={onLobby}
         style={{
-          position: "relative",
-          zIndex: 1,
-          minWidth: 200,
-          maxWidth: "86%",
-          padding: "18px 22px 16px",
-          borderRadius: 16,
-          background: "linear-gradient(180deg, rgba(26,43,26,0.94), rgba(16,32,18,0.96))",
-          border: "1.5px solid rgba(241,196,15,0.75)",
-          boxShadow: "0 16px 40px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.08) inset",
-          color: "#f5f0e6",
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          gap: 10,
-          textAlign: "center",
+          ...LOBBY_GOLD_BTN,
+          width: 148,
+          height: 44,
+          maxWidth: 148,
         }}
       >
-        <div
-          style={{
-            fontFamily: 'Georgia, "Times New Roman", serif',
-            fontSize: 26,
-            fontWeight: 700,
-            lineHeight: 1.15,
-          }}
-        >
-          Game over
-        </div>
-        <div style={{ fontSize: 13, color: "rgba(255,255,255,0.62)", lineHeight: 1.4, maxWidth: 240 }}>
-          Same room, same players. Host can start another game.
-        </div>
-        <button
-          type="button"
-          className="lobby-play-btn"
-          onClick={onLobby}
-          style={{
-            ...LOBBY_GOLD_BTN,
-            maxWidth: 220,
-            height: 48,
-            marginTop: 4,
-          }}
-        >
-          Lobby
-        </button>
-      </div>
+        Lobby
+      </button>
     </div>
   );
 }
@@ -4395,22 +4363,56 @@ function Table({
   const fsOn = useFullscreen();
   const [fsNote, setFsNote] = useState("");
   const [winShow, setWinShow] = useState(false);
+  const [endUi, setEndUi] = useState(false);
+  const [peekDown, setPeekDown] = useState<Record<number, boolean>>({});
+  const [outNote, setOutNote] = useState("");
+  const seenFinishRef = useRef(0);
   const winnerIdx = finishOrder.length > 0 ? finishOrder[0] : null;
   const winner = winnerIdx != null ? players[winnerIdx] : null;
+  const tableBusy = !!(flyAnim || burnAnim || pickupAnim || revealCard || drawAnim);
 
   useEffect(() => {
-    if (winnerIdx == null) {
-      setWinShow(false);
+    if (phase !== "finished") {
+      setPeekDown({});
+      setEndUi(false);
+    }
+  }, [phase]);
+
+  useEffect(() => {
+    if (phase !== "finished" || winnerIdx == null) {
+      if (phase !== "finished") setWinShow(false);
       return;
     }
-    const hold = 2200;
-    const show = window.setTimeout(() => setWinShow(true), 280);
-    const hide = window.setTimeout(() => setWinShow(false), 280 + hold);
+    if (tableBusy) return;
+    const show = window.setTimeout(() => setWinShow(true), END_LINGER_MS);
+    const hide = window.setTimeout(() => {
+      setWinShow(false);
+      setEndUi(true);
+    }, END_LINGER_MS + WIN_BANNER_MS);
     return () => {
       window.clearTimeout(show);
       window.clearTimeout(hide);
     };
-  }, [winnerIdx]);
+  }, [phase, winnerIdx, tableBusy]);
+
+  useEffect(() => {
+    if (phase !== "playing") {
+      seenFinishRef.current = finishOrder.length;
+      if (phase !== "finished") setOutNote("");
+      return;
+    }
+    if (finishOrder.length <= seenFinishRef.current) {
+      seenFinishRef.current = finishOrder.length;
+      return;
+    }
+    const pIdx = finishOrder[finishOrder.length - 1];
+    const stillIn = unfinishedPlayers(players).length;
+    const name = players[pIdx]?.name || "Player";
+    setOutNote(stillIn > 1 ? `${name} is out · ${stillIn} still in` : `${name} is out`);
+    seenFinishRef.current = finishOrder.length;
+    const t = window.setTimeout(() => setOutNote(""), 2400);
+    return () => window.clearTimeout(t);
+  }, [finishOrder, phase, players]);
   const short = vp.h < 560;
   const ownerH = short ? Math.round(clamp(vp.h * 0.26, 64, 86)) : 78;
   const ownerW = Math.round(ownerH * 0.72);
@@ -4534,24 +4536,22 @@ function Table({
         }}
       >
         <WindowButton style={{ position: "static", top: "auto", left: "auto" }} onClick={() => void toggleFullscreen()} />
-        {!(phase === "finished" && onToLobby) ? (
-          <button
-            onClick={onReset}
-            style={{
-              padding: "6px 10px",
-              minHeight: 0,
-              borderRadius: 6,
-              border: `1px solid ${theme.stroke.secondary}`,
-              background: "rgba(0,0,0,0.35)",
-              color: theme.text.primary,
-              cursor: "pointer",
-              fontSize: 12,
-              touchAction: "manipulation",
-            }}
-          >
-            {resetLabel || "← Lobby"}
-          </button>
-        ) : null}
+        <button
+          onClick={phase === "finished" && onToLobby ? onToLobby : onReset}
+          style={{
+            padding: "6px 10px",
+            minHeight: 0,
+            borderRadius: 6,
+            border: `1px solid ${theme.stroke.secondary}`,
+            background: "rgba(0,0,0,0.35)",
+            color: theme.text.primary,
+            cursor: "pointer",
+            fontSize: 12,
+            touchAction: "manipulation",
+          }}
+        >
+          {phase === "finished" && onToLobby ? "Lobby" : resetLabel || "← Lobby"}
+        </button>
       </div>
       {fsNote ? (
         <div
@@ -4606,7 +4606,7 @@ function Table({
             textAlign: "center",
           }}
         >
-          {phase === "finished" ? "Results · " : ""}
+          {phase === "finished" ? "Results · " : finishOrder.length > 0 ? "Still playing · " : ""}
           {finishOrder.map((pIdx, i) => {
             const place = i + 1;
             const isLast = phase === "finished" && place === finishOrder.length && finishOrder.length > 1;
@@ -4619,6 +4619,28 @@ function Table({
           })}
         </div>
       )}
+      {outNote ? (
+        <div
+          style={{
+            position: "absolute",
+            top: 62,
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 70,
+            padding: "6px 12px",
+            borderRadius: 10,
+            background: "rgba(8, 18, 10, 0.9)",
+            border: "1px solid rgba(241,196,15,0.55)",
+            color: "#f5f0e6",
+            fontSize: 13,
+            fontWeight: 700,
+            pointerEvents: "none",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {outNote}
+        </div>
+      ) : null}
 
       <div
         style={{
@@ -4822,10 +4844,12 @@ function Table({
               (isSwap && !humanReady) || (isHumanTurn && canSelectFaceUp)
             }
             selectableFaceDown={
-              isHumanTurn &&
-              (pickupAwaitTable ? humanZone === "faceDown" : humanZone === "faceDown")
+              (phase === "finished" && playerFaceDown(0).some((c, i) => c !== null && !playerFaceUp(0)[i])) ||
+              (isHumanTurn &&
+                (pickupAwaitTable ? humanZone === "faceDown" : humanZone === "faceDown"))
             }
-            locked={isSwap ? humanReady : !isHumanTurn}
+            locked={phase === "finished" ? false : isSwap ? humanReady : !isHumanTurn}
+            peekedDown={phase === "finished" ? playerFaceDown(0).map((_, i) => !!peekDown[i]) : undefined}
             selectedFaceUp={
               isSwap
                 ? selection?.zone === "faceUp"
@@ -4838,9 +4862,21 @@ function Table({
             faceUpLegal={faceUpLegal}
             glowFaceUp={faceUpGlow}
             onSelectFaceUp={onSelectFaceUp}
-            onSelectFaceDown={onSelectFaceDown}
+            onSelectFaceDown={
+              phase === "finished"
+                ? (i) => {
+                    if (playerFaceUp(0)[i]) return;
+                    setPeekDown((prev) => ({ ...prev, [i]: !prev[i] }));
+                  }
+                : onSelectFaceDown
+            }
             swapKey={swapTick}
           />
+          {phase === "finished" && playerFaceDown(0).some((c, i) => c !== null && !playerFaceUp(0)[i]) ? (
+            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.7)", fontWeight: 700, textShadow: "0 1px 4px rgba(0,0,0,0.8)" }}>
+              Tap a face-down card to peek
+            </div>
+          ) : null}
           {(playerHand(0).length > 0 || !isPlaying) && (
             <Hand
               cards={playerHand(0)}
@@ -4934,10 +4970,13 @@ function Table({
           name={winner.name}
           avatar={winner.avatar}
           you={winnerIdx === 0}
-          onDismiss={() => setWinShow(false)}
+          onDismiss={() => {
+            setWinShow(false);
+            setEndUi(true);
+          }}
         />
       ) : null}
-      {phase === "finished" && onToLobby && !winShow ? <FinishedLobbyOverlay onLobby={onToLobby} /> : null}
+      {phase === "finished" && onToLobby && endUi && !winShow ? <FinishedLobbyOverlay onLobby={onToLobby} /> : null}
     </div>
   );
 }
@@ -5677,7 +5716,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       setScreen("table");
       const anim = msg.anim;
       const hasAnim =
-        msg.view.phase === "playing" &&
+        (msg.view.phase === "playing" || msg.view.phase === "finished") &&
         anim &&
         ((anim.played && anim.played.length > 0) ||
           anim.pickup ||
@@ -6591,6 +6630,8 @@ function CardGame() {
         return;
       }
       advanceTurn(playerIndex, result.players, false);
+      const stillIn = unfinishedPlayers(result.players).length;
+      setStatusMsg(`${result.players[playerIndex].name} is out · ${stillIn} still in`);
       return;
     }
 
