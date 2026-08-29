@@ -723,7 +723,15 @@ const server = http.createServer((req, res) => {
         clerk: clerk.clerkConfigured(),
         leaderboard: (() => {
           const board = leaderboard.info();
-          return { clerk: board.clerk, players: board.players };
+          return {
+            clerk: board.clerk,
+            clerkKind: board.clerkKind,
+            expectedKind: board.expectedKind,
+            mismatch: board.mismatch,
+            players: board.players,
+            pending: board.pending,
+            lastError: board.lastError || undefined,
+          };
         })(),
       })
     );
@@ -744,11 +752,17 @@ wss.on("connection", (ws) => {
 Promise.resolve(leaderboard.hydrateFromClerk())
   .catch((err) => console.error("leaderboard hydrate failed", err))
   .finally(() => {
+    leaderboard.startSyncLoop();
     server.listen(PORT, "0.0.0.0", () => {
       const board = leaderboard.info();
       console.log(`Citrons multiplayer on :${PORT}`);
       console.log(
-        `leaderboard file=${board.file} clerk=${board.clerk ? "on" : "off"} players=${board.players}`
+        `leaderboard file=${board.file} clerk=${board.clerkKind} expected=${board.expectedKind} players=${board.players} pending=${board.pending}`
       );
+      if (board.mismatch || board.clerkKind === "off") {
+        console.error(
+          "leaderboard will not survive deploys until Railway CLERK_SECRET_KEY is the matching live Clerk secret"
+        );
+      }
     });
   });

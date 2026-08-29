@@ -5,11 +5,36 @@ const path = require("path");
 
 const TOP = 25;
 const CLERK_META_KEY = "citrons";
+const DEFAULT_LIVE_PK = "pk_live_";
 
 let store = { users: {} };
+const pending = new Set();
+let lastError = "";
+let flushTimer = null;
 
 function clerkKey() {
   return String(process.env.CLERK_SECRET_KEY || "").trim();
+}
+
+function clerkKind() {
+  const key = clerkKey();
+  if (!key) return "off";
+  if (key.startsWith("sk_live_")) return "live";
+  if (key.startsWith("sk_test_")) return "test";
+  return "other";
+}
+
+function expectedClerkKind() {
+  const pk = String(process.env.CLERK_PUBLISHABLE_KEY || DEFAULT_LIVE_PK).trim();
+  if (pk.startsWith("pk_live_")) return "live";
+  if (pk.startsWith("pk_test_")) return "test";
+  return "";
+}
+
+function clerkMismatch() {
+  const kind = clerkKind();
+  const expected = expectedClerkKind();
+  return kind !== "off" && !!expected && kind !== expected;
 }
 
 function filePath() {
@@ -24,6 +49,11 @@ function load() {
     const raw = fs.readFileSync(filePath(), "utf8");
     const parsed = JSON.parse(raw);
     if (parsed && parsed.users && typeof parsed.users === "object") store = { users: parsed.users };
+    if (Array.isArray(parsed && parsed.pending)) {
+      for (const id of parsed.pending) {
+        if (sanitizeId(id)) pending.add(sanitizeId(id));
+      }
+    }
   } catch {
     store = { users: {} };
   }
@@ -33,8 +63,23 @@ function save() {
   const file = filePath();
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(store, null, 2));
+  fs.writeFileSync(
+    tmp,
+    JSON.stringify({ users: store.users, pending: [...pending] }, null, 2)
+  );
   fs.renameSync(tmp, file);
+}
+
+function saveSafe() {
+  try {
+    save();
+  } catch (err) {
+    console.error("leaderboard file save failed", err);
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function sanitizeId(id) {
@@ -56,6 +101,15 @@ function sanitizeAvatar(url) {
   if (!u || u.length > 800) return "";
   if (!/^https:\/\//i.test(u)) return "";
   return u;
+}
+
+function rowNewer(a, b) {
+  if (!a) return false;
+  if (!b) return true;
+  const aGames = Number(a.games) || 0;
+  const bGames = Number(b.games) || 0;
+  if (aGames !== bGames) return aGames > bGames;
+  return (Number(a.updatedAt) || 0) >= (Number(b.updatedAt) || 0);
 }
 
 function bump(userId, name, avatar, { win, last }) {
@@ -114,20 +168,58 @@ function rowFromClerkUser(user) {
   };
 }
 
+function citronsPayload(row) {
+  return {
+    wins: Number(row.wins) || 0,
+    games: Number(row.games) || 0,
+    lasts: Number(row.lasts) || 0,
+    name: sanitizeName(row.name),
+    avatar: sanitizeAvatar(row.avatar),
+    updatedAt: Number(row.updatedAt) || Date.now(),
+  };
+}
+
 async function pushUserToClerk(id, row) {
   if (!clerkKey() || !id || !row) return;
-  await clerkApi("PATCH", `/users/${encodeURIComponent(id)}`, {
+  await clerkApi("PATCH", `/users/${encodeURIComponent(id)}/metadata`, {
     public_metadata: {
-      [CLERK_META_KEY]: {
-        wins: Number(row.wins) || 0,
-        games: Number(row.games) || 0,
-        lasts: Number(row.lasts) || 0,
-        name: sanitizeName(row.name),
-        avatar: sanitizeAvatar(row.avatar),
-        updatedAt: Number(row.updatedAt) || Date.now(),
-      },
+      [CLERK_META_KEY]: citronsPayload(row),
     },
   });
+}
+
+async function pushUserToClerkWithRetry(id, row, attempts = 6) {
+  if (!clerkKey() || !id || !row) return false;
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      await pushUserToClerk(id, row);
+      pending.delete(id);
+      lastError = "";
+      return true;
+    } catch (err) {
+      lastErr = err;
+      await sleep(400 * 2 ** i);
+    }
+  }
+  pending.add(id);
+  lastError = String((lastErr && lastErr.message) || lastErr || "clerk sync failed").slice(0, 180);
+  console.error("leaderboard clerk sync failed", lastErr);
+  saveSafe();
+  return false;
+}
+
+async function flushPending() {
+  if (!clerkKey() || pending.size === 0) return;
+  for (const id of [...pending]) {
+    const row = store.users[id];
+    if (!row) {
+      pending.delete(id);
+      continue;
+    }
+    await pushUserToClerkWithRetry(id, row, 3);
+  }
+  saveSafe();
 }
 
 function clerkUsersFromResponse(batch) {
@@ -136,34 +228,82 @@ function clerkUsersFromResponse(batch) {
   return [];
 }
 
+async function listClerkUsers(offset) {
+  try {
+    return clerkUsersFromResponse(
+      await clerkApi("GET", `/users?limit=100&offset=${offset}&order_by=-updated_at`)
+    );
+  } catch (err) {
+    console.warn("leaderboard clerk list with order_by failed, retrying", err && err.message);
+    return clerkUsersFromResponse(await clerkApi("GET", `/users?limit=100&offset=${offset}`));
+  }
+}
+
+async function parsedRowFromListedUser(user) {
+  let parsed = rowFromClerkUser(user);
+  if (parsed || !user || !user.id) return parsed;
+  if (user.public_metadata && Object.keys(user.public_metadata).length) return null;
+  try {
+    const full = await clerkApi("GET", `/users/${encodeURIComponent(user.id)}`);
+    return rowFromClerkUser(full);
+  } catch (err) {
+    console.warn("leaderboard clerk user fetch failed", user.id, err && err.message);
+    return null;
+  }
+}
+
+function mergeClerkRow(parsed) {
+  if (!parsed) return false;
+  const prev = store.users[parsed.id];
+  if (rowNewer(parsed.row, prev)) {
+    store.users[parsed.id] = parsed.row;
+    pending.delete(parsed.id);
+    return true;
+  }
+  if (prev && !rowNewer(parsed.row, prev)) pending.add(parsed.id);
+  return false;
+}
+
 async function hydrateFromClerk() {
-  if (!clerkKey()) return;
+  if (!clerkKey()) {
+    console.error("leaderboard CLERK_SECRET_KEY missing; scores will not survive deploys");
+    return;
+  }
+  if (clerkMismatch()) {
+    console.error(
+      `leaderboard secret is ${clerkKind()} but the app expects ${expectedClerkKind()}; live scores will not persist`
+    );
+  }
   let offset = 0;
   let found = 0;
   for (;;) {
-    const batch = await clerkApi("GET", `/users?limit=100&offset=${offset}&order_by=-updated_at`);
-    const list = clerkUsersFromResponse(batch);
+    const list = await listClerkUsers(offset);
     if (list.length === 0) break;
+    const pageHasMeta = list.some(
+      (user) => user && user.public_metadata && Object.keys(user.public_metadata).length
+    );
     for (const user of list) {
-      const parsed = rowFromClerkUser(user);
-      if (!parsed) continue;
-      const prev = store.users[parsed.id];
-      if (!prev || (Number(parsed.row.games) || 0) >= (Number(prev.games) || 0)) {
-        store.users[parsed.id] = parsed.row;
-        found++;
-      }
+      const parsed = pageHasMeta ? rowFromClerkUser(user) : await parsedRowFromListedUser(user);
+      if (mergeClerkRow(parsed)) found++;
     }
     offset += list.length;
     if (list.length < 100) break;
   }
-  if (found) {
-    try {
-      save();
-    } catch (err) {
-      console.error("leaderboard file save after clerk hydrate failed", err);
-    }
+  saveSafe();
+  console.log(
+    `leaderboard hydrate clerk=${clerkKind()} scored=${found} store=${Object.keys(store.users).length} pending=${pending.size}`
+  );
+  await flushPending();
+  await healClerkFromStore();
+}
+
+async function healClerkFromStore() {
+  if (!clerkKey()) return;
+  const ids = Object.keys(store.users);
+  for (const id of ids) {
+    await pushUserToClerkWithRetry(id, store.users[id], 4);
   }
-  console.log(`leaderboard hydrate clerk users with scores=${found} store=${Object.keys(store.users).length}`);
+  saveSafe();
 }
 
 function recordGame(room) {
@@ -179,11 +319,12 @@ function recordGame(room) {
     if (!id || seen.has(id)) continue;
     seen.add(id);
     bump(id, player.name, player.avatar, { win: i === 0, last: i === order.length - 1 });
+    pending.add(id);
     changed.push(id);
   }
   if (changed.length === 0) return;
-  save();
-  Promise.all(changed.map((id) => pushUserToClerk(id, store.users[id]))).catch((err) => {
+  saveSafe();
+  Promise.all(changed.map((id) => pushUserToClerkWithRetry(id, store.users[id]))).catch((err) => {
     console.error("leaderboard clerk sync failed", err);
   });
 }
@@ -214,10 +355,23 @@ function info() {
   return {
     file: filePath(),
     clerk: !!clerkKey(),
+    clerkKind: clerkKind(),
+    expectedKind: expectedClerkKind(),
+    mismatch: clerkMismatch(),
     players: Object.keys(store.users).length,
+    pending: pending.size,
+    lastError,
   };
+}
+
+function startSyncLoop() {
+  if (flushTimer) return;
+  flushTimer = setInterval(() => {
+    flushPending().catch((err) => console.error("leaderboard pending flush failed", err));
+  }, 30 * 1000);
+  if (typeof flushTimer.unref === "function") flushTimer.unref();
 }
 
 load();
 
-module.exports = { recordGame, top, hydrateFromClerk, info };
+module.exports = { recordGame, top, hydrateFromClerk, info, startSyncLoop };
