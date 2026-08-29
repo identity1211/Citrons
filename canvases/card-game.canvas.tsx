@@ -3294,8 +3294,7 @@ function RoomChat({
           maxWidth: fill ? "none" : 150,
           flex: fill ? 1 : undefined,
           minHeight: fill ? 0 : undefined,
-          alignSelf: fill ? "flex-end" : undefined,
-          marginLeft: fill ? "auto" : undefined,
+          alignSelf: fill ? "flex-start" : undefined,
           display: "flex",
           flexDirection: "column",
         }}
