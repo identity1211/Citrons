@@ -701,10 +701,10 @@ function tutorialLockedAt(step: number): boolean {
 
 // ─── CSS keyframes ───────────────────────────────────────────────────────────
 
-const STYLE_ID = "card-game-keyframes-v23";
+const STYLE_ID = "card-game-keyframes-v24";
 function ensureKeyframes() {
   if (typeof document === "undefined") return;
-  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7", "card-game-keyframes-v8", "card-game-keyframes-v9", "card-game-keyframes-v10", "card-game-keyframes-v11", "card-game-keyframes-v12", "card-game-keyframes-v13", "card-game-keyframes-v14", "card-game-keyframes-v15", "card-game-keyframes-v16", "card-game-keyframes-v17", "card-game-keyframes-v18", "card-game-keyframes-v19", "card-game-keyframes-v20", "card-game-keyframes-v21", "card-game-keyframes-v22"]) {
+  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7", "card-game-keyframes-v8", "card-game-keyframes-v9", "card-game-keyframes-v10", "card-game-keyframes-v11", "card-game-keyframes-v12", "card-game-keyframes-v13", "card-game-keyframes-v14", "card-game-keyframes-v15", "card-game-keyframes-v16", "card-game-keyframes-v17", "card-game-keyframes-v18", "card-game-keyframes-v19", "card-game-keyframes-v20", "card-game-keyframes-v21", "card-game-keyframes-v22", "card-game-keyframes-v23"]) {
     document.getElementById(id)?.remove();
   }
   if (document.getElementById(STYLE_ID)) return;
@@ -953,11 +953,20 @@ function ensureKeyframes() {
       animation: emojiReactFly 1.65s ease-out both;
       pointer-events: none;
     }
+    @keyframes matchMenuIn {
+      0% { opacity: 0; transform: translateY(-10px) scale(0.94); }
+      100% { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .match-menu-fly {
+      animation: matchMenuIn 0.18s ease-out both;
+      transform-origin: top right;
+    }
     @media (prefers-reduced-motion: reduce) {
       .winner-banner { animation: none !important; }
       .winner-burst, .winner-confetti { animation: none !important; opacity: 0 !important; }
       .chat-toast { animation: none !important; }
       .emoji-react-fly { animation: none !important; opacity: 0 !important; }
+      .match-menu-fly { animation: none !important; }
     }
   `;
   document.head.appendChild(style);
@@ -3956,6 +3965,96 @@ function LobbyBack({ onClick, label }: { onClick: () => void; label?: string }) 
   );
 }
 
+function MatchMenu({ onToLobby, onLeave }: { onToLobby: () => void; onLeave: () => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      {open ? (
+        <div
+          onClick={() => setOpen(false)}
+          style={{
+            position: "absolute",
+            inset: 0,
+            zIndex: 95,
+            pointerEvents: "auto",
+          }}
+        />
+      ) : null}
+      <div
+        style={{
+          position: "absolute",
+          top: FELT_INSET_TOP,
+          right: FELT_INSET_RIGHT,
+          zIndex: 96,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "flex-end",
+          pointerEvents: "auto",
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          style={{
+            ...LOBBY_CORNER_BTN,
+            position: "static",
+          }}
+        >
+          {open ? "Menu ▾" : "Menu"}
+        </button>
+        {open ? (
+          <div
+            className="match-menu-fly"
+            style={{
+              marginTop: 6,
+              minWidth: 148,
+              padding: 6,
+              borderRadius: 8,
+              border: "1px solid rgba(255,255,255,0.28)",
+              background: "rgba(8, 18, 10, 0.94)",
+              boxShadow: "0 10px 24px rgba(0,0,0,0.4)",
+              display: "flex",
+              flexDirection: "column",
+              gap: 6,
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                onToLobby();
+              }}
+              style={{
+                ...LOBBY_CORNER_BTN,
+                position: "static",
+                width: "100%",
+                justifyContent: "flex-start",
+              }}
+            >
+              To lobby
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                onLeave();
+              }}
+              style={{
+                ...LOBBY_CORNER_BTN,
+                position: "static",
+                width: "100%",
+                justifyContent: "flex-start",
+              }}
+            >
+              Leave
+            </button>
+          </div>
+        ) : null}
+      </div>
+    </>
+  );
+}
+
 function Lobby({
   onStart,
   onRules,
@@ -4594,6 +4693,8 @@ function Table({
   onSendChat,
   reacts,
   onSendReact,
+  showSpecials = true,
+  matchMenu,
 }: {
   players: PlayerState[];
   drawDeck: string[];
@@ -4633,6 +4734,8 @@ function Table({
   onSendChat?: (text: string) => void;
   reacts?: ReactBurst[];
   onSendReact?: (emoji: string) => void;
+  showSpecials?: boolean;
+  matchMenu?: { onToLobby: () => void; onLeave: () => void };
   tutorial?: {
     text: string;
     showNext: boolean;
@@ -4944,23 +5047,26 @@ function Table({
         }}
       >
         <WindowButton style={{ position: "static", top: "auto", left: "auto" }} onClick={() => void toggleFullscreen()} />
-        <button
-          onClick={phase === "finished" && onToLobby ? onToLobby : onReset}
-          style={{
-            padding: "6px 10px",
-            minHeight: 0,
-            borderRadius: 6,
-            border: `1px solid ${theme.stroke.secondary}`,
-            background: "rgba(0,0,0,0.35)",
-            color: theme.text.primary,
-            cursor: "pointer",
-            fontSize: 12,
-            touchAction: "manipulation",
-          }}
-        >
-          {phase === "finished" && onToLobby ? "Lobby" : resetLabel || "← Lobby"}
-        </button>
+        {matchMenu ? null : (
+          <button
+            onClick={phase === "finished" && onToLobby ? onToLobby : onReset}
+            style={{
+              padding: "6px 10px",
+              minHeight: 0,
+              borderRadius: 6,
+              border: `1px solid ${theme.stroke.secondary}`,
+              background: "rgba(0,0,0,0.35)",
+              color: theme.text.primary,
+              cursor: "pointer",
+              fontSize: 12,
+              touchAction: "manipulation",
+            }}
+          >
+            {phase === "finished" && onToLobby ? "Lobby" : resetLabel || "← Lobby"}
+          </button>
+        )}
       </div>
+      {matchMenu ? <MatchMenu onToLobby={matchMenu.onToLobby} onLeave={matchMenu.onLeave} /> : null}
       {fsNote ? (
         <div
           style={{
@@ -5232,11 +5338,11 @@ function Table({
             gap: humanGap,
             minHeight: 0,
             alignSelf: "end",
-            padding: isPlaying && currentPlayer === 0 && phase === "playing" ? "4px 10px 2px" : "2px 8px",
+            padding: "2px 8px",
             borderRadius: 16,
             boxShadow:
               isPlaying && currentPlayer === 0 && phase === "playing"
-                ? "0 0 0 2px rgba(241,196,15,0.55)"
+                ? "0 0 0 1px rgba(241,196,15,0.7)"
                 : undefined,
           }}
         >
@@ -5372,7 +5478,7 @@ function Table({
           onSkip={tutorial.onSkip}
         />
       ) : null}
-      {phase !== "lobby" && phase !== "rules" ? (
+      {phase !== "lobby" && phase !== "rules" && showSpecials ? (
         <SpecialsMemo active={tutorial?.special} drop={!!tutorial} />
       ) : null}
       {winShow && winner ? (
@@ -6369,6 +6475,18 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     onLeave();
   }
 
+  function parkAtLobby() {
+    screenRef.current = "pick";
+    setScreen("pick");
+    setView(null);
+    setDropped(false);
+    setBusy(false);
+    setError("");
+    if (dealTimerRef.current) clearTimeout(dealTimerRef.current);
+    clearTableAnims();
+    closeSocket();
+  }
+
   function leaveOnline() {
     send({ type: "leave" });
     forgetSession();
@@ -7091,6 +7209,8 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         onSendChat={(text) => send({ type: "chat", text })}
         reacts={reacts}
         onSendReact={(emoji) => send({ type: "react", emoji })}
+        showSpecials={false}
+        matchMenu={{ onToLobby: parkAtLobby, onLeave: leaveOnline }}
         onToLobby={view.phase === "finished" ? () => send({ type: "lobby" }) : undefined}
       />
       </>

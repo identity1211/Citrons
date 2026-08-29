@@ -280,6 +280,68 @@ function findClerkSeat(clerkUserId) {
   return null;
 }
 
+function gatherSeatCards(player) {
+  const cards = [];
+  for (const c of player.hand || []) if (c) cards.push(c);
+  for (const c of player.faceUp || []) if (c) cards.push(c);
+  for (const c of player.faceDown || []) if (c) cards.push(c);
+  return cards;
+}
+
+function ejectFromMatch(room, player) {
+  const idx = room.seats.indexOf(player);
+  if (idx < 0) return;
+  const inMatch = room.phase === "playing" || room.phase === "swap" || room.phase === "dealing";
+  if (!inMatch) {
+    if (removeSeat(room, player) && rooms.has(room.code)) broadcast(room);
+    notifyLobbies();
+    return;
+  }
+
+  const dumped = gatherSeatCards(player);
+  if (dumped.length) room.discard = [...room.discard, ...dumped];
+  const name = player.name;
+  const wasTurn = room.currentPlayer === idx;
+  const currentId = room.seats[room.currentPlayer] && room.seats[room.currentPlayer].id;
+
+  if (!removeSeat(room, player)) {
+    notifyLobbies();
+    return;
+  }
+  room.finishOrder = (room.finishOrder || [])
+    .filter((i) => i !== idx)
+    .map((i) => (i > idx ? i - 1 : i));
+
+  if (!rooms.has(room.code) || room.seats.length === 0) {
+    notifyLobbies();
+    return;
+  }
+
+  const n = room.seats.length;
+  if (wasTurn) {
+    const next = idx % n;
+    room.currentPlayer = engine.nextAlive((next + n - 1) % n, room.seats);
+  } else {
+    const found = room.seats.findIndex((p) => p.id === currentId);
+    room.currentPlayer = found >= 0 ? found : 0;
+  }
+
+  const alive = engine.unfinishedPlayers(room.seats);
+  if (alive.length <= 1) {
+    if (alive.length === 1 && !room.finishOrder.includes(alive[0])) room.finishOrder.push(alive[0]);
+    room.phase = "finished";
+    room.statusMsg = `${name} left · Game over`;
+    saveFinishedGame(room);
+  } else if (room.phase === "playing") {
+    const turnName = room.seats[room.currentPlayer] ? room.seats[room.currentPlayer].name : "";
+    room.statusMsg = `${name} left · Turn: ${turnName}`;
+  } else {
+    room.statusMsg = `${name} left`;
+  }
+  broadcast(room);
+  notifyLobbies();
+}
+
 function abandonSeat(room, player) {
   if (!room || !player) return;
   if (player.leaveTimer) {
@@ -292,8 +354,7 @@ function abandonSeat(room, player) {
     player.ws.playerId = null;
     player.ws = null;
   }
-  if (removeSeat(room, player) && rooms.has(room.code)) broadcast(room);
-  notifyLobbies();
+  ejectFromMatch(room, player);
 }
 
 function releaseClerk(clerkUserId, exceptCode) {
