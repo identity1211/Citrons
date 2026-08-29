@@ -3169,13 +3169,18 @@ function RoomChat({
     </div>
   );
 
+  const composerStyle =
+    variant === "lobby"
+      ? { display: "flex" as const, gap: 6, marginTop: 6, flexShrink: 0 }
+      : undefined;
+
   const composer = (
     <form
       onSubmit={(e) => {
         e.preventDefault();
         submit();
       }}
-      style={{ display: "flex", gap: 6, marginTop: variant === "lobby" ? 6 : 0, flexShrink: 0 }}
+      style={composerStyle}
     >
       <input
         ref={inputRef}
@@ -3191,7 +3196,7 @@ function RoomChat({
         inputMode="text"
         style={{
           flex: 1,
-          height: 36,
+          height: 40,
           borderRadius: 8,
           border: "1.5px solid rgba(255,255,255,0.22)",
           background: "rgba(0,0,0,0.35)",
@@ -3205,7 +3210,7 @@ function RoomChat({
         type="submit"
         className="lobby-ghost-btn"
         style={{
-          height: 36,
+          height: 40,
           padding: "0 12px",
           borderRadius: 8,
           border: "1.5px solid rgba(241,196,15,0.45)",
@@ -3214,6 +3219,7 @@ function RoomChat({
           fontWeight: 800,
           fontSize: 12,
           cursor: "pointer",
+          flexShrink: 0,
         }}
       >
         Send
@@ -3246,114 +3252,200 @@ function RoomChat({
   const showToasts = !open && toasts.length > 0;
   const dockWidth = open || showToasts ? Math.min(260, Math.max(168, inset.width - 24)) : undefined;
   const kbOpen = open && inset.keyboard;
-  const imePad = !kbOpen ? 0 : inset.android ? (inset.vkH > 80 ? 28 : 80) : 16;
-  const panelH = Math.min(260, Math.max(168, inset.height - imePad - 12));
-  const kbTop = Math.max(8, inset.height - panelH - imePad);
+  const barH = 52;
+  const imeExtra = inset.android ? (inset.vkH > 80 ? 8 : 56) : 4;
+  const imeTop = Math.max(0, inset.top + inset.height - barH - imeExtra);
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        left: kbOpen ? 8 : `max(8px, env(safe-area-inset-left))`,
-        top: kbOpen ? kbTop : undefined,
-        bottom: kbOpen ? "auto" : "max(64px, calc(env(safe-area-inset-bottom) + 58px))",
-        height: kbOpen ? panelH : undefined,
-        transform: kbOpen ? `translate3d(${inset.left}px, ${inset.top}px, 0)` : "none",
-        zIndex: 120,
-        width: dockWidth,
-        maxWidth: "min(260px, calc(100% - 16px))",
-        maxHeight: open ? (kbOpen ? panelH : 280) : undefined,
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "flex-start",
-        pointerEvents: "none",
-        boxSizing: "border-box",
-      }}
-    >
-      {showToasts ? (
-        <div className="chat-toast-stack" style={{ marginBottom: 6 }}>
-          {toasts.map((toast) => (
-            <div
-              key={toast.id}
-              className="chat-toast"
-              style={{
-                width: "100%",
-                boxSizing: "border-box",
-                padding: "7px 10px",
-                borderRadius: 10,
-                background: "rgba(8, 18, 10, 0.92)",
-                border: "1px solid rgba(241,196,15,0.4)",
-                boxShadow: "0 8px 20px rgba(0,0,0,0.35)",
-                textAlign: "left",
-              }}
-            >
-              <div style={{ color: "#f1c40f", fontSize: 10, fontWeight: 800, letterSpacing: 0.4, marginBottom: 2 }}>
-                {toast.name}
-              </div>
-              <div
-                style={{
-                  color: "#f5f0e6",
-                  fontSize: 13,
-                  lineHeight: 1.3,
-                  overflow: "hidden",
-                  maxHeight: 52,
-                  overflowWrap: "anywhere",
-                }}
-              >
-                {toast.text}
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : null}
-      <button
-        type="button"
-        onClick={() => {
-          setOpen((v) => !v);
-          pinChat();
-        }}
+    <>
+      <div
         style={{
-          pointerEvents: "auto",
-          flexShrink: 0,
-          padding: "7px 10px",
-          borderRadius: open ? "10px 10px 0 0" : 10,
-          border: "1px solid rgba(241,196,15,0.4)",
-          borderBottom: open ? "1px solid rgba(255,255,255,0.12)" : "1px solid rgba(241,196,15,0.4)",
-          background: "rgba(8, 18, 10, 0.88)",
-          color: "#f1c40f",
-          fontSize: 10,
-          fontWeight: 800,
-          letterSpacing: 1.2,
-          textTransform: "uppercase",
-          cursor: "pointer",
+          position: "fixed",
+          left: `max(8px, env(safe-area-inset-left))`,
+          bottom: open
+            ? `max(${64 + barH}px, calc(env(safe-area-inset-bottom) + ${58 + barH}px))`
+            : "max(64px, calc(env(safe-area-inset-bottom) + 58px))",
+          zIndex: 120,
+          width: dockWidth,
+          maxWidth: "min(260px, calc(100% - 16px))",
+          maxHeight: open && !kbOpen ? 240 : undefined,
+          display: kbOpen ? "none" : "flex",
+          flexDirection: "column",
+          alignItems: "flex-start",
+          pointerEvents: "none",
+          boxSizing: "border-box",
         }}
       >
-        {open ? "Chat ▾" : unread > 0 ? `Chat · ${unread}` : "Chat"}
-      </button>
-      {open ? (
-        <div
+        {showToasts ? (
+          <div className="chat-toast-stack" style={{ marginBottom: 6 }}>
+            {toasts.map((toast) => (
+              <div
+                key={toast.id}
+                className="chat-toast"
+                style={{
+                  width: "100%",
+                  boxSizing: "border-box",
+                  padding: "7px 10px",
+                  borderRadius: 10,
+                  background: "rgba(8, 18, 10, 0.92)",
+                  border: "1px solid rgba(241,196,15,0.4)",
+                  boxShadow: "0 8px 20px rgba(0,0,0,0.35)",
+                  textAlign: "left",
+                }}
+              >
+                <div style={{ color: "#f1c40f", fontSize: 10, fontWeight: 800, letterSpacing: 0.4, marginBottom: 2 }}>
+                  {toast.name}
+                </div>
+                <div
+                  style={{
+                    color: "#f5f0e6",
+                    fontSize: 13,
+                    lineHeight: 1.3,
+                    overflow: "hidden",
+                    maxHeight: 52,
+                    overflowWrap: "anywhere",
+                  }}
+                >
+                  {toast.text}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        <button
+          type="button"
+          onClick={() => {
+            setOpen((v) => !v);
+            pinChat();
+          }}
           style={{
             pointerEvents: "auto",
-            width: "100%",
-            minWidth: 168,
-            boxSizing: "border-box",
-            borderRadius: "0 10px 10px 10px",
-            background: "rgba(8, 18, 10, 0.94)",
+            flexShrink: 0,
+            padding: "7px 10px",
+            borderRadius: open ? "10px 10px 0 0" : 10,
             border: "1px solid rgba(241,196,15,0.4)",
-            borderTop: "none",
-            padding: 6,
-            display: "flex",
-            flexDirection: "column",
-            minHeight: 0,
-            flex: 1,
-            overflow: "hidden",
+            borderBottom: open ? "1px solid rgba(255,255,255,0.12)" : "1px solid rgba(241,196,15,0.4)",
+            background: "rgba(8, 18, 10, 0.88)",
+            color: "#f1c40f",
+            fontSize: 10,
+            fontWeight: 800,
+            letterSpacing: 1.2,
+            textTransform: "uppercase",
+            cursor: "pointer",
           }}
         >
-          {log}
-          {composer}
-        </div>
+          {open ? "Chat ▾" : unread > 0 ? `Chat · ${unread}` : "Chat"}
+        </button>
+        {open ? (
+          <div
+            style={{
+              pointerEvents: "auto",
+              width: "100%",
+              minWidth: 168,
+              boxSizing: "border-box",
+              borderRadius: "0 10px 0 0",
+              background: "rgba(8, 18, 10, 0.94)",
+              border: "1px solid rgba(241,196,15,0.4)",
+              borderTop: "none",
+              borderBottom: "none",
+              padding: 6,
+              display: "flex",
+              flexDirection: "column",
+              minHeight: 0,
+              flex: 1,
+              overflow: "hidden",
+            }}
+          >
+            {log}
+          </div>
+        ) : null}
+      </div>
+      {open ? (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            submit();
+          }}
+          style={{
+            position: "fixed",
+            display: "flex",
+            gap: 8,
+            alignItems: "center",
+            boxSizing: "border-box",
+            pointerEvents: "auto",
+            zIndex: 140,
+            margin: 0,
+            ...(kbOpen
+              ? {
+                  left: inset.left,
+                  top: imeTop,
+                  bottom: "auto",
+                  width: inset.width,
+                  height: barH,
+                  padding: "6px 8px",
+                  background: "rgba(8, 18, 10, 0.97)",
+                  borderTop: "1px solid rgba(241,196,15,0.5)",
+                  borderRadius: 0,
+                  transform: "none",
+                }
+              : {
+                  left: `max(8px, env(safe-area-inset-left))`,
+                  bottom: "max(64px, calc(env(safe-area-inset-bottom) + 58px))",
+                  width: dockWidth,
+                  maxWidth: "min(260px, calc(100% - 16px))",
+                  padding: 6,
+                  background: "rgba(8, 18, 10, 0.94)",
+                  border: "1px solid rgba(241,196,15,0.4)",
+                  borderTop: "none",
+                  borderRadius: "0 0 10px 10px",
+                }),
+          }}
+        >
+          <input
+            ref={inputRef}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value.slice(0, 120))}
+            onFocus={onComposerFocus}
+            onBlur={onComposerBlur}
+            placeholder="Message"
+            maxLength={120}
+            autoComplete="off"
+            autoCorrect="off"
+            enterKeyHint="send"
+            inputMode="text"
+            style={{
+              flex: 1,
+              height: 40,
+              borderRadius: 8,
+              border: "1.5px solid rgba(255,255,255,0.22)",
+              background: "rgba(0,0,0,0.45)",
+              color: "#f5f0e6",
+              padding: "0 10px",
+              fontSize: 16,
+              minWidth: 0,
+            }}
+          />
+          <button
+            type="submit"
+            className="lobby-ghost-btn"
+            style={{
+              height: 40,
+              padding: "0 14px",
+              borderRadius: 8,
+              border: "1.5px solid rgba(241,196,15,0.45)",
+              background: "rgba(241,196,15,0.18)",
+              color: "#f1c40f",
+              fontWeight: 800,
+              fontSize: 12,
+              cursor: "pointer",
+              flexShrink: 0,
+            }}
+          >
+            Send
+          </button>
+        </form>
       ) : null}
-    </div>
+    </>
   );
 }
 
