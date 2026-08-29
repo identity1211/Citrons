@@ -597,10 +597,10 @@ function tutorialLockedAt(step: number): boolean {
 
 // ─── CSS keyframes ───────────────────────────────────────────────────────────
 
-const STYLE_ID = "card-game-keyframes-v22";
+const STYLE_ID = "card-game-keyframes-v23";
 function ensureKeyframes() {
   if (typeof document === "undefined") return;
-  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7", "card-game-keyframes-v8", "card-game-keyframes-v9", "card-game-keyframes-v10", "card-game-keyframes-v11", "card-game-keyframes-v12", "card-game-keyframes-v13", "card-game-keyframes-v14", "card-game-keyframes-v15", "card-game-keyframes-v16", "card-game-keyframes-v17", "card-game-keyframes-v18", "card-game-keyframes-v19", "card-game-keyframes-v20", "card-game-keyframes-v21"]) {
+  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7", "card-game-keyframes-v8", "card-game-keyframes-v9", "card-game-keyframes-v10", "card-game-keyframes-v11", "card-game-keyframes-v12", "card-game-keyframes-v13", "card-game-keyframes-v14", "card-game-keyframes-v15", "card-game-keyframes-v16", "card-game-keyframes-v17", "card-game-keyframes-v18", "card-game-keyframes-v19", "card-game-keyframes-v20", "card-game-keyframes-v21", "card-game-keyframes-v22"]) {
     document.getElementById(id)?.remove();
   }
   if (document.getElementById(STYLE_ID)) return;
@@ -829,12 +829,14 @@ function ensureKeyframes() {
       right: auto;
       bottom: auto;
       width: 100%;
+      height: 36px;
       flex-shrink: 0;
-      margin-top: 6px;
-      padding: 6px;
-      background: rgba(8, 18, 10, 0.94);
-      border: 1px solid rgba(241,196,15,0.4);
-      border-radius: 10px;
+      margin-top: 0;
+      padding: 0;
+      gap: 0;
+      background: rgba(0, 0, 0, 0.35);
+      border: 1px solid rgba(255,255,255,0.28);
+      border-radius: 6px;
       box-sizing: border-box;
     }
     @keyframes emojiReactFly {
@@ -3232,6 +3234,7 @@ function RoomChat({
 
   const kbLift = Math.max(inset.bottom, inset.vkH);
   const kbOpen = (variant === "lobby" || open) && (inset.keyboard || kbLift > 40);
+  const lobbyDocked = variant === "lobby" && !kbOpen;
 
   const imeBar = (
     <form
@@ -3255,27 +3258,28 @@ function RoomChat({
         inputMode="text"
         style={{
           flex: 1,
-          height: 40,
-          borderRadius: 8,
-          border: "1.5px solid rgba(255,255,255,0.22)",
-          background: "rgba(0,0,0,0.45)",
+          height: lobbyDocked ? LOBBY_CORNER_H : 40,
+          borderRadius: lobbyDocked ? 6 : 8,
+          border: lobbyDocked ? "none" : "1.5px solid rgba(255,255,255,0.22)",
+          background: lobbyDocked ? "transparent" : "rgba(0,0,0,0.45)",
           color: "#f5f0e6",
-          padding: "0 10px",
+          padding: lobbyDocked ? "0 12px" : "0 10px",
           fontSize: 16,
+          fontWeight: lobbyDocked ? 700 : undefined,
           minWidth: 0,
         }}
       />
       <button
         type="submit"
-        className="lobby-ghost-btn"
+        className={lobbyDocked ? undefined : "lobby-ghost-btn"}
         style={{
-          height: 40,
-          padding: "0 14px",
-          borderRadius: 8,
-          border: "1.5px solid rgba(241,196,15,0.45)",
-          background: "rgba(241,196,15,0.18)",
-          color: "#f1c40f",
-          fontWeight: 800,
+          height: lobbyDocked ? LOBBY_CORNER_H : 40,
+          padding: "0 12px",
+          borderRadius: lobbyDocked ? 6 : 8,
+          border: lobbyDocked ? "none" : "1.5px solid rgba(241,196,15,0.45)",
+          background: lobbyDocked ? "transparent" : "rgba(241,196,15,0.18)",
+          color: lobbyDocked ? "#f5f0e6" : "#f1c40f",
+          fontWeight: 700,
           fontSize: 12,
           cursor: "pointer",
           flexShrink: 0,
@@ -3297,6 +3301,7 @@ function RoomChat({
           alignSelf: fill ? "flex-start" : undefined,
           display: "flex",
           flexDirection: "column",
+          gap: fill ? 8 : 6,
         }}
       >
         <div
@@ -3765,11 +3770,18 @@ const LOBBY_GHOST_BTN: CSSProperties = {
   color: "#f5f0e6",
 };
 
+const LOBBY_CORNER_H = 36;
+
 const LOBBY_CORNER_BTN: CSSProperties = {
   position: "absolute",
   zIndex: 8,
-  padding: "8px 12px",
-  minHeight: 36,
+  boxSizing: "border-box",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  height: LOBBY_CORNER_H,
+  minHeight: LOBBY_CORNER_H,
+  padding: "0 12px",
   borderRadius: 6,
   border: "1px solid rgba(255,255,255,0.28)",
   background: "rgba(0,0,0,0.35)",
@@ -3777,6 +3789,7 @@ const LOBBY_CORNER_BTN: CSSProperties = {
   cursor: "pointer",
   fontSize: 12,
   fontWeight: 700,
+  lineHeight: 1,
   touchAction: "manipulation",
   pointerEvents: "auto",
 };
@@ -6804,7 +6817,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
           </>
         }
         style={{
-          padding: `max(44px, calc(env(safe-area-inset-top) + 28px)) ${FELT_INSET_X} max(56px, calc(env(safe-area-inset-bottom) + 48px)) ${FELT_INSET_X}`,
+          padding: `max(44px, calc(env(safe-area-inset-top) + 28px)) ${FELT_INSET_X} ${FELT_INSET_BOTTOM} ${FELT_INSET_X}`,
           alignItems: "stretch",
           justifyContent: "flex-start",
           overflowY: "hidden",
@@ -6853,6 +6866,8 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
                 minWidth: 0,
                 display: "flex",
                 flexDirection: "column",
+                paddingBottom: LOBBY_CORNER_H,
+                boxSizing: "border-box",
               }}
             >
               <div style={sectionLabel}>Players</div>
