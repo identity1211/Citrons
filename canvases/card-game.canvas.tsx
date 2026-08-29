@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useRef, useCallback, type CSSProperties, type ReactNode } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, createContext, useContext, type CSSProperties, type ReactNode } from "react";
 import { useHostTheme, Text, Row, Spacer } from "cursor/canvas";
 
 // ─── Card definitions ───────────────────────────────────────────────────────
@@ -597,10 +597,10 @@ function tutorialLockedAt(step: number): boolean {
 
 // ─── CSS keyframes ───────────────────────────────────────────────────────────
 
-const STYLE_ID = "card-game-keyframes-v17";
+const STYLE_ID = "card-game-keyframes-v18";
 function ensureKeyframes() {
   if (typeof document === "undefined") return;
-  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7", "card-game-keyframes-v8", "card-game-keyframes-v9", "card-game-keyframes-v10", "card-game-keyframes-v11", "card-game-keyframes-v12", "card-game-keyframes-v13", "card-game-keyframes-v14", "card-game-keyframes-v15", "card-game-keyframes-v16"]) {
+  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7", "card-game-keyframes-v8", "card-game-keyframes-v9", "card-game-keyframes-v10", "card-game-keyframes-v11", "card-game-keyframes-v12", "card-game-keyframes-v13", "card-game-keyframes-v14", "card-game-keyframes-v15", "card-game-keyframes-v16", "card-game-keyframes-v17"]) {
     document.getElementById(id)?.remove();
   }
   if (document.getElementById(STYLE_ID)) return;
@@ -684,7 +684,15 @@ function ensureKeyframes() {
       font-family: inherit;
     }
     .felt-chip:active:not(:disabled) { transform: translateY(1px); filter: brightness(0.92); }
-    html:fullscreen, html:-webkit-full-screen { background: #145230; width: 100%; height: 100%; }
+    html:fullscreen, html:-webkit-full-screen {
+      position: absolute !important;
+      inset: 0 !important;
+      width: 100% !important;
+      height: 100% !important;
+      max-width: none !important;
+      max-height: none !important;
+      background: #145230;
+    }
     .card-fly { animation: cardFlyToDiscard 0.58s cubic-bezier(0.22, 1, 0.36, 1) both; pointer-events: none; }
     .card-fly-burn { animation: cardFlyToBurn 0.55s cubic-bezier(0.33, 1, 0.68, 1) both; pointer-events: none; }
     .card-fly-pickup { animation: cardFlyToPlayer 0.55s cubic-bezier(0.33, 1, 0.68, 1) both; pointer-events: none; }
@@ -895,35 +903,10 @@ function readVisualMetrics() {
   };
 }
 
+const ViewportCtx = createContext({ w: 1024, h: 700 });
+
 function useViewport() {
-  const stable = useRef({ w: 0, h: 0 });
-  const [vp, setVp] = useState({ w: 1024, h: 700 });
-  useEffect(() => {
-    const fit = () => {
-      const m = readVisualMetrics();
-      const liveW = Math.max(1, Math.round(m.vvW));
-      const liveH = Math.max(1, Math.round(m.vvH));
-      const layoutH = m.vvH + m.offsetTop;
-      const sameWide = stable.current.w > 0 && Math.abs(m.innerW - stable.current.w) < 80;
-      const heightDropped = stable.current.h > 0 && layoutH < stable.current.h - 100;
-      const kb = sameWide && (m.covered > 80 || m.vkH > 80 || heightDropped);
-      if (!kb) {
-        stable.current = {
-          w: Math.max(1, Math.round(m.innerW)),
-          h: Math.max(1, Math.round(Math.max(m.innerH, layoutH))),
-        };
-        setVp({ w: liveW, h: liveH });
-        return;
-      }
-      setVp({
-        w: Math.max(1, stable.current.w),
-        h: Math.max(1, stable.current.h),
-      });
-    };
-    fit();
-    return subscribeViewport(fit);
-  }, []);
-  return vp;
+  return useContext(ViewportCtx);
 }
 
 function useVisualInset() {
@@ -1077,22 +1060,43 @@ function useFullscreen() {
 }
 
 function VisualFrame({ children }: { children: ReactNode }) {
-  const vp = useViewport();
+  const ref = useRef<HTMLDivElement>(null);
+  const [vp, setVp] = useState({ w: 1024, h: 700 });
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => {
+      const r = el.getBoundingClientRect();
+      const w = Math.max(1, Math.round(r.width));
+      const h = Math.max(1, Math.round(r.height));
+      setVp((prev) => (prev.w === w && prev.h === h ? prev : { w, h }));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    const unsub = subscribeViewport(measure);
+    return () => {
+      ro.disconnect();
+      unsub();
+    };
+  }, []);
+
   return (
-    <div
-      style={{
-        position: "absolute",
-        left: 0,
-        top: 0,
-        width: vp.w,
-        height: vp.h,
-        overflow: "hidden",
-        background: "#145230",
-      }}
-    >
-      <div id="clerk-captcha" style={{ position: "absolute", left: 0, bottom: 0, zIndex: 50 }} />
-      {children}
-    </div>
+    <ViewportCtx.Provider value={vp}>
+      <div
+        ref={ref}
+        style={{
+          position: "absolute",
+          inset: 0,
+          overflow: "hidden",
+          background: "#145230",
+        }}
+      >
+        <div id="clerk-captcha" style={{ position: "absolute", left: 0, bottom: 0, zIndex: 50 }} />
+        {children}
+      </div>
+    </ViewportCtx.Provider>
   );
 }
 
