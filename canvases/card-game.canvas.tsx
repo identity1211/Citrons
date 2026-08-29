@@ -1121,8 +1121,8 @@ function VisualFrame({ children }: { children: ReactNode }) {
     if (!el) return;
     const measure = () => {
       const r = el.getBoundingClientRect();
-      const w = Math.max(1, Math.round(r.width));
-      const h = Math.max(1, Math.round(r.height));
+      const w = Math.max(1, Math.round(r.width || window.innerWidth || 1));
+      const h = Math.max(1, Math.round(r.height || window.innerHeight || 1));
       setVp((prev) => (prev.w === w && prev.h === h ? prev : { w, h }));
     };
     measure();

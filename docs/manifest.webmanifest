@@ -4,8 +4,7 @@
   "description": "Citrons — TwoCircles Edition",
   "start_url": "./",
   "scope": "./",
-  "display": "fullscreen",
-  "orientation": "landscape",
+  "display": "standalone",
   "background_color": "#145230",
   "theme_color": "#145230",
   "icons": [

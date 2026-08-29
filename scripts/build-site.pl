@@ -76,17 +76,20 @@ my $html = <<"HTML";
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%231a6b3c'/><text x='16' y='22' text-anchor='middle' font-size='16' fill='%23f5f0e6'>C</text></svg>" />
   <style>
     html, body { margin: 0; width: 100%; height: 100%; background: #145230; overflow: hidden; }
-    html { position: fixed; inset: 0; width: 100%; height: 100%; }
-    html:fullscreen, html:-webkit-full-screen, body:fullscreen, body:-webkit-full-screen {
+    html { height: 100%; min-height: 100dvh; min-height: -webkit-fill-available; }
+    html:not(.standalone) { position: fixed; inset: 0; width: 100%; height: 100%; }
+    html.standalone, html:fullscreen, html:-webkit-full-screen, body:fullscreen, body:-webkit-full-screen {
       position: absolute !important;
       inset: 0 !important;
       width: 100% !important;
       height: 100% !important;
+      min-height: 100dvh !important;
+      min-height: -webkit-fill-available !important;
       max-width: none !important;
       max-height: none !important;
       background: #145230;
     }
-    #root { position: absolute; inset: 0; overflow: hidden; width: 100%; height: 100%; }
+    #root { position: absolute; inset: 0; overflow: hidden; width: 100%; height: 100%; min-height: 100%; }
     body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; -webkit-text-size-adjust: 100%; }
     button { font-family: inherit; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
     \@media (max-width: 640px) {
@@ -102,6 +105,11 @@ my $html = <<"HTML";
   </style>
   <script>
     (function () {
+      try {
+        if (navigator.standalone || window.matchMedia("(display-mode: standalone)").matches || window.matchMedia("(display-mode: fullscreen)").matches) {
+          document.documentElement.classList.add("standalone");
+        }
+      } catch (e) {}
       var host = location.hostname;
       if (host === "identity1211.github.io") {
         location.replace("https://citrons.lat/" + location.search + location.hash);
