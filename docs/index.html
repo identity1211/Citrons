@@ -936,15 +936,25 @@ function pinLayoutScroll() {
 }
 
 function subscribeViewport(fit: () => void) {
+  const delayedFit = () => {
+    fit();
+    window.setTimeout(fit, 50);
+    window.setTimeout(fit, 180);
+    window.setTimeout(fit, 400);
+  };
   window.addEventListener("resize", fit);
-  window.addEventListener("orientationchange", fit);
+  window.addEventListener("orientationchange", delayedFit);
+  document.addEventListener("fullscreenchange", delayedFit);
+  document.addEventListener("webkitfullscreenchange", delayedFit);
   window.visualViewport?.addEventListener("resize", fit);
   window.visualViewport?.addEventListener("scroll", fit);
   const vk = (navigator as VirtualKeyboardNav).virtualKeyboard;
   vk?.addEventListener("geometrychange", fit);
   return () => {
     window.removeEventListener("resize", fit);
-    window.removeEventListener("orientationchange", fit);
+    window.removeEventListener("orientationchange", delayedFit);
+    document.removeEventListener("fullscreenchange", delayedFit);
+    document.removeEventListener("webkitfullscreenchange", delayedFit);
     window.visualViewport?.removeEventListener("resize", fit);
     window.visualViewport?.removeEventListener("scroll", fit);
     vk?.removeEventListener("geometrychange", fit);
@@ -975,22 +985,28 @@ function readVisualMetrics() {
 }
 
 function useViewport() {
-  const stable = useRef({ w: 1024, h: 700 });
+  const stable = useRef({ w: 0, h: 0 });
   const [vp, setVp] = useState({ w: 1024, h: 700 });
   useEffect(() => {
     const fit = () => {
       const m = readVisualMetrics();
+      const liveW = Math.max(1, Math.round(m.vvW));
+      const liveH = Math.max(1, Math.round(m.vvH));
       const layoutH = m.vvH + m.offsetTop;
-      const kb = m.covered > 80 || layoutH < stable.current.h - 100;
+      const sameWide = stable.current.w > 0 && Math.abs(m.innerW - stable.current.w) < 80;
+      const heightDropped = stable.current.h > 0 && layoutH < stable.current.h - 100;
+      const kb = sameWide && (m.covered > 80 || m.vkH > 80 || heightDropped);
       if (!kb) {
         stable.current = {
           w: Math.max(1, Math.round(m.innerW)),
           h: Math.max(1, Math.round(Math.max(m.innerH, layoutH))),
         };
+        setVp({ w: liveW, h: liveH });
+        return;
       }
       setVp({
-        w: kb ? stable.current.w : Math.max(1, Math.round(m.vvW)),
-        h: kb ? stable.current.h : Math.max(1, Math.round(m.vvH)),
+        w: Math.max(1, stable.current.w),
+        h: Math.max(1, stable.current.h),
       });
     };
     fit();
@@ -1016,13 +1032,14 @@ function useVisualInset() {
     const fit = () => {
       const m = readVisualMetrics();
       const layoutH = m.vvH + m.offsetTop;
-      if (Math.abs(m.innerW - stable.current.w) > 60) {
+      if (Math.abs(m.innerW - stable.current.w) > 60 || stable.current.w === 0) {
         stable.current = {
           w: Math.max(1, Math.round(m.innerW)),
           h: Math.max(1, Math.round(Math.max(m.innerH, layoutH))),
         };
       }
-      const shrunk = layoutH < stable.current.h - 100;
+      const sameWide = Math.abs(m.innerW - stable.current.w) < 80;
+      const shrunk = sameWide && layoutH < stable.current.h - 100;
       const keyboard = m.covered > 80 || m.vkH > 80 || shrunk;
       if (!keyboard) {
         stable.current = {
