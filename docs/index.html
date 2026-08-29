@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=overlays-content" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-visual" />
   <meta name="theme-color" content="#145230" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="mobile-web-app-capable" content="yes" />
@@ -694,10 +694,10 @@ function tutorialLockedAt(step: number): boolean {
 
 // ─── CSS keyframes ───────────────────────────────────────────────────────────
 
-const STYLE_ID = "card-game-keyframes-v18";
+const STYLE_ID = "card-game-keyframes-v19";
 function ensureKeyframes() {
   if (typeof document === "undefined") return;
-  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7", "card-game-keyframes-v8", "card-game-keyframes-v9", "card-game-keyframes-v10", "card-game-keyframes-v11", "card-game-keyframes-v12", "card-game-keyframes-v13", "card-game-keyframes-v14", "card-game-keyframes-v15", "card-game-keyframes-v16", "card-game-keyframes-v17"]) {
+  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7", "card-game-keyframes-v8", "card-game-keyframes-v9", "card-game-keyframes-v10", "card-game-keyframes-v11", "card-game-keyframes-v12", "card-game-keyframes-v13", "card-game-keyframes-v14", "card-game-keyframes-v15", "card-game-keyframes-v16", "card-game-keyframes-v17", "card-game-keyframes-v18"]) {
     document.getElementById(id)?.remove();
   }
   if (document.getElementById(STYLE_ID)) return;
@@ -888,6 +888,37 @@ function ensureKeyframes() {
     }
     .emoji-rail::-webkit-scrollbar { display: none; }
     .emoji-rail button { scroll-snap-align: start; flex: 0 0 auto; min-width: 40px; }
+    .chat-ime-bar {
+      position: fixed;
+      z-index: 140;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      box-sizing: border-box;
+      margin: 0;
+      pointer-events: auto;
+    }
+    .chat-ime-bar.is-docked {
+      left: max(8px, env(safe-area-inset-left));
+      width: min(260px, calc(100% - 16px));
+      padding: 6px;
+      background: rgba(8, 18, 10, 0.94);
+      border: 1px solid rgba(241,196,15,0.4);
+      border-top: none;
+      border-radius: 0 0 10px 10px;
+      bottom: max(64px, calc(env(safe-area-inset-bottom) + 58px), env(keyboard-inset-bottom, 0px), var(--kb-h, 0px));
+    }
+    .chat-ime-bar.is-ime {
+      left: 0;
+      right: 0;
+      width: auto;
+      height: 52px;
+      padding: 6px 8px;
+      background: rgba(8, 18, 10, 0.97);
+      border-top: 1px solid rgba(241,196,15,0.5);
+      border-radius: 0;
+      bottom: max(env(keyboard-inset-bottom, 0px), var(--kb-h, 0px));
+    }
     @keyframes emojiReactFly {
       0% { opacity: 0; transform: translate3d(0, 10px, 0) scale(0.45); }
       12% { opacity: 1; transform: translate3d(-8px, -28px, 0) scale(1.22); }
@@ -944,6 +975,13 @@ function pinLayoutScroll() {
     window.scrollTo(0, 0);
     document.documentElement.scrollTop = 0;
     document.body.scrollTop = 0;
+  } catch {
+    /* ignore */
+  }
+}
+
+function enableVirtualKeyboard() {
+  try {
     const vk = (navigator as VirtualKeyboardNav).virtualKeyboard;
     if (vk) vk.overlaysContent = true;
   } catch {
@@ -1020,7 +1058,9 @@ function useVisualInset() {
   });
   useEffect(() => {
     const android = /Android/i.test(navigator.userAgent);
+    enableVirtualKeyboard();
     const fit = () => {
+      enableVirtualKeyboard();
       const m = readVisualMetrics();
       const layoutH = m.vvH + m.offsetTop;
       if (Math.abs(m.innerW - stable.current.w) > 60 || stable.current.w === 0) {
@@ -1038,6 +1078,9 @@ function useVisualInset() {
           h: Math.max(1, Math.round(Math.max(m.innerH, layoutH))),
         };
       }
+      const lift = Math.max(m.covered, m.vkH);
+      const extra = android && lift > 80 && m.vkH < 80 ? 48 : 0;
+      document.documentElement.style.setProperty("--kb-h", `${Math.round(lift + extra)}px`);
       setInset({
         bottom: Math.round(m.covered),
         left: Math.round(m.offsetLeft),
@@ -3348,10 +3391,8 @@ function RoomChat({
 
   const showToasts = !open && toasts.length > 0;
   const dockWidth = open || showToasts ? Math.min(260, Math.max(168, inset.width - 24)) : undefined;
-  const kbOpen = open && inset.keyboard;
-  const barH = 52;
-  const imeExtra = inset.android ? (inset.vkH > 80 ? 8 : 56) : 4;
-  const imeTop = Math.max(0, inset.top + inset.height - barH - imeExtra);
+  const kbLift = Math.max(inset.bottom, inset.vkH);
+  const kbOpen = open && (inset.keyboard || kbLift > 40);
 
   return (
     <>
@@ -3360,7 +3401,7 @@ function RoomChat({
           position: "fixed",
           left: `max(8px, env(safe-area-inset-left))`,
           bottom: open
-            ? `max(${64 + barH}px, calc(env(safe-area-inset-bottom) + ${58 + barH}px))`
+            ? `max(${64 + 52}px, calc(env(safe-area-inset-bottom) + ${58 + 52}px), env(keyboard-inset-bottom, 0px), var(--kb-h, 0px))`
             : "max(64px, calc(env(safe-area-inset-bottom) + 58px))",
           zIndex: 120,
           width: dockWidth,
@@ -3459,43 +3500,10 @@ function RoomChat({
       </div>
       {open ? (
         <form
+          className={`chat-ime-bar ${kbOpen ? "is-ime" : "is-docked"}`}
           onSubmit={(e) => {
             e.preventDefault();
             submit();
-          }}
-          style={{
-            position: "fixed",
-            display: "flex",
-            gap: 8,
-            alignItems: "center",
-            boxSizing: "border-box",
-            pointerEvents: "auto",
-            zIndex: 140,
-            margin: 0,
-            ...(kbOpen
-              ? {
-                  left: inset.left,
-                  top: imeTop,
-                  bottom: "auto",
-                  width: inset.width,
-                  height: barH,
-                  padding: "6px 8px",
-                  background: "rgba(8, 18, 10, 0.97)",
-                  borderTop: "1px solid rgba(241,196,15,0.5)",
-                  borderRadius: 0,
-                  transform: "none",
-                }
-              : {
-                  left: `max(8px, env(safe-area-inset-left))`,
-                  bottom: "max(64px, calc(env(safe-area-inset-bottom) + 58px))",
-                  width: dockWidth,
-                  maxWidth: "min(260px, calc(100% - 16px))",
-                  padding: 6,
-                  background: "rgba(8, 18, 10, 0.94)",
-                  border: "1px solid rgba(241,196,15,0.4)",
-                  borderTop: "none",
-                  borderRadius: "0 0 10px 10px",
-                }),
           }}
         >
           <input
