@@ -597,10 +597,10 @@ function tutorialLockedAt(step: number): boolean {
 
 // ─── CSS keyframes ───────────────────────────────────────────────────────────
 
-const STYLE_ID = "card-game-keyframes-v21";
+const STYLE_ID = "card-game-keyframes-v22";
 function ensureKeyframes() {
   if (typeof document === "undefined") return;
-  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7", "card-game-keyframes-v8", "card-game-keyframes-v9", "card-game-keyframes-v10", "card-game-keyframes-v11", "card-game-keyframes-v12", "card-game-keyframes-v13", "card-game-keyframes-v14", "card-game-keyframes-v15", "card-game-keyframes-v16", "card-game-keyframes-v17", "card-game-keyframes-v18", "card-game-keyframes-v19", "card-game-keyframes-v20"]) {
+  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7", "card-game-keyframes-v8", "card-game-keyframes-v9", "card-game-keyframes-v10", "card-game-keyframes-v11", "card-game-keyframes-v12", "card-game-keyframes-v13", "card-game-keyframes-v14", "card-game-keyframes-v15", "card-game-keyframes-v16", "card-game-keyframes-v17", "card-game-keyframes-v18", "card-game-keyframes-v19", "card-game-keyframes-v20", "card-game-keyframes-v21"]) {
     document.getElementById(id)?.remove();
   }
   if (document.getElementById(STYLE_ID)) return;
@@ -3290,10 +3290,12 @@ function RoomChat({
     return (
       <div
         style={{
-          width: "100%",
-          maxWidth: fill ? "none" : 300,
+          width: fill ? "50%" : "100%",
+          maxWidth: fill ? "none" : 150,
           flex: fill ? 1 : undefined,
           minHeight: fill ? 0 : undefined,
+          alignSelf: fill ? "flex-end" : undefined,
+          marginLeft: fill ? "auto" : undefined,
           display: "flex",
           flexDirection: "column",
         }}
