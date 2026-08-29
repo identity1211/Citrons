@@ -597,10 +597,10 @@ function tutorialLockedAt(step: number): boolean {
 
 // ─── CSS keyframes ───────────────────────────────────────────────────────────
 
-const STYLE_ID = "card-game-keyframes-v20";
+const STYLE_ID = "card-game-keyframes-v21";
 function ensureKeyframes() {
   if (typeof document === "undefined") return;
-  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7", "card-game-keyframes-v8", "card-game-keyframes-v9", "card-game-keyframes-v10", "card-game-keyframes-v11", "card-game-keyframes-v12", "card-game-keyframes-v13", "card-game-keyframes-v14", "card-game-keyframes-v15", "card-game-keyframes-v16", "card-game-keyframes-v17", "card-game-keyframes-v18", "card-game-keyframes-v19"]) {
+  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7", "card-game-keyframes-v8", "card-game-keyframes-v9", "card-game-keyframes-v10", "card-game-keyframes-v11", "card-game-keyframes-v12", "card-game-keyframes-v13", "card-game-keyframes-v14", "card-game-keyframes-v15", "card-game-keyframes-v16", "card-game-keyframes-v17", "card-game-keyframes-v18", "card-game-keyframes-v19", "card-game-keyframes-v20"]) {
     document.getElementById(id)?.remove();
   }
   if (document.getElementById(STYLE_ID)) return;
@@ -822,15 +822,20 @@ function ensureKeyframes() {
       border-radius: 0;
       bottom: max(env(keyboard-inset-bottom, 0px), var(--kb-h, 0px));
     }
-    .chat-ime-bar.is-docked.is-lobby {
+    .chat-ime-bar.is-lobby {
+      position: relative;
+      z-index: 2;
       left: auto;
-      right: max(12px, env(safe-area-inset-right));
-      width: min(380px, calc(50% - 18px));
+      right: auto;
+      bottom: auto;
+      width: 100%;
+      flex-shrink: 0;
+      margin-top: 6px;
       padding: 6px;
       background: rgba(8, 18, 10, 0.94);
       border: 1px solid rgba(241,196,15,0.4);
       border-radius: 10px;
-      bottom: max(56px, calc(env(safe-area-inset-bottom) + 48px), env(keyboard-inset-bottom, 0px), var(--kb-h, 0px));
+      box-sizing: border-box;
     }
     @keyframes emojiReactFly {
       0% { opacity: 0; transform: translate3d(0, 10px, 0) scale(0.45); }
@@ -3230,7 +3235,7 @@ function RoomChat({
 
   const imeBar = (
     <form
-      className={`chat-ime-bar ${kbOpen ? "is-ime" : variant === "lobby" ? "is-docked is-lobby" : "is-docked"}`}
+      className={`chat-ime-bar ${kbOpen ? "is-ime" : variant === "lobby" ? "is-lobby" : "is-docked"}`}
       onSubmit={(e) => {
         e.preventDefault();
         submit();
@@ -3283,36 +3288,33 @@ function RoomChat({
 
   if (variant === "lobby") {
     return (
-      <>
+      <div
+        style={{
+          width: "100%",
+          maxWidth: fill ? "none" : 300,
+          flex: fill ? 1 : undefined,
+          minHeight: fill ? 0 : undefined,
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
         <div
           style={{
-            width: "100%",
-            maxWidth: fill ? "none" : 300,
-            flex: fill ? 1 : undefined,
-            minHeight: fill ? 0 : undefined,
-            display: "flex",
-            flexDirection: "column",
-            paddingBottom: kbOpen ? 0 : 52,
+            fontSize: 11,
+            fontWeight: 800,
+            letterSpacing: 1.3,
+            textTransform: "uppercase",
+            color: "rgba(255,255,255,0.62)",
+            marginBottom: 8,
+            textAlign: "left",
+            flexShrink: 0,
           }}
         >
-          <div
-            style={{
-              fontSize: 11,
-              fontWeight: 800,
-              letterSpacing: 1.3,
-              textTransform: "uppercase",
-              color: "rgba(255,255,255,0.62)",
-              marginBottom: 8,
-              textAlign: "left",
-              flexShrink: 0,
-            }}
-          >
-            Chat
-          </div>
-          {log}
+          Chat
         </div>
+        {log}
         {imeBar}
-      </>
+      </div>
     );
   }
 
