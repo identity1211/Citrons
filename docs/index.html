@@ -3888,6 +3888,8 @@ const FELT_INSET_TOP = "max(18px, calc(env(safe-area-inset-top) + 4px))";
 const FELT_INSET_LEFT = "max(18px, calc(env(safe-area-inset-left) + 4px))";
 const FELT_INSET_RIGHT = "max(18px, calc(env(safe-area-inset-right) + 4px))";
 const FELT_INSET_BOTTOM = "max(18px, calc(env(safe-area-inset-bottom) + 4px))";
+const FELT_INSET_X =
+  "max(26px, calc(env(safe-area-inset-left) + 14px), calc(env(safe-area-inset-right) + 14px))";
 
 function WindowButton({ style, onClick }: { style?: CSSProperties; onClick?: () => void }) {
   const fsOn = useFullscreen();
@@ -6905,7 +6907,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
           </>
         }
         style={{
-          padding: "max(44px, calc(env(safe-area-inset-top) + 28px)) max(12px, env(safe-area-inset-right)) max(56px, calc(env(safe-area-inset-bottom) + 48px)) max(12px, env(safe-area-inset-left))",
+          padding: `max(44px, calc(env(safe-area-inset-top) + 28px)) ${FELT_INSET_X} max(56px, calc(env(safe-area-inset-bottom) + 48px)) ${FELT_INSET_X}`,
           alignItems: "stretch",
           justifyContent: "flex-start",
           overflowY: "hidden",
