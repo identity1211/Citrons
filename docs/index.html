@@ -701,10 +701,10 @@ function tutorialLockedAt(step: number): boolean {
 
 // ─── CSS keyframes ───────────────────────────────────────────────────────────
 
-const STYLE_ID = "card-game-keyframes-v24";
+const STYLE_ID = "card-game-keyframes-v25";
 function ensureKeyframes() {
   if (typeof document === "undefined") return;
-  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7", "card-game-keyframes-v8", "card-game-keyframes-v9", "card-game-keyframes-v10", "card-game-keyframes-v11", "card-game-keyframes-v12", "card-game-keyframes-v13", "card-game-keyframes-v14", "card-game-keyframes-v15", "card-game-keyframes-v16", "card-game-keyframes-v17", "card-game-keyframes-v18", "card-game-keyframes-v19", "card-game-keyframes-v20", "card-game-keyframes-v21", "card-game-keyframes-v22", "card-game-keyframes-v23"]) {
+  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7", "card-game-keyframes-v8", "card-game-keyframes-v9", "card-game-keyframes-v10", "card-game-keyframes-v11", "card-game-keyframes-v12", "card-game-keyframes-v13", "card-game-keyframes-v14", "card-game-keyframes-v15", "card-game-keyframes-v16", "card-game-keyframes-v17", "card-game-keyframes-v18", "card-game-keyframes-v19", "card-game-keyframes-v20", "card-game-keyframes-v21", "card-game-keyframes-v22", "card-game-keyframes-v23", "card-game-keyframes-v24"]) {
     document.getElementById(id)?.remove();
   }
   if (document.getElementById(STYLE_ID)) return;
@@ -961,12 +961,17 @@ function ensureKeyframes() {
       animation: matchMenuIn 0.18s ease-out both;
       transform-origin: top right;
     }
+    .skin-menu-fly {
+      animation: matchMenuIn 0.18s ease-out both;
+      transform-origin: top center;
+    }
     @media (prefers-reduced-motion: reduce) {
       .winner-banner { animation: none !important; }
       .winner-burst, .winner-confetti { animation: none !important; opacity: 0 !important; }
       .chat-toast { animation: none !important; }
       .emoji-react-fly { animation: none !important; opacity: 0 !important; }
       .match-menu-fly { animation: none !important; }
+      .skin-menu-fly { animation: none !important; }
     }
   `;
   document.head.appendChild(style);
@@ -977,6 +982,35 @@ const CARD_BACK_PATTERN =
   "repeating-linear-gradient(45deg, transparent, transparent 4px, rgba(255,255,255,0.06) 4px, rgba(255,255,255,0.06) 8px)";
 const CARD_BACK_INNER =
   "radial-gradient(ellipse at center, rgba(255,255,255,0.08) 0%, transparent 70%)";
+const SHADES_BACK_SRC = "skins/shades.jpg";
+
+type CardBackId = "classic" | "shades";
+const CARD_BACKS: { id: CardBackId; name: string }[] = [
+  { id: "classic", name: "Classic" },
+  { id: "shades", name: "Shades" },
+];
+const CardBackContext = createContext<CardBackId>("classic");
+function useCardBack(): CardBackId {
+  return useContext(CardBackContext);
+}
+function isCardBack(id: unknown): id is CardBackId {
+  return id === "classic" || id === "shades";
+}
+function cardBackFill(id: CardBackId): CSSProperties {
+  if (id === "shades") {
+    return {
+      backgroundColor: "#145230",
+      backgroundImage: `url(${SHADES_BACK_SRC})`,
+      backgroundSize: "cover",
+      backgroundPosition: "center",
+      backgroundRepeat: "no-repeat",
+    };
+  }
+  return {
+    background: CARD_BACK_BG,
+    backgroundImage: CARD_BACK_PATTERN,
+  };
+}
 
 function clamp(n: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, n));
@@ -1310,6 +1344,7 @@ function PlayingCard({
   const h = hProp ?? (small ? 54 : 78);
   const box = cardBox(w, h);
   const cls = [animClass, highlighted ? "tut-glow" : ""].filter(Boolean).join(" ") || undefined;
+  const backId = useCardBack();
 
   const base: CSSProperties = {
     width: w,
@@ -1336,11 +1371,12 @@ function PlayingCard({
         onClick={selectable && !locked ? onClick : undefined}
         style={{
           ...base,
-          background: CARD_BACK_BG,
-          backgroundImage: CARD_BACK_PATTERN,
+          overflow: "hidden",
           border: "1.5px solid #1a4060",
+          ...cardBackFill(backId),
         }}
       >
+        {backId === "classic" ? (
         <div
           style={{
             width: w - 8,
@@ -1350,6 +1386,7 @@ function PlayingCard({
             backgroundImage: CARD_BACK_INNER,
           }}
         />
+        ) : null}
       </div>
     );
   }
@@ -1607,6 +1644,7 @@ function Hand({
 // ─── Deck / Discard ──────────────────────────────────────────────────────────
 
 function DeckPile({ count }: { count: number }) {
+  const backId = useCardBack();
   return (
     <div style={{ position: "relative", width: 64, height: 90 }}>
       {[...Array(Math.min(count, 6))].map((_, i) => (
@@ -1619,12 +1657,12 @@ function DeckPile({ count }: { count: number }) {
             width: 64,
             height: 90,
             borderRadius: 7,
+            overflow: "hidden",
             border: "1.5px solid #1a4060",
-            background: CARD_BACK_BG,
-            backgroundImage: CARD_BACK_PATTERN,
+            ...cardBackFill(backId),
           }}
         >
-          {i === Math.min(count, 6) - 1 && (
+          {backId === "classic" && i === Math.min(count, 6) - 1 && (
             <div
               style={{
                 width: 56,
@@ -3137,76 +3175,230 @@ function FeltShell({
   );
 }
 
-function TableSkinPicker({
-  value,
-  onChange,
-  disabled,
-  fill,
-}: {
-  value: TableSkinId;
-  onChange?: (id: TableSkinId) => void;
-  disabled?: boolean;
-  fill?: boolean;
-}) {
+function tablePreviewStyle(id: TableSkinId): CSSProperties {
+  if (id === "peli") {
+    return {
+      background: `#1a1a1a url(${PELI_SKIN_SRC}) center 30% / cover no-repeat`,
+    };
+  }
+  return { background: FELT_BG };
+}
+
+function YellowChevron({ up }: { up?: boolean }) {
   return (
-    <div style={{ width: "100%", maxWidth: fill ? "none" : 300, flexShrink: 0 }}>
-      <div
+    <span
+      style={{
+        width: 0,
+        height: 0,
+        borderLeft: "6px solid transparent",
+        borderRight: "6px solid transparent",
+        borderTop: up ? "none" : "8px solid #f1c40f",
+        borderBottom: up ? "8px solid #f1c40f" : "none",
+        display: "block",
+        flexShrink: 0,
+      }}
+    />
+  );
+}
+
+function SkinMenu({
+  value,
+  options,
+  disabled,
+  onChange,
+}: {
+  value: string;
+  options: { id: string; name: string; preview: CSSProperties }[];
+  disabled?: boolean;
+  onChange?: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const current = options.find((o) => o.id === value) || options[0];
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  return (
+    <div ref={wrapRef} style={{ position: "relative", zIndex: open ? 40 : 2, flex: 1, minWidth: 0 }}>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => {
+          if (!disabled) setOpen((v) => !v);
+        }}
         style={{
-          fontSize: 11,
-          fontWeight: 800,
-          letterSpacing: 1.3,
-          textTransform: "uppercase",
-          color: "rgba(255,255,255,0.62)",
-          marginBottom: 8,
-          textAlign: "left",
+          width: "100%",
+          height: 52,
+          borderRadius: 10,
+          border: open ? "2px solid #f1c40f" : "1.5px solid rgba(255,255,255,0.28)",
+          padding: 0,
+          overflow: "hidden",
+          cursor: disabled ? "default" : "pointer",
+          display: "flex",
+          alignItems: "stretch",
+          background: "transparent",
         }}
       >
-        Table
-      </div>
-      <div style={{ display: "flex", gap: 8 }}>
-        {TABLE_SKINS.map((s) => {
-          const on = value === s.id;
-          return (
-            <button
-              key={s.id}
-              type="button"
-              disabled={disabled}
-              onClick={() => onChange?.(s.id)}
-              style={{
-                flex: 1,
-                height: fill ? 52 : 64,
-                borderRadius: 10,
-                border: on ? "2px solid #f1c40f" : "1.5px solid rgba(255,255,255,0.28)",
-                padding: 0,
-                overflow: "hidden",
-                cursor: disabled ? "default" : "pointer",
-                background:
-                  s.id === "peli"
-                    ? `#1a1a1a url(${PELI_SKIN_SRC}) center 30% / cover no-repeat`
-                    : FELT_BG,
-                position: "relative",
-              }}
-            >
-              <span
+        <span
+          style={{
+            flex: 1,
+            minWidth: 0,
+            ...current.preview,
+            position: "relative",
+            display: "block",
+          }}
+        >
+          <span
+            style={{
+              position: "absolute",
+              left: 8,
+              bottom: 6,
+              color: "#f5f0e6",
+              fontSize: 11,
+              fontWeight: 800,
+              textShadow: "0 1px 4px rgba(0,0,0,0.8)",
+            }}
+          >
+            {current.name}
+          </span>
+        </span>
+        <span
+          style={{
+            width: 28,
+            flexShrink: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: "rgba(0,0,0,0.42)",
+            borderLeft: "1px solid rgba(255,255,255,0.18)",
+          }}
+        >
+          <YellowChevron />
+        </span>
+      </button>
+      {open ? (
+        <div
+          className="skin-menu-fly"
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            top: "calc(100% + 4px)",
+            borderRadius: 10,
+            border: "1px solid rgba(241,196,15,0.45)",
+            background: "rgba(8, 18, 10, 0.96)",
+            boxShadow: "0 12px 28px rgba(0,0,0,0.45)",
+            padding: 6,
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
+          }}
+        >
+          {options.map((opt) => {
+            const on = opt.id === value;
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => {
+                  onChange?.(opt.id);
+                  setOpen(false);
+                }}
                 style={{
-                  position: "absolute",
-                  left: 8,
-                  bottom: 6,
-                  color: "#f5f0e6",
-                  fontSize: 11,
-                  fontWeight: 800,
-                  textShadow: "0 1px 4px rgba(0,0,0,0.8)",
+                  height: 48,
+                  borderRadius: 8,
+                  border: on ? "2px solid #f1c40f" : "1.5px solid rgba(255,255,255,0.22)",
+                  padding: 0,
+                  overflow: "hidden",
+                  cursor: "pointer",
+                  ...opt.preview,
+                  position: "relative",
                 }}
               >
-                {s.name}
-              </span>
-            </button>
-          );
-        })}
+                <span
+                  style={{
+                    position: "absolute",
+                    left: 8,
+                    bottom: 6,
+                    color: "#f5f0e6",
+                    fontSize: 11,
+                    fontWeight: 800,
+                    textShadow: "0 1px 4px rgba(0,0,0,0.8)",
+                  }}
+                >
+                  {opt.name}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function LobbyStylePickers({
+  table,
+  back,
+  disabled,
+  onTable,
+  onBack,
+}: {
+  table: TableSkinId;
+  back: CardBackId;
+  disabled?: boolean;
+  onTable?: (id: TableSkinId) => void;
+  onBack?: (id: CardBackId) => void;
+}) {
+  const sectionLabel: CSSProperties = {
+    fontSize: 11,
+    fontWeight: 800,
+    letterSpacing: 1.3,
+    textTransform: "uppercase",
+    color: "rgba(255,255,255,0.62)",
+    marginBottom: 8,
+    textAlign: "left",
+  };
+  return (
+    <div style={{ width: "100%", flexShrink: 0, position: "relative", zIndex: 12 }}>
+      <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={sectionLabel}>Table</div>
+          <SkinMenu
+            value={table}
+            disabled={disabled}
+            onChange={(id) => onTable?.(id as TableSkinId)}
+            options={TABLE_SKINS.map((s) => ({
+              id: s.id,
+              name: s.name,
+              preview: tablePreviewStyle(s.id),
+            }))}
+          />
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={sectionLabel}>Card back</div>
+          <SkinMenu
+            value={back}
+            disabled={disabled}
+            onChange={(id) => onBack?.(id as CardBackId)}
+            options={CARD_BACKS.map((s) => ({
+              id: s.id,
+              name: s.name,
+              preview: cardBackFill(s.id),
+            }))}
+          />
+        </div>
       </div>
       {disabled ? (
         <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", marginTop: 6, textAlign: "left" }}>
-          Host chooses the table
+          Host chooses the table and card back
         </div>
       ) : null}
     </div>
@@ -4688,6 +4880,7 @@ function Table({
   resetLabel,
   tutorial,
   tableSkin = "felt",
+  cardBack = "classic",
   chat,
   youId,
   onSendChat,
@@ -4729,6 +4922,7 @@ function Table({
   onToLobby?: () => void;
   resetLabel?: string;
   tableSkin?: TableSkinId;
+  cardBack?: CardBackId;
   chat?: ChatLine[];
   youId?: string;
   onSendChat?: (text: string) => void;
@@ -5024,6 +5218,7 @@ function Table({
   const pickupClickable = isHumanTurn && (pickupAwaitTable || discard.length > 0);
 
   return (
+    <CardBackContext.Provider value={isCardBack(cardBack) ? cardBack : "classic"}>
     <div
       style={{
         width: "100%",
@@ -5494,6 +5689,7 @@ function Table({
       ) : null}
       {phase === "finished" && onToLobby && endUi && !winShow ? <FinishedLobbyOverlay onLobby={onToLobby} /> : null}
     </div>
+    </CardBackContext.Provider>
   );
 }
 
@@ -5573,6 +5769,7 @@ type OnlineView = {
   statusMsg: string;
   canStart: boolean;
   tableSkin: TableSkinId;
+  cardBack?: CardBackId;
   chat?: ChatLine[];
   lobby: { id: string; name: string; avatar?: string; ready: boolean; connected: boolean; host: boolean }[];
 };
@@ -6978,6 +7175,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
 
   if (screen === "waiting" && view) {
     const waitSkin = isTableSkin(view.tableSkin) ? view.tableSkin : "felt";
+    const waitBack = isCardBack(view.cardBack) ? view.cardBack : "classic";
     const sectionLabel: CSSProperties = {
       fontSize: 11,
       fontWeight: 800,
@@ -7042,7 +7240,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
           padding: `max(44px, calc(env(safe-area-inset-top) + 28px)) ${FELT_INSET_X} ${FELT_INSET_BOTTOM} ${FELT_INSET_X}`,
           alignItems: "stretch",
           justifyContent: "flex-start",
-          overflowY: "hidden",
+          overflowY: "visible",
         }}
       >
         <div
@@ -7080,6 +7278,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
               display: "flex",
               gap: 12,
               alignItems: "stretch",
+              overflow: "visible",
             }}
           >
             <div
@@ -7140,13 +7339,17 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
                 display: "flex",
                 flexDirection: "column",
                 gap: 10,
+                overflow: "visible",
+                position: "relative",
+                zIndex: 6,
               }}
             >
-              <TableSkinPicker
-                fill
-                value={waitSkin}
+              <LobbyStylePickers
+                table={waitSkin}
+                back={waitBack}
                 disabled={!view.host}
-                onChange={(id) => send({ type: "skin", skin: id })}
+                onTable={(id) => send({ type: "skin", skin: id })}
+                onBack={(id) => send({ type: "back", back: id })}
               />
               <RoomChat
                 fill
@@ -7204,6 +7407,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         onReset={leaveOnline}
         resetLabel="← Leave"
         tableSkin={isTableSkin(view.tableSkin) ? view.tableSkin : "felt"}
+        cardBack={isCardBack(view.cardBack) ? view.cardBack : "classic"}
         chat={chat}
         youId={view.youId}
         onSendChat={(text) => send({ type: "chat", text })}

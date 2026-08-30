@@ -17,6 +17,7 @@ const ROOM_TTL_MS = 3 * 60 * 60 * 1000;
 const REJOIN_MS = 10 * 60 * 1000;
 const WAITING_REJOIN_MS = 2 * 60 * 1000;
 const TABLE_SKINS = new Set(["felt", "peli"]);
+const CARD_BACKS = new Set(["classic", "shades"]);
 const CHAT_MAX_LEN = 120;
 const CHAT_MAX_LOG = 50;
 const ROOM_TITLE_MAX = 28;
@@ -152,6 +153,7 @@ function viewFor(room, playerId) {
     statusMsg: room.statusMsg,
     canStart: room.hostId === playerId && room.phase === "waiting" && room.seats.length >= MIN_PLAYERS,
     tableSkin: TABLE_SKINS.has(room.tableSkin) ? room.tableSkin : "felt",
+    cardBack: CARD_BACKS.has(room.cardBack) ? room.cardBack : "classic",
     chat: Array.isArray(room.chat) ? room.chat : [],
     lobby: room.seats.map((p) => ({
       id: p.id,
@@ -403,6 +405,7 @@ async function createRoom(ws, name, avatar, clerkToken, title) {
     burnCount: 0,
     boardSaved: false,
     tableSkin: "felt",
+    cardBack: "classic",
     chat: [],
     statusMsg: "",
     createdAt: Date.now(),
@@ -784,6 +787,15 @@ function onMessage(ws, data) {
     const skin = String(msg.skin || "");
     if (!TABLE_SKINS.has(skin)) return error(ws, "Unknown table skin");
     room.tableSkin = skin;
+    broadcast(room);
+    return;
+  }
+  if (type === "back") {
+    if (player.id !== room.hostId) return error(ws, "Only the host can change the card back");
+    if (room.phase !== "waiting") return error(ws, "Card back can only be changed before the game starts");
+    const back = String(msg.back || "");
+    if (!CARD_BACKS.has(back)) return error(ws, "Unknown card back");
+    room.cardBack = back;
     broadcast(room);
     return;
   }
