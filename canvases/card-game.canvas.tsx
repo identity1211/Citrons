@@ -244,8 +244,18 @@ function cardsFromSelection(player: PlayerState, sel: CombinedPlay): string[] {
   return cards;
 }
 
-function selectionCount(sel: CombinedPlay): number {
-  return sel.hand.length + sel.faceUp.length;
+function handIndicesOfRank(hand: string[], rank: string): number[] {
+  return hand.map((c, i) => (getRank(c) === rank ? i : -1)).filter((i) => i >= 0);
+}
+
+function selectAllOfHandRank(player: PlayerState, sel: CombinedPlay, index: number): CombinedPlay {
+  const card = player.hand[index];
+  if (!card) return sel;
+  const all = handIndicesOfRank(player.hand, getRank(card));
+  if (all.length === 0) return sel;
+  const allOn = all.every((i) => sel.hand.includes(i));
+  if (allOn) return { hand: [], faceUp: [] };
+  return { hand: all, faceUp: [] };
 }
 
 /**
@@ -597,10 +607,10 @@ function tutorialLockedAt(step: number): boolean {
 
 // ─── CSS keyframes ───────────────────────────────────────────────────────────
 
-const STYLE_ID = "card-game-keyframes-v25";
+const STYLE_ID = "card-game-keyframes-v26";
 function ensureKeyframes() {
   if (typeof document === "undefined") return;
-  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7", "card-game-keyframes-v8", "card-game-keyframes-v9", "card-game-keyframes-v10", "card-game-keyframes-v11", "card-game-keyframes-v12", "card-game-keyframes-v13", "card-game-keyframes-v14", "card-game-keyframes-v15", "card-game-keyframes-v16", "card-game-keyframes-v17", "card-game-keyframes-v18", "card-game-keyframes-v19", "card-game-keyframes-v20", "card-game-keyframes-v21", "card-game-keyframes-v22", "card-game-keyframes-v23", "card-game-keyframes-v24"]) {
+  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7", "card-game-keyframes-v8", "card-game-keyframes-v9", "card-game-keyframes-v10", "card-game-keyframes-v11", "card-game-keyframes-v12", "card-game-keyframes-v13", "card-game-keyframes-v14", "card-game-keyframes-v15", "card-game-keyframes-v16", "card-game-keyframes-v17", "card-game-keyframes-v18", "card-game-keyframes-v19", "card-game-keyframes-v20", "card-game-keyframes-v21", "card-game-keyframes-v22", "card-game-keyframes-v23", "card-game-keyframes-v24", "card-game-keyframes-v25"]) {
     document.getElementById(id)?.remove();
   }
   if (document.getElementById(STYLE_ID)) return;
@@ -676,6 +686,11 @@ function ensureKeyframes() {
     .card-swap-pop     { animation: swapPop 0.28s ease; }
     @media (hover: hover) {
       .card-hoverable:hover { transform: translateY(-6px) !important; }
+    }
+    .card-pressable {
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
     }
     .felt-chip {
       touch-action: manipulation;
@@ -1219,6 +1234,7 @@ interface CardProps {
   dimmed?: boolean;
   highlighted?: boolean;
   onClick?: () => void;
+  onLongPress?: () => void;
 }
 
 function PlayingCard({
@@ -1235,12 +1251,59 @@ function PlayingCard({
   dimmed,
   highlighted,
   onClick,
+  onLongPress,
 }: CardProps) {
   const w = wProp ?? (small ? 38 : 56);
   const h = hProp ?? (small ? 54 : 78);
   const box = cardBox(w, h);
   const cls = [animClass, highlighted ? "tut-glow" : ""].filter(Boolean).join(" ") || undefined;
   const backId = useCardBack();
+  const skipClick = useRef(false);
+  const holdTimer = useRef<number | null>(null);
+
+  function clearHold() {
+    if (holdTimer.current != null) {
+      window.clearTimeout(holdTimer.current);
+      holdTimer.current = null;
+    }
+  }
+
+  useEffect(() => () => clearHold(), []);
+
+  const canPress = !!selectable && !locked && !!onClick;
+  const pressHandlers = canPress
+    ? {
+        onPointerDown: (e: { button?: number }) => {
+          if (e.button != null && e.button !== 0) return;
+          skipClick.current = false;
+          if (!onLongPress) return;
+          clearHold();
+          holdTimer.current = window.setTimeout(() => {
+            holdTimer.current = null;
+            skipClick.current = true;
+            try {
+              navigator.vibrate?.(12);
+            } catch {
+              /* ignore */
+            }
+            onLongPress();
+          }, 420);
+        },
+        onPointerUp: () => clearHold(),
+        onPointerCancel: () => clearHold(),
+        onPointerLeave: () => clearHold(),
+        onContextMenu: (e: { preventDefault: () => void }) => {
+          if (onLongPress) e.preventDefault();
+        },
+        onClick: () => {
+          if (skipClick.current) {
+            skipClick.current = false;
+            return;
+          }
+          onClick?.();
+        },
+      }
+    : {};
 
   const base: CSSProperties = {
     width: w,
@@ -1251,9 +1314,11 @@ function PlayingCard({
     alignItems: "center",
     justifyContent: "center",
     userSelect: "none",
+    WebkitUserSelect: "none",
+    WebkitTouchCallout: "none",
     position: "absolute",
     cursor: selectable && !locked ? "pointer" : "default",
-    touchAction: selectable ? "manipulation" : undefined,
+    touchAction: selectable ? (onLongPress ? "none" : "manipulation") : undefined,
     outline: selected ? "2px solid #f1c40f" : "none",
     outlineOffset: 2,
     opacity: dimmed ? 0.4 : locked && selectable ? 0.85 : 1,
@@ -1292,8 +1357,8 @@ function PlayingCard({
 
   return (
     <div
-      className={cls}
-      onClick={selectable && !locked ? onClick : undefined}
+      className={[cls, canPress ? "card-pressable" : ""].filter(Boolean).join(" ") || undefined}
+      {...pressHandlers}
       style={{
         ...base,
         background: "#fff",
@@ -1455,7 +1520,7 @@ interface HandProps {
   selectedIndices?: number[];
   legalMask?: boolean[];
   glowMask?: boolean[];
-  onSelect?: (index: number) => void;
+  onSelect?: (index: number, opts?: { allOfRank?: boolean }) => void;
   swapKey?: number;
   seatId?: number;
 }
@@ -1523,6 +1588,7 @@ function Hand({
             }
             highlighted={!!isOwner && !!glowMask?.[i]}
             onClick={() => onSelect?.(i)}
+            onLongPress={() => onSelect?.(i, { allOfRank: true })}
             animClass={
               animating && i === cards.length - 1
                 ? "card-deal-hand"
@@ -4805,7 +4871,7 @@ function Table({
   drawAnim: DrawAnim | null;
   revealCard: string | null;
   pickupAwaitTable: boolean;
-  onSelectHand: (index: number) => void;
+  onSelectHand: (index: number, opts?: { allOfRank?: boolean }) => void;
   onSelectFaceUp: (index: number) => void;
   onSelectFaceDown: (index: number) => void;
   onReady: () => void;
@@ -5259,7 +5325,9 @@ function Table({
           columnGap: short ? 4 : 12,
           alignItems: "center",
           justifyItems: "center",
-          padding: short ? "13px 6px 28px" : "8px 28px 28px",
+          padding: short
+            ? `13px max(10px, calc(env(safe-area-inset-right) + 12px)) 28px max(18px, calc(env(safe-area-inset-left) + 16px))`
+            : `8px max(28px, calc(env(safe-area-inset-right) + 12px)) 28px max(28px, calc(env(safe-area-inset-left) + 16px))`,
           overflow: "hidden",
           boxSizing: "border-box",
           position: "relative",
@@ -6682,9 +6750,10 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
             ? "finished"
             : "playing";
 
-  function onSelectHand(index: number) {
+  function onSelectHand(index: number, opts?: { allOfRank?: boolean }) {
     if (!view) return;
     if (view.phase === "swap") {
+      if (opts?.allOfRank) return;
       if (view.players[0]?.ready) return;
       const sel = selection;
       if (sel?.zone === "faceUp") {
@@ -6698,6 +6767,10 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     if (view.phase !== "playing" || view.currentPlayer !== 0) return;
     const pl = view.players[0];
     if (activePlayZone(pl, view.deckCount) !== "hand") return;
+    if (opts?.allOfRank) {
+      setPlaySelected((prev) => selectAllOfHandRank(pl, prev, index));
+      return;
+    }
     const rank = getRank(pl.hand[index]);
     setPlaySelected((prev) => {
       const curRank = playSelectionRank(pl, prev);
@@ -8226,8 +8299,9 @@ export default function CardGame() {
     timerRef.current = setTimeout(runStep, 500);
   }, []);
 
-  function handleSelectHand(index: number) {
+  function handleSelectHand(index: number, opts?: { allOfRank?: boolean }) {
     if (phase === "swap") {
+      if (opts?.allOfRank) return;
       if (playersRef.current[0]?.ready) return;
       const step = tutStepNow();
       const pl = playersRef.current[0];
@@ -8261,6 +8335,14 @@ export default function CardGame() {
     const pl = playersRef.current[0];
     if (activePlayZone(pl, drawDeckRef.current.length) !== "hand") return;
     const rank = getRank(pl.hand[index]);
+    if (opts?.allOfRank) {
+      if (tutLocked()) {
+        const step = tutStepNow();
+        if (step?.wait !== "play" || rank !== step.rank) return;
+      }
+      setPlaySelected((prev) => selectAllOfHandRank(pl, prev, index));
+      return;
+    }
     if (tutLocked()) {
       const step = tutStepNow();
       if (step?.wait !== "play" || rank !== step.rank) return;
