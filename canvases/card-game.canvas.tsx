@@ -611,10 +611,10 @@ function tutorialLockedAt(step: number): boolean {
 
 // ─── CSS keyframes ───────────────────────────────────────────────────────────
 
-const STYLE_ID = "card-game-keyframes-v26";
+const STYLE_ID = "card-game-keyframes-v27";
 function ensureKeyframes() {
   if (typeof document === "undefined") return;
-  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7", "card-game-keyframes-v8", "card-game-keyframes-v9", "card-game-keyframes-v10", "card-game-keyframes-v11", "card-game-keyframes-v12", "card-game-keyframes-v13", "card-game-keyframes-v14", "card-game-keyframes-v15", "card-game-keyframes-v16", "card-game-keyframes-v17", "card-game-keyframes-v18", "card-game-keyframes-v19", "card-game-keyframes-v20", "card-game-keyframes-v21", "card-game-keyframes-v22", "card-game-keyframes-v23", "card-game-keyframes-v24", "card-game-keyframes-v25"]) {
+  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7", "card-game-keyframes-v8", "card-game-keyframes-v9", "card-game-keyframes-v10", "card-game-keyframes-v11", "card-game-keyframes-v12", "card-game-keyframes-v13", "card-game-keyframes-v14", "card-game-keyframes-v15", "card-game-keyframes-v16", "card-game-keyframes-v17", "card-game-keyframes-v18", "card-game-keyframes-v19", "card-game-keyframes-v20", "card-game-keyframes-v21", "card-game-keyframes-v22", "card-game-keyframes-v23", "card-game-keyframes-v24", "card-game-keyframes-v25", "card-game-keyframes-v26"]) {
     document.getElementById(id)?.remove();
   }
   if (document.getElementById(STYLE_ID)) return;
@@ -1277,7 +1277,7 @@ function PlayingCard({
   const canPress = !!selectable && !locked && !!onClick;
   const pressHandlers = canPress
     ? {
-        onPointerDown: (e: { button?: number }) => {
+        onPointerDown: (e: { button?: number; clientX?: number; clientY?: number }) => {
           if (e.button != null && e.button !== 0) return;
           skipClick.current = false;
           if (!onLongPress) return;
@@ -1293,9 +1293,19 @@ function PlayingCard({
             onLongPress();
           }, 420);
         },
-        onPointerUp: () => clearHold(),
+        onPointerUp: (e: { currentTarget?: EventTarget | null; clientX?: number; clientY?: number }) => {
+          const pending = holdTimer.current != null;
+          clearHold();
+          if (!pending) return;
+          const el = e.currentTarget as HTMLElement | undefined;
+          if (el && typeof e.clientX === "number" && typeof e.clientY === "number") {
+            const r = el.getBoundingClientRect();
+            if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) return;
+          }
+          skipClick.current = true;
+          onClick?.();
+        },
         onPointerCancel: () => clearHold(),
-        onPointerLeave: () => clearHold(),
         onContextMenu: (e: { preventDefault: () => void }) => {
           if (onLongPress) e.preventDefault();
         },
@@ -1322,7 +1332,7 @@ function PlayingCard({
     WebkitTouchCallout: "none",
     position: "absolute",
     cursor: selectable && !locked ? "pointer" : "default",
-    touchAction: selectable ? (onLongPress ? "none" : "manipulation") : undefined,
+    touchAction: selectable ? "manipulation" : undefined,
     outline: selected ? "2px solid #f1c40f" : "none",
     outlineOffset: 2,
     opacity: dimmed ? 0.4 : locked && selectable ? 0.85 : 1,
@@ -1525,6 +1535,7 @@ interface HandProps {
   legalMask?: boolean[];
   glowMask?: boolean[];
   onSelect?: (index: number, opts?: { allOfRank?: boolean }) => void;
+  enableLongPress?: boolean;
   swapKey?: number;
   seatId?: number;
 }
@@ -1544,6 +1555,7 @@ function Hand({
   legalMask,
   glowMask,
   onSelect,
+  enableLongPress,
   swapKey = 0,
   seatId,
 }: HandProps) {
@@ -1592,7 +1604,7 @@ function Hand({
             }
             highlighted={!!isOwner && !!glowMask?.[i]}
             onClick={() => onSelect?.(i)}
-            onLongPress={() => onSelect?.(i, { allOfRank: true })}
+            onLongPress={enableLongPress ? () => onSelect?.(i, { allOfRank: true }) : undefined}
             animClass={
               animating && i === cards.length - 1
                 ? "card-deal-hand"
@@ -5178,8 +5190,6 @@ function Table({
   }
 
   const myTurn = isPlaying && currentPlayer === 0 && phase === "playing";
-  const playClickable =
-    isHumanTurn && !pickupAwaitTable && humanZone !== "faceDown" && canPlaySelected;
   const pickupClickable = isHumanTurn && (pickupAwaitTable || discard.length > 0);
 
   return (
@@ -5573,6 +5583,7 @@ function Table({
               legalMask={handLegal}
               glowMask={handGlow}
               onSelect={onSelectHand}
+              enableLongPress={isHumanTurn && humanZone === "hand" && !pickupAwaitTable}
               swapKey={swapTick}
               seatId={0}
             />
@@ -5585,14 +5596,12 @@ function Table({
         disabled={!myTurn}
         label="Play"
         glow={tutHint === "play"}
-        onClick={() => {
-          if (playClickable) onPlay();
-        }}
+        onClick={onPlay}
         style={{
           position: "absolute",
           left: "max(8px, env(safe-area-inset-left))",
           bottom: "max(8px, env(safe-area-inset-bottom))",
-          zIndex: 80,
+          zIndex: 120,
           width: 108,
           minHeight: 48,
           fontSize: 14,
@@ -5619,7 +5628,7 @@ function Table({
           position: "absolute",
           right: "max(8px, env(safe-area-inset-right))",
           bottom: "max(8px, env(safe-area-inset-bottom))",
-          zIndex: 80,
+          zIndex: 120,
           width: 108,
           minHeight: 48,
           fontSize: 13,
@@ -8494,7 +8503,10 @@ export default function CardGame() {
   function handlePlay() {
     if (phase !== "playing" || currentPlayerRef.current !== 0 || playLockRef.current) return;
     if (pickupAwaitTable) return;
-    if (selectionCount(playSelected) === 0) return;
+    if (selectionCount(playSelected) === 0) {
+      setStatusMsg("Select a card first");
+      return;
+    }
     const pl = playersRef.current[0];
     const zone = activePlayZone(pl, drawDeckRef.current.length);
     if (!zone || zone === "faceDown") return;
