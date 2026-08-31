@@ -234,6 +234,10 @@ function playSelectionRank(player: PlayerState, sel: CombinedPlay): string | nul
   return null;
 }
 
+function selectionCount(sel: CombinedPlay): number {
+  return sel.hand.length + sel.faceUp.length;
+}
+
 function cardsFromSelection(player: PlayerState, sel: CombinedPlay): string[] {
   const cards: string[] = [];
   for (const i of sel.hand) cards.push(player.hand[i]);
