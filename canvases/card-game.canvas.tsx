@@ -42,6 +42,7 @@ function rankValue(rank: string): number {
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 interface PlayerState {
+  id?: string;
   name: string;
   avatar?: string;
   faceDown: (string | null)[];
@@ -2924,6 +2925,7 @@ function SeatLabel({
   isTurn,
   place,
   offline,
+  onKick,
 }: {
   name: string;
   avatar?: string;
@@ -2932,12 +2934,16 @@ function SeatLabel({
   isTurn?: boolean;
   place?: number | null;
   offline?: boolean;
+  onKick?: () => void;
 }) {
   const theme = useHostTheme();
+  const [open, setOpen] = useState(false);
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 6, position: "relative", zIndex: open ? 40 : 1 }}>
       <AvatarBubble src={avatar} name={name} size={22} />
-      <div
+      <button
+        type="button"
+        onClick={onKick ? () => setOpen((v) => !v) : undefined}
         style={{
           padding: "2px 10px",
           borderRadius: 12,
@@ -2953,10 +2959,50 @@ function SeatLabel({
           fontWeight: 600,
           color: isTurn ? "#222" : isHuman ? theme.text.primary : "#fff",
           opacity: place || offline ? 0.55 : 1,
+          cursor: onKick ? "pointer" : "default",
         }}
       >
         {offline ? `${name} · offline` : name}
-      </div>
+      </button>
+      {open && onKick ? (
+        <>
+          <div
+            onClick={() => setOpen(false)}
+            style={{ position: "fixed", inset: 0, zIndex: 90 }}
+          />
+          <div
+            style={{
+              position: "absolute",
+              top: "100%",
+              left: 24,
+              marginTop: 4,
+              zIndex: 91,
+              minWidth: 132,
+              padding: 6,
+              borderRadius: 8,
+              border: "1px solid rgba(255,255,255,0.28)",
+              background: "rgba(8, 18, 10, 0.96)",
+              boxShadow: "0 10px 24px rgba(0,0,0,0.4)",
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                onKick();
+              }}
+              style={{
+                ...LOBBY_CORNER_BTN,
+                position: "static",
+                width: "100%",
+                justifyContent: "flex-start",
+              }}
+            >
+              Kick player
+            </button>
+          </div>
+        </>
+      ) : null}
       {ready && (
         <div
           style={{
@@ -2985,6 +3031,108 @@ function SeatLabel({
           #{place}
         </div>
       )}
+    </div>
+  );
+}
+
+type KickVoteInfo = {
+  targetId: string;
+  targetName: string;
+  starterName: string;
+  yes: number;
+  no: number;
+  need: number;
+  endsAt: number;
+  isTarget: boolean;
+  youVoted: boolean;
+  canVote: boolean;
+};
+
+function KickVoteOverlay({
+  vote,
+  onYes,
+  onNo,
+}: {
+  vote: KickVoteInfo;
+  onYes: () => void;
+  onNo: () => void;
+}) {
+  const [left, setLeft] = useState(() => Math.max(0, Math.ceil((vote.endsAt - Date.now()) / 1000)));
+  useEffect(() => {
+    const tick = () => setLeft(Math.max(0, Math.ceil((vote.endsAt - Date.now()) / 1000)));
+    tick();
+    const t = window.setInterval(tick, 250);
+    return () => window.clearInterval(t);
+  }, [vote.endsAt, vote.targetId]);
+  return (
+    <div
+      style={{
+        position: "absolute",
+        inset: 0,
+        zIndex: 140,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "rgba(0,0,0,0.45)",
+        pointerEvents: "auto",
+        padding: 16,
+      }}
+    >
+      <div
+        style={{
+          width: "min(320px, 92%)",
+          borderRadius: 14,
+          border: "1px solid rgba(241,196,15,0.55)",
+          background: "rgba(8, 18, 10, 0.96)",
+          padding: "18px 16px 14px",
+          textAlign: "center",
+          color: "#f5f0e6",
+        }}
+      >
+        <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 1.2, textTransform: "uppercase", color: "#f1c40f", marginBottom: 8 }}>
+          Kick vote
+        </div>
+        <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 6 }}>
+          {vote.isTarget ? "The table is voting to kick you" : `Kick ${vote.targetName}?`}
+        </div>
+        <div style={{ fontSize: 12, color: "rgba(255,255,255,0.62)", marginBottom: 12 }}>
+          {vote.starterName} started · {vote.yes} yes · {vote.no} no · need {vote.need} · {left}s
+        </div>
+        {vote.canVote ? (
+          <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
+            <button
+              type="button"
+              onClick={onYes}
+              style={{
+                ...LOBBY_CORNER_BTN,
+                position: "static",
+                minWidth: 96,
+                background: "#f1c40f",
+                color: "#1a2e1a",
+                border: "none",
+                fontWeight: 800,
+              }}
+            >
+              Yes
+            </button>
+            <button
+              type="button"
+              onClick={onNo}
+              style={{
+                ...LOBBY_CORNER_BTN,
+                position: "static",
+                minWidth: 96,
+              }}
+            >
+              No
+            </button>
+          </div>
+        ) : (
+          <div style={{ fontSize: 12, color: "rgba(255,255,255,0.7)" }}>
+            {vote.isTarget ? "You can't vote on this." : vote.youVoted ? "Vote in." : "Waiting for players…"}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -4134,7 +4282,15 @@ function LobbyBack({ onClick, label }: { onClick: () => void; label?: string }) 
   );
 }
 
-function MatchMenu({ onToLobby, onLeave }: { onToLobby: () => void; onLeave: () => void }) {
+function MatchMenu({
+  onToLobby,
+  onLeave,
+  watch,
+}: {
+  onToLobby: () => void;
+  onLeave: () => void;
+  watch?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -4171,7 +4327,7 @@ function MatchMenu({ onToLobby, onLeave }: { onToLobby: () => void; onLeave: () 
         >
           {open ? "Menu ▾" : "Menu"}
         </button>
-        {open ? (
+          {open ? (
           <div
             className="match-menu-fly"
             style={{
@@ -4187,6 +4343,7 @@ function MatchMenu({ onToLobby, onLeave }: { onToLobby: () => void; onLeave: () 
               gap: 6,
             }}
           >
+            {watch ? null : (
             <button
               type="button"
               onClick={() => {
@@ -4202,6 +4359,7 @@ function MatchMenu({ onToLobby, onLeave }: { onToLobby: () => void; onLeave: () 
             >
               To lobby
             </button>
+            )}
             <button
               type="button"
               onClick={() => {
@@ -4864,6 +5022,10 @@ function Table({
   reacts,
   onSendReact,
   showSpecials = true,
+  watching = false,
+  kickVote = null,
+  onKickPlayer,
+  onKickVote,
   matchMenu,
 }: {
   players: PlayerState[];
@@ -4906,6 +5068,10 @@ function Table({
   reacts?: ReactBurst[];
   onSendReact?: (emoji: string) => void;
   showSpecials?: boolean;
+  watching?: boolean;
+  kickVote?: KickVoteInfo | null;
+  onKickPlayer?: (playerId: string) => void;
+  onKickVote?: (yes: boolean) => void;
   matchMenu?: { onToLobby: () => void; onLeave: () => void };
   tutorial?: {
     text: string;
@@ -4926,7 +5092,15 @@ function Table({
   const isPlaying = phase === "playing" || phase === "finished";
   const humanReady = players[0]?.ready ?? false;
   const isHumanTurn =
-    isPlaying && currentPlayer === 0 && phase === "playing" && !flyAnim && !burnAnim && !pickupAnim && !revealCard && !drawAnim;
+    !watching &&
+    isPlaying &&
+    currentPlayer === 0 &&
+    phase === "playing" &&
+    !flyAnim &&
+    !burnAnim &&
+    !pickupAnim &&
+    !revealCard &&
+    !drawAnim;
   const humanZone = players[0] ? activePlayZone(players[0], drawDeck.length) : null;
   const selRank = players[0] ? playSelectionRank(players[0], playSelected) : null;
   const tutHint = tutorial?.hint ?? "none";
@@ -5109,6 +5283,18 @@ function Table({
     vp.w - cornerReserve * 2 - tableSpread - humanGap - 12,
   );
   const seats = splitOpponentSeats(opponentCount);
+  const canKickOthers =
+    !watching &&
+    !!onKickPlayer &&
+    (phase === "playing" || phase === "swap") &&
+    players.length >= 3;
+  function kickFor(pIdx: number) {
+    if (!canKickOthers) return undefined;
+    if (pIdx === 0) return undefined;
+    const id = players[pIdx]?.id;
+    if (!id || finishOrder.includes(pIdx)) return undefined;
+    return () => onKickPlayer?.(id);
+  }
   const oppTableGap = Math.max(4, Math.round(oppW * 0.14));
   const sideColW =
     seats.left.length || seats.right.length
@@ -5153,6 +5339,7 @@ function Table({
           isTurn={isPlaying && currentPlayer === pIdx && phase === "playing"}
           place={finishOrder.includes(pIdx) ? finishOrder.indexOf(pIdx) + 1 : null}
           offline={players[pIdx].connected === false}
+          onKick={kickFor(pIdx)}
         />
         <div
           style={{
@@ -5189,7 +5376,7 @@ function Table({
     );
   }
 
-  const myTurn = isPlaying && currentPlayer === 0 && phase === "playing";
+  const myTurn = !watching && isPlaying && currentPlayer === 0 && phase === "playing";
   const pickupClickable = isHumanTurn && (pickupAwaitTable || discard.length > 0);
 
   return (
@@ -5236,7 +5423,7 @@ function Table({
           </button>
         )}
       </div>
-      {matchMenu ? <MatchMenu onToLobby={matchMenu.onToLobby} onLeave={matchMenu.onLeave} /> : null}
+        {matchMenu ? <MatchMenu onToLobby={matchMenu.onToLobby} onLeave={matchMenu.onLeave} watch={watching} /> : null}
       {fsNote ? (
         <div
           style={{
@@ -5460,7 +5647,7 @@ function Table({
               </div>
             )}
             {isPlaying && <DiscardPile cards={displayDiscard} />}
-            {isSwap && (
+            {isSwap && !watching && (
               <FeltChip onClick={onReady} disabled={humanReady} kind="ready" label="Ready" glow={tutHint === "ready"} />
             )}
             {pickupAwaitTable && isHumanTurn && (
@@ -5513,11 +5700,22 @@ function Table({
             padding: "2px 8px",
             borderRadius: 16,
             boxShadow:
-              isPlaying && currentPlayer === 0 && phase === "playing"
+              !watching && isPlaying && currentPlayer === 0 && phase === "playing"
                 ? "0 0 0 1px rgba(241,196,15,0.7)"
                 : undefined,
           }}
         >
+          {watching ? (
+            <SeatLabel
+              name={playerHand(0).length > 0 ? `${players[0].name} · ${playerHand(0).length}` : players[0].name}
+              avatar={players[0]?.avatar}
+              isHuman={false}
+              ready={isSwap ? players[0]?.ready : undefined}
+              isTurn={isPlaying && currentPlayer === 0 && phase === "playing"}
+              place={finishOrder.includes(0) ? finishOrder.indexOf(0) + 1 : null}
+              offline={players[0]?.connected === false}
+            />
+          ) : null}
           <TableStack
             faceDown={playerFaceDown(0)}
             faceUp={playerFaceUp(0)}
@@ -5527,15 +5725,18 @@ function Table({
             cardW={ownerW}
             cardH={ownerH}
             selectableFaceUp={
-              (isSwap && !humanReady) || (isHumanTurn && canSelectFaceUp)
+              !watching && ((isSwap && !humanReady) || (isHumanTurn && canSelectFaceUp))
             }
             selectableFaceDown={
-              (phase === "finished" && playerFaceDown(0).some((c, i) => c !== null && !playerFaceUp(0)[i])) ||
-              (isHumanTurn &&
-                (pickupAwaitTable ? humanZone === "faceDown" : humanZone === "faceDown"))
+              !watching &&
+              ((phase === "finished" && playerFaceDown(0).some((c, i) => c !== null && !playerFaceUp(0)[i])) ||
+                (isHumanTurn &&
+                  (pickupAwaitTable ? humanZone === "faceDown" : humanZone === "faceDown")))
             }
-            locked={phase === "finished" ? false : isSwap ? humanReady : !isHumanTurn}
-            peekedDown={phase === "finished" ? playerFaceDown(0).map((_, i) => !!peekDown[i]) : undefined}
+            locked={watching || (phase === "finished" ? false : isSwap ? humanReady : !isHumanTurn)}
+            peekedDown={
+              watching ? undefined : phase === "finished" ? playerFaceDown(0).map((_, i) => !!peekDown[i]) : undefined
+            }
             selectedFaceUp={
               isSwap
                 ? selection?.zone === "faceUp"
@@ -5558,7 +5759,7 @@ function Table({
             }
             swapKey={swapTick}
           />
-          {phase === "finished" && playerFaceDown(0).some((c, i) => c !== null && !playerFaceUp(0)[i]) ? (
+          {phase === "finished" && !watching && playerFaceDown(0).some((c, i) => c !== null && !playerFaceUp(0)[i]) ? (
             <div style={{ fontSize: 11, color: "rgba(255,255,255,0.7)", fontWeight: 700, textShadow: "0 1px 4px rgba(0,0,0,0.8)" }}>
               Tap a face-down card to peek
             </div>
@@ -5566,13 +5767,13 @@ function Table({
           {(playerHand(0).length > 0 || !isPlaying) && (
             <Hand
               cards={playerHand(0)}
-              isOwner
+              isOwner={!watching}
               cardW={ownerW}
               cardH={ownerH}
               maxWidth={handMax}
               animating={!!isAnimTarget(0, "hand")}
-              selectable={(isSwap && !humanReady) || (isHumanTurn && humanZone === "hand")}
-              locked={isSwap ? humanReady : !isHumanTurn}
+              selectable={!watching && ((isSwap && !humanReady) || (isHumanTurn && humanZone === "hand"))}
+              locked={watching || (isSwap ? humanReady : !isHumanTurn)}
               selectedIndices={
                 isSwap
                   ? selection?.zone === "hand"
@@ -5591,6 +5792,30 @@ function Table({
         </div>
       </div>
 
+      {watching ? (
+        <div
+          style={{
+            position: "absolute",
+            left: "50%",
+            bottom: "max(10px, env(safe-area-inset-bottom))",
+            transform: "translateX(-50%)",
+            zIndex: 120,
+            padding: "8px 16px",
+            borderRadius: 999,
+            background: "rgba(8, 18, 10, 0.88)",
+            border: "1.5px solid rgba(241,196,15,0.7)",
+            color: "#f1c40f",
+            fontSize: 12,
+            fontWeight: 800,
+            letterSpacing: 0.8,
+            textTransform: "uppercase",
+            pointerEvents: "none",
+          }}
+        >
+          Watching
+        </div>
+      ) : (
+        <>
       <FeltChip
         kind={myTurn ? "play" : "ghost"}
         disabled={!myTurn}
@@ -5635,6 +5860,8 @@ function Table({
           pointerEvents: "auto",
         }}
       />
+        </>
+      )}
       {phase === "playing" || phase === "swap" || phase === "finished" ? <EmojiDock onPick={pickReact} /> : null}
       <EmojiFlyLayer flies={emojiFlies} />
       {onSendChat ? (
@@ -5664,6 +5891,13 @@ function Table({
         />
       ) : null}
       {phase === "finished" && onToLobby && endUi && !winShow ? <FinishedLobbyOverlay onLobby={onToLobby} /> : null}
+      {kickVote ? (
+        <KickVoteOverlay
+          vote={kickVote}
+          onYes={() => onKickVote?.(true)}
+          onNo={() => onKickVote?.(false)}
+        />
+      ) : null}
     </div>
     </CardBackContext.Provider>
   );
@@ -5734,6 +5968,7 @@ type OnlineView = {
   you: number;
   youId: string;
   host: boolean;
+  spectator?: boolean;
   phase: "waiting" | "dealing" | "swap" | "playing" | "finished";
   players: PlayerState[];
   deckCount: number;
@@ -5747,6 +5982,7 @@ type OnlineView = {
   tableSkin: TableSkinId;
   cardBack?: CardBackId;
   chat?: ChatLine[];
+  kickVote?: KickVoteInfo | null;
   lobby: { id: string; name: string; avatar?: string; ready: boolean; connected: boolean; host: boolean }[];
 };
 
@@ -5758,6 +5994,9 @@ type LobbyInfo = {
   players: { name: string; avatar?: string }[];
   count: number;
   max: number;
+  live?: boolean;
+  watchers?: number;
+  watchMax?: number;
 };
 
 function OpenLobbyList({
@@ -5782,7 +6021,7 @@ function OpenLobbyList({
           textAlign: "center",
         }}
       >
-        Open lobbies
+        Open tables
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: "48vh", overflowY: "auto" }}>
         {lobbies.length === 0 ? (
@@ -5797,12 +6036,16 @@ function OpenLobbyList({
               lineHeight: 1.4,
             }}
           >
-            No open lobbies yet
+            No tables yet
           </div>
         ) : (
           lobbies.map((lobby) => {
-            const full = lobby.count >= lobby.max;
+            const live = !!lobby.live;
+            const full = live
+              ? (lobby.watchers || 0) >= (lobby.watchMax || 16)
+              : lobby.count >= lobby.max;
             const names = lobby.players.map((p) => p.name).join(", ");
+            const watchers = lobby.watchers || 0;
             return (
               <div
                 key={lobby.code}
@@ -5813,7 +6056,7 @@ function OpenLobbyList({
                   padding: "10px 10px 10px 12px",
                   borderRadius: 10,
                   background: "rgba(0,0,0,0.32)",
-                  border: "1px solid rgba(255,255,255,0.12)",
+                  border: live ? "1px solid rgba(241,196,15,0.35)" : "1px solid rgba(255,255,255,0.12)",
                 }}
               >
                 <AvatarBubble src={lobby.hostAvatar} name={lobby.host} size={32} />
@@ -5829,6 +6072,11 @@ function OpenLobbyList({
                     }}
                   >
                     {lobby.title || lobby.host}
+                    {live ? (
+                      <span style={{ marginLeft: 8, color: "#f1c40f", fontSize: 10, letterSpacing: 0.8, fontWeight: 800 }}>
+                        LIVE
+                      </span>
+                    ) : null}
                   </div>
                   <div
                     style={{
@@ -5839,7 +6087,9 @@ function OpenLobbyList({
                       whiteSpace: "nowrap",
                     }}
                   >
-                    {lobby.host} · {lobby.count}/{lobby.max}{names ? ` · ${names}` : ""}
+                    {lobby.host} · {lobby.count}/{lobby.max}
+                    {live ? ` · ${watchers} watching` : ""}
+                    {names ? ` · ${names}` : ""}
                   </div>
                 </div>
                 <button
@@ -5851,15 +6101,15 @@ function OpenLobbyList({
                     height: 32,
                     padding: "0 12px",
                     borderRadius: 8,
-                    border: "none",
-                    background: full ? "rgba(255,255,255,0.12)" : "#f1c40f",
-                    color: full ? "rgba(255,255,255,0.45)" : "#1a2e1a",
+                    border: live && !full ? "1px solid #f1c40f" : "none",
+                    background: full ? "rgba(255,255,255,0.12)" : live ? "rgba(241,196,15,0.18)" : "#f1c40f",
+                    color: full ? "rgba(255,255,255,0.45)" : live ? "#f1c40f" : "#1a2e1a",
                     fontSize: 12,
                     fontWeight: 700,
                     cursor: busy || full ? "default" : "pointer",
                   }}
                 >
-                  {full ? "Full" : "Join"}
+                  {full ? "Full" : live ? "Watch" : "Join"}
                 </button>
               </div>
             );
@@ -6358,6 +6608,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       view?: OnlineView;
       code?: string;
       token?: string;
+      spectator?: boolean;
       card?: string;
       anim?: NetAnim;
       lobbies?: LobbyInfo[];
@@ -6372,7 +6623,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     if (msg.type === "error") {
       setBusy(false);
       setError(msg.message || "Server error");
-      if (/lobby not found|game has already started/i.test(msg.message || "")) {
+      if (/lobby not found/i.test(msg.message || "")) {
         const inMatch = screenRef.current === "waiting" || screenRef.current === "table";
         if (!inMatch) forgetSession();
       }
@@ -6402,6 +6653,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       setError("");
       setDropped(false);
       reconnectTriesRef.current = 0;
+      if (msg.spectator) return;
       if (msg.code && msg.token) {
         const sess: MpSession = {
           code: msg.code,
@@ -6477,8 +6729,19 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       revealTimerRef.current = setTimeout(() => setRevealCard(null), 900);
       return;
     }
+    if (msg.type === "kicked") {
+      if (!msg.code || (sessionRef.current && sessionRef.current.code === msg.code)) forgetSession();
+      setBusy(false);
+      setDropped(false);
+      setView(null);
+      setChat([]);
+      setReacts([]);
+      setError(msg.message || "The table voted you out");
+      setScreen("pick");
+      return;
+    }
     if (msg.type === "left") {
-      forgetSession();
+      if (!msg.code || (sessionRef.current && sessionRef.current.code === msg.code)) forgetSession();
       setDropped(false);
       setView(null);
       setChat([]);
@@ -7395,8 +7658,15 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         reacts={reacts}
         onSendReact={(emoji) => send({ type: "react", emoji })}
         showSpecials={false}
-        matchMenu={{ onToLobby: parkAtLobby, onLeave: leaveOnline }}
-        onToLobby={view.phase === "finished" ? () => send({ type: "lobby" }) : undefined}
+        watching={!!view.spectator}
+        kickVote={view.kickVote || null}
+        onKickPlayer={(targetId) => send({ type: "kick", targetId })}
+        onKickVote={(yes) => send({ type: "kickVote", yes })}
+        matchMenu={{
+          onToLobby: view.spectator ? leaveOnline : parkAtLobby,
+          onLeave: leaveOnline,
+        }}
+        onToLobby={view.phase === "finished" && !view.spectator ? () => send({ type: "lobby" }) : undefined}
       />
       </>
     );

@@ -12,6 +12,7 @@ const SWAP_SECONDS = 20;
 const DEAL_STEP_MS = 200;
 const MAX_PLAYERS = 5;
 const MIN_PLAYERS = 2;
+const MAX_SPECTATORS = 16;
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const ROOM_TTL_MS = 3 * 60 * 60 * 1000;
 const REJOIN_MS = 10 * 60 * 1000;
@@ -23,6 +24,8 @@ const CHAT_MAX_LOG = 50;
 const ROOM_TITLE_MAX = 28;
 const CHAT_GAP_MS = 400;
 const REACT_GAP_MS = 450;
+const KICK_VOTE_MS = 20000;
+const KICK_COOLDOWN_MS = 12000;
 const REACT_EMOJIS = new Set([
   "🍋",
   "😂",
@@ -60,11 +63,21 @@ const REACT_EMOJIS = new Set([
 const rooms = new Map();
 const browsers = new Set();
 
+function roomSpectators(room) {
+  return Array.isArray(room.spectators) ? room.spectators : [];
+}
+
+function roomLive(room) {
+  return room.phase === "dealing" || room.phase === "swap" || room.phase === "playing" || room.phase === "finished";
+}
+
 function publicLobbies() {
   const list = [];
   for (const room of rooms.values()) {
-    if (room.phase !== "waiting") continue;
+    if (room.phase === "finished") continue;
     const host = room.seats.find((p) => p.id === room.hostId) || room.seats[0];
+    const live = roomLive(room);
+    const watchers = roomSpectators(room).filter((s) => isOnline(s)).length;
     list.push({
       code: room.code,
       title: room.title || (host ? `${host.name}'s lobby` : "Lobby"),
@@ -73,9 +86,16 @@ function publicLobbies() {
       players: room.seats.map((p) => ({ name: p.name, avatar: p.avatar || "" })),
       count: room.seats.length,
       max: MAX_PLAYERS,
+      live,
+      watchers,
+      watchMax: MAX_SPECTATORS,
     });
   }
-  list.sort((a, b) => b.count - a.count || String(a.title).localeCompare(String(b.title)));
+  list.sort((a, b) => {
+    const liveDelta = Number(a.live) - Number(b.live);
+    if (liveDelta !== 0) return liveDelta;
+    return b.count - a.count || String(a.title).localeCompare(String(b.title));
+  });
   return list;
 }
 
@@ -115,15 +135,46 @@ function dummyCard() {
   return "A♠";
 }
 
+function isOnline(p) {
+  return !!(p && p.ws && p.ws.readyState === 1);
+}
+
 function maskPlayer(p, isSelf) {
   return {
+    id: p.id,
     name: isSelf ? "You" : p.name,
     avatar: p.avatar || "",
     ready: !!p.ready,
-    connected: !!p.connected,
+    connected: isOnline(p),
     hand: isSelf ? [...p.hand] : p.hand.map(() => dummyCard()),
     faceUp: [...p.faceUp],
     faceDown: isSelf ? [...p.faceDown] : p.faceDown.map((c) => (c === null ? null : dummyCard())),
+  };
+}
+
+function kickEligible(room, targetId) {
+  return room.seats.filter((p) => p.id !== targetId && !engine.playerFinished(p));
+}
+
+function kickVoteView(room, viewerId) {
+  const v = room.kickVote;
+  if (!v) return null;
+  const target = room.seats.find((p) => p.id === v.targetId);
+  if (!target) return null;
+  const starter = room.seats.find((p) => p.id === v.starterId);
+  const eligible = kickEligible(room, v.targetId);
+  const seated = room.seats.some((p) => p.id === viewerId);
+  return {
+    targetId: v.targetId,
+    targetName: target.name,
+    starterName: starter ? starter.name : "Player",
+    yes: v.yes.size,
+    no: v.no.size,
+    need: Math.floor(eligible.length / 2) + 1,
+    endsAt: v.endsAt,
+    isTarget: viewerId === v.targetId,
+    youVoted: v.yes.has(viewerId) || v.no.has(viewerId),
+    canVote: seated && viewerId !== v.targetId && !v.yes.has(viewerId) && !v.no.has(viewerId),
   };
 }
 
@@ -142,6 +193,7 @@ function viewFor(room, playerId) {
     you: 0,
     youId: playerId,
     host: room.hostId === playerId,
+    spectator: false,
     phase: room.phase,
     players,
     deckCount: room.deck.length,
@@ -155,12 +207,49 @@ function viewFor(room, playerId) {
     tableSkin: TABLE_SKINS.has(room.tableSkin) ? room.tableSkin : "felt",
     cardBack: CARD_BACKS.has(room.cardBack) ? room.cardBack : "classic",
     chat: Array.isArray(room.chat) ? room.chat : [],
+    watchers: roomSpectators(room).filter((s) => isOnline(s)).length,
+    kickVote: kickVoteView(room, playerId),
     lobby: room.seats.map((p) => ({
       id: p.id,
       name: p.id === playerId ? `${p.name} (you)` : p.name,
       avatar: p.avatar || "",
       ready: !!p.ready,
-      connected: !!p.connected,
+      connected: isOnline(p),
+      host: p.id === room.hostId,
+    })),
+  };
+}
+
+function viewForSpectator(room, spectatorId) {
+  const players = room.seats.map((src) => maskPlayer(src, false));
+  return {
+    code: room.code,
+    title: room.title || "",
+    you: -1,
+    youId: spectatorId,
+    host: false,
+    spectator: true,
+    phase: room.phase,
+    players,
+    deckCount: room.deck.length,
+    discard: [...room.discard],
+    currentPlayer: room.phase === "waiting" ? 0 : room.currentPlayer,
+    finishOrder: [...room.finishOrder],
+    swapSeconds: room.swapSeconds,
+    burnCount: room.burnCount,
+    statusMsg: room.statusMsg,
+    canStart: false,
+    tableSkin: TABLE_SKINS.has(room.tableSkin) ? room.tableSkin : "felt",
+    cardBack: CARD_BACKS.has(room.cardBack) ? room.cardBack : "classic",
+    chat: Array.isArray(room.chat) ? room.chat : [],
+    watchers: roomSpectators(room).filter((s) => isOnline(s)).length,
+    kickVote: kickVoteView(room, spectatorId),
+    lobby: room.seats.map((p) => ({
+      id: p.id,
+      name: p.name,
+      avatar: p.avatar || "",
+      ready: !!p.ready,
+      connected: isOnline(p),
       host: p.id === room.hostId,
     })),
   };
@@ -172,6 +261,28 @@ function broadcast(room, anim) {
     const view = viewFor(room, p.id);
     send(p.ws, { type: "state", view, anim: animFor(room, p.id, anim) });
   }
+  for (const s of roomSpectators(room)) {
+    if (!s.ws) continue;
+    send(s.ws, { type: "state", view: viewForSpectator(room, s.id), anim: animForSpectator(anim) });
+  }
+}
+
+function animForSpectator(anim) {
+  if (!anim) return undefined;
+  return {
+    kind: anim.kind,
+    fromPlayer: anim.fromPlayer,
+    played: [...(anim.played || [])],
+    willBurn: !!anim.willBurn,
+    burnCards: [...(anim.burnCards || [])],
+    drawn: (anim.drawn || []).map(() => dummyCard()),
+    pickup: anim.pickup
+      ? {
+          cards: anim.pickup.cards.map(() => dummyCard()),
+          toPlayer: anim.pickup.toPlayer,
+        }
+      : null,
+  };
 }
 
 function animFor(room, playerId, anim) {
@@ -205,9 +316,22 @@ function error(ws, message) {
   send(ws, { type: "error", message });
 }
 
+function dropSpectators(room) {
+  for (const s of roomSpectators(room)) {
+    if (s.ws) {
+      s.ws.roomCode = null;
+      s.ws.playerId = null;
+      send(s.ws, { type: "left", code: room.code });
+      addBrowser(s.ws);
+    }
+  }
+  room.spectators = [];
+}
+
 function removeSeat(room, player) {
   room.seats = room.seats.filter((p) => p.id !== player.id);
   if (room.seats.length === 0) {
+    dropSpectators(room);
     clearRoomTimers(room);
     rooms.delete(room.code);
     return false;
@@ -218,6 +342,7 @@ function removeSeat(room, player) {
 
 function attach(ws, room, player) {
   browsers.delete(ws);
+  detachSpectator(ws, room);
   player.ws = ws;
   player.connected = true;
   if (player.leaveTimer) {
@@ -229,6 +354,42 @@ function attach(ws, room, player) {
   send(ws, { type: "joined", code: room.code, playerId: player.id, token: player.token });
   broadcast(room);
   notifyLobbies();
+}
+
+function detachSpectator(ws, keepRoom) {
+  const prev = rooms.get(ws.roomCode);
+  if (!prev) return;
+  const before = roomSpectators(prev).length;
+  prev.spectators = roomSpectators(prev).filter((s) => s.ws !== ws && s.id !== ws.playerId);
+  if (prev !== keepRoom && prev.spectators.length !== before) notifyLobbies();
+}
+
+function attachSpectator(ws, room, spectator) {
+  browsers.delete(ws);
+  if (ws.roomCode && ws.roomCode !== room.code) leave(ws, true);
+  if (!Array.isArray(room.spectators)) room.spectators = [];
+  room.spectators = room.spectators.filter((s) => s !== spectator && s.ws !== ws && s.id !== spectator.id);
+  room.spectators.push(spectator);
+  spectator.ws = ws;
+  spectator.connected = true;
+  ws.roomCode = room.code;
+  ws.playerId = spectator.id;
+  send(ws, { type: "joined", code: room.code, playerId: spectator.id, spectator: true });
+  broadcast(room);
+  notifyLobbies();
+}
+
+function makeSpectator(ws, name, avatar, clerkUserId) {
+  return {
+    id: id(),
+    name: sanitizeName(name),
+    avatar: sanitizeAvatar(avatar),
+    clerkUserId: clerkUserId || null,
+    ws,
+    connected: true,
+    lastChatAt: 0,
+    lastReactAt: 0,
+  };
 }
 
 function sanitizeName(name) {
@@ -290,7 +451,7 @@ function gatherSeatCards(player) {
   return cards;
 }
 
-function ejectFromMatch(room, player) {
+function ejectFromMatch(room, player, opts = {}) {
   const idx = room.seats.indexOf(player);
   if (idx < 0) return;
   const inMatch = room.phase === "playing" || room.phase === "swap" || room.phase === "dealing";
@@ -300,9 +461,20 @@ function ejectFromMatch(room, player) {
     return;
   }
 
+  if (room.kickVote) {
+    if (room.kickVote.targetId === player.id) clearKickVote(room);
+    else {
+      room.kickVote.yes.delete(player.id);
+      room.kickVote.no.delete(player.id);
+    }
+  }
   const dumped = gatherSeatCards(player);
-  if (dumped.length) room.discard = [...room.discard, ...dumped];
+  if (dumped.length) {
+    if (opts.toBurn) room.burnCount = (room.burnCount || 0) + dumped.length;
+    else room.discard = [...room.discard, ...dumped];
+  }
   const name = player.name;
+  const verb = opts.verb || "left";
   const wasTurn = room.currentPlayer === idx;
   const currentId = room.seats[room.currentPlayer] && room.seats[room.currentPlayer].id;
 
@@ -332,16 +504,17 @@ function ejectFromMatch(room, player) {
   if (alive.length <= 1) {
     if (alive.length === 1 && !room.finishOrder.includes(alive[0])) room.finishOrder.push(alive[0]);
     room.phase = "finished";
-    room.statusMsg = `${name} left · Game over`;
+    room.statusMsg = `${name} ${verb} · Game over`;
     saveFinishedGame(room);
   } else if (room.phase === "playing") {
     const turnName = room.seats[room.currentPlayer] ? room.seats[room.currentPlayer].name : "";
-    room.statusMsg = `${name} left · Turn: ${turnName}`;
+    room.statusMsg = `${name} ${verb} · Turn: ${turnName}`;
   } else {
-    room.statusMsg = `${name} left`;
+    room.statusMsg = `${name} ${verb}`;
   }
   broadcast(room);
   notifyLobbies();
+  if (room.kickVote) tallyKickVote(room);
 }
 
 function abandonSeat(room, player) {
@@ -351,7 +524,7 @@ function abandonSeat(room, player) {
     player.leaveTimer = null;
   }
   if (player.ws) {
-    send(player.ws, { type: "left" });
+    send(player.ws, { type: "left", code: room.code });
     player.ws.roomCode = null;
     player.ws.playerId = null;
     player.ws = null;
@@ -410,6 +583,9 @@ async function createRoom(ws, name, avatar, clerkToken, title) {
     statusMsg: "",
     createdAt: Date.now(),
     timers: [],
+    spectators: [],
+    kickVote: null,
+    kickCooldownUntil: 0,
   };
   rooms.set(code, room);
   attach(ws, room, player);
@@ -443,11 +619,25 @@ async function joinRoom(ws, code, name, token, avatar, clerkToken) {
       attach(ws, room, existing);
       return;
     }
-    releaseClerk(clerkUserId, room.code);
   }
 
-  if (room.phase !== "waiting") return error(ws, "The game has already started");
+  if (room.phase !== "waiting") {
+    const watching = roomSpectators(room).find((s) => s.clerkUserId && s.clerkUserId === clerkUserId);
+    if (watching) {
+      if (name) watching.name = sanitizeName(name);
+      if (avatar) watching.avatar = sanitizeAvatar(avatar);
+      attachSpectator(ws, room, watching);
+      return;
+    }
+    if (roomSpectators(room).length >= MAX_SPECTATORS) return error(ws, "This table is full of watchers");
+    if (!Array.isArray(room.spectators)) room.spectators = [];
+    const spectator = makeSpectator(ws, name, avatar, clerkUserId);
+    room.spectators.push(spectator);
+    attachSpectator(ws, room, spectator);
+    return;
+  }
   if (room.seats.length >= MAX_PLAYERS) return error(ws, "Lobby is full");
+  releaseClerk(clerkUserId, room.code);
 
   const player = makePlayer(ws, name, avatar, clerkUserId);
   room.seats.push(player);
@@ -484,6 +674,10 @@ function handleReact(room, player, emoji) {
     if (!p.ws) continue;
     send(p.ws, { type: "react", react });
   }
+  for (const s of roomSpectators(room)) {
+    if (!s.ws) continue;
+    send(s.ws, { type: "react", react });
+  }
 }
 
 function handleChat(room, player, text) {
@@ -492,10 +686,11 @@ function handleChat(room, player, text) {
   const now = Date.now();
   if (player.lastChatAt && now - player.lastChatAt < CHAT_GAP_MS) return;
   player.lastChatAt = now;
+  const watching = roomSpectators(room).some((s) => s.id === player.id);
   const line = {
     id: id(),
     fromId: player.id,
-    name: player.name,
+    name: watching ? `${player.name} (watch)` : player.name,
     text: body,
     at: now,
   };
@@ -506,6 +701,106 @@ function handleChat(room, player, text) {
     if (!p.ws) continue;
     send(p.ws, { type: "chat", line });
   }
+  for (const s of roomSpectators(room)) {
+    if (!s.ws) continue;
+    send(s.ws, { type: "chat", line });
+  }
+}
+
+function clearKickVote(room) {
+  if (room.kickVote && room.kickVote.timer) {
+    clearTimeout(room.kickVote.timer);
+  }
+  room.kickVote = null;
+}
+
+function failKickVote(room, reason) {
+  if (!room.kickVote) return;
+  const name = room.kickVote.targetName || "Player";
+  clearKickVote(room);
+  room.kickCooldownUntil = Date.now() + KICK_COOLDOWN_MS;
+  room.statusMsg = reason || `Kick vote against ${name} failed`;
+  broadcast(room);
+}
+
+function tallyKickVote(room) {
+  const v = room.kickVote;
+  if (!v) return;
+  const target = room.seats.find((p) => p.id === v.targetId);
+  if (!target) {
+    failKickVote(room, "Kick vote cancelled");
+    return;
+  }
+  const eligible = kickEligible(room, v.targetId);
+  const need = Math.floor(eligible.length / 2) + 1;
+  const pending = eligible.filter((p) => !v.yes.has(p.id) && !v.no.has(p.id)).length;
+  if (v.yes.size >= need) {
+    applyKick(room, target);
+    return;
+  }
+  if (v.yes.size + pending < need) {
+    failKickVote(room, `Kick vote against ${target.name} failed`);
+  }
+}
+
+function applyKick(room, player) {
+  clearKickVote(room);
+  if (player.leaveTimer) {
+    clearTimeout(player.leaveTimer);
+    player.leaveTimer = null;
+  }
+  if (player.ws) {
+    send(player.ws, { type: "kicked", code: room.code, message: "The table voted you out" });
+    addBrowser(player.ws);
+    player.ws.roomCode = null;
+    player.ws.playerId = null;
+    player.ws = null;
+  }
+  ejectFromMatch(room, player, { toBurn: true, verb: "was kicked" });
+}
+
+function handleKickStart(room, player, targetId) {
+  if (room.phase !== "playing" && room.phase !== "swap") return error(player.ws, "You can only start a kick vote during the match");
+  if (room.kickVote) return error(player.ws, "A kick vote is already running");
+  if (Date.now() < (room.kickCooldownUntil || 0)) return error(player.ws, "Wait a moment before another kick vote");
+  const tid = String(targetId || "");
+  if (!tid || tid === player.id) return error(player.ws, "You can't kick yourself");
+  const target = room.seats.find((p) => p.id === tid);
+  if (!target) return error(player.ws, "Player not found");
+  if (engine.playerFinished(target)) return error(player.ws, "That player is already out");
+  const eligible = kickEligible(room, target.id);
+  if (eligible.length < 2) return error(player.ws, "Need at least 3 players to vote someone out");
+  const vote = {
+    targetId: target.id,
+    targetName: target.name,
+    starterId: player.id,
+    yes: new Set([player.id]),
+    no: new Set(),
+    endsAt: Date.now() + KICK_VOTE_MS,
+    timer: null,
+  };
+  vote.timer = setTimeout(() => {
+    const r = rooms.get(room.code);
+    if (!r || r.kickVote !== vote) return;
+    tallyKickVote(r);
+    if (r.kickVote === vote) failKickVote(r, `Kick vote against ${target.name} timed out`);
+  }, KICK_VOTE_MS);
+  room.kickVote = vote;
+  room.statusMsg = `Vote: kick ${target.name}?`;
+  broadcast(room);
+  tallyKickVote(room);
+}
+
+function handleKickVote(room, player, yes) {
+  const v = room.kickVote;
+  if (!v) return error(player.ws, "No kick vote running");
+  if (player.id === v.targetId) return error(player.ws, "You can't vote on your own kick");
+  if (v.yes.has(player.id) || v.no.has(player.id)) return error(player.ws, "You already voted");
+  if (!room.seats.some((p) => p.id === player.id)) return;
+  if (yes) v.yes.add(player.id);
+  else v.no.add(player.id);
+  broadcast(room);
+  tallyKickVote(room);
 }
 
 function resetRoomToLobby(room) {
@@ -525,6 +820,8 @@ function resetRoomToLobby(room) {
   room.swapSeconds = SWAP_SECONDS;
   room.statusMsg = "";
   room.phase = "waiting";
+  clearKickVote(room);
+  dropSpectators(room);
   broadcast(room);
   notifyLobbies();
 }
@@ -547,6 +844,7 @@ function startGame(room) {
   room.burnCount = 0;
   room.boardSaved = false;
   room.currentPlayer = 0;
+  clearKickVote(room);
   room.phase = "dealing";
   room.statusMsg = "Dealing...";
   broadcast(room);
@@ -723,8 +1021,30 @@ function leave(ws, immediate) {
   browsers.delete(ws);
   const room = rooms.get(ws.roomCode);
   if (!room) return;
-  const player = room.seats.find((p) => p.id === ws.playerId);
+
+  const spectator = roomSpectators(room).find((s) => s.id === ws.playerId || s.ws === ws);
+  if (spectator) {
+    if (spectator.ws && spectator.ws !== ws) {
+      ws.roomCode = null;
+      ws.playerId = null;
+      return;
+    }
+    if (spectator.ws === ws) spectator.ws = null;
+    spectator.connected = false;
+    room.spectators = roomSpectators(room).filter((s) => s.id !== spectator.id);
+    ws.roomCode = null;
+    ws.playerId = null;
+    notifyLobbies();
+    return;
+  }
+
+  const player = room.seats.find((p) => p.id === ws.playerId) || room.seats.find((p) => p.ws === ws);
   if (!player) return;
+  if (player.ws && player.ws !== ws) {
+    ws.roomCode = null;
+    ws.playerId = null;
+    return;
+  }
   if (player.ws === ws) player.ws = null;
   player.connected = false;
   ws.roomCode = null;
@@ -735,13 +1055,16 @@ function leave(ws, immediate) {
     return;
   }
 
+  broadcast(room);
+  notifyLobbies();
+
   if (player.leaveTimer) clearTimeout(player.leaveTimer);
   const delay = room.phase === "waiting" ? WAITING_REJOIN_MS : REJOIN_MS;
   player.leaveTimer = setTimeout(() => {
     const r = rooms.get(room.code);
     if (!r) return;
     const p = r.seats.find((x) => x.id === player.id);
-    if (!p || p.connected) return;
+    if (!p || isOnline(p)) return;
     abandonSeat(r, p);
   }, delay);
 }
@@ -756,6 +1079,7 @@ function onMessage(ws, data) {
   const type = msg && msg.type;
   const room = rooms.get(ws.roomCode);
   const player = room && room.seats.find((p) => p.id === ws.playerId);
+  const spectator = room && roomSpectators(room).find((s) => s.id === ws.playerId);
 
   if (type === "create") {
     void createRoom(ws, msg.name, msg.avatar, msg.clerkToken, msg.title);
@@ -773,6 +1097,17 @@ function onMessage(ws, data) {
   if (type === "browse") {
     addBrowser(ws);
     return;
+  }
+
+  if (spectator && !player) {
+    if (type === "chat") return handleChat(room, spectator, msg.text);
+    if (type === "react") return handleReact(room, spectator, msg.emoji);
+    if (type === "leave") {
+      leave(ws, true);
+      send(ws, { type: "left", code: room.code });
+      return;
+    }
+    return error(ws, "You're watching this table");
   }
 
   if (!room || !player) return error(ws, "Join a lobby first");
@@ -810,11 +1145,13 @@ function onMessage(ws, data) {
   }
   if (type === "swap") return handleSwap(room, player, msg.hand, msg.faceUp);
   if (type === "ready") return handleReady(room, player);
+  if (type === "kick") return handleKickStart(room, player, msg.targetId);
+  if (type === "kickVote") return handleKickVote(room, player, !!msg.yes);
   if (type === "play") return handlePlay(room, player, msg.play);
   if (type === "pickup") return handlePickup(room, player, msg.tableTake || null);
   if (type === "leave") {
     leave(ws, true);
-    send(ws, { type: "left" });
+    send(ws, { type: "left", code: room.code });
     return;
   }
   error(ws, "Unknown command");
@@ -859,7 +1196,8 @@ const server = http.createServer((req, res) => {
         ok: true,
         service: "citrons",
         rooms: rooms.size,
-        waiting: publicLobbies().length,
+        waiting: [...rooms.values()].filter((r) => r.phase === "waiting").length,
+        live: [...rooms.values()].filter((r) => roomLive(r)).length,
         clerk: clerk.clerkConfigured(),
         leaderboard: (() => {
           const board = leaderboard.info();
