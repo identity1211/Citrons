@@ -163,18 +163,17 @@ function kickVoteView(room, viewerId) {
   if (!target) return null;
   const starter = room.seats.find((p) => p.id === v.starterId);
   const eligible = kickEligible(room, v.targetId);
-  const seated = room.seats.some((p) => p.id === viewerId);
   return {
     targetId: v.targetId,
     targetName: target.name,
     starterName: starter ? starter.name : "Player",
-    yes: v.yes.size,
-    no: v.no.size,
+    yes: eligible.filter((p) => v.yes.has(p.id)).length,
+    no: eligible.filter((p) => v.no.has(p.id)).length,
     need: Math.floor(eligible.length / 2) + 1,
     endsAt: v.endsAt,
     isTarget: viewerId === v.targetId,
     youVoted: v.yes.has(viewerId) || v.no.has(viewerId),
-    canVote: seated && viewerId !== v.targetId && !v.yes.has(viewerId) && !v.no.has(viewerId),
+    canVote: eligible.some((p) => p.id === viewerId) && !v.yes.has(viewerId) && !v.no.has(viewerId),
   };
 }
 
@@ -733,12 +732,13 @@ function tallyKickVote(room) {
   }
   const eligible = kickEligible(room, v.targetId);
   const need = Math.floor(eligible.length / 2) + 1;
+  const yes = eligible.filter((p) => v.yes.has(p.id)).length;
   const pending = eligible.filter((p) => !v.yes.has(p.id) && !v.no.has(p.id)).length;
-  if (v.yes.size >= need) {
+  if (yes >= need) {
     applyKick(room, target);
     return;
   }
-  if (v.yes.size + pending < need) {
+  if (yes + pending < need) {
     failKickVote(room, `Kick vote against ${target.name} failed`);
   }
 }
@@ -761,6 +761,7 @@ function applyKick(room, player) {
 
 function handleKickStart(room, player, targetId) {
   if (room.phase !== "playing" && room.phase !== "swap") return error(player.ws, "You can only start a kick vote during the match");
+  if (engine.playerFinished(player)) return error(player.ws, "You're out of this match");
   if (room.kickVote) return error(player.ws, "A kick vote is already running");
   if (Date.now() < (room.kickCooldownUntil || 0)) return error(player.ws, "Wait a moment before another kick vote");
   const tid = String(targetId || "");
@@ -795,8 +796,9 @@ function handleKickVote(room, player, yes) {
   const v = room.kickVote;
   if (!v) return error(player.ws, "No kick vote running");
   if (player.id === v.targetId) return error(player.ws, "You can't vote on your own kick");
+  if (engine.playerFinished(player)) return error(player.ws, "You're out of this match");
   if (v.yes.has(player.id) || v.no.has(player.id)) return error(player.ws, "You already voted");
-  if (!room.seats.some((p) => p.id === player.id)) return;
+  if (!kickEligible(room, v.targetId).some((p) => p.id === player.id)) return error(player.ws, "You can't vote on this kick");
   if (yes) v.yes.add(player.id);
   else v.no.add(player.id);
   broadcast(room);
@@ -1034,6 +1036,7 @@ function leave(ws, immediate) {
     room.spectators = roomSpectators(room).filter((s) => s.id !== spectator.id);
     ws.roomCode = null;
     ws.playerId = null;
+    broadcast(room);
     notifyLobbies();
     return;
   }

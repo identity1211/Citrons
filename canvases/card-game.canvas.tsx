@@ -2938,12 +2938,28 @@ function SeatLabel({
 }) {
   const theme = useHostTheme();
   const [open, setOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const [menuPos, setMenuPos] = useState({ top: 0, left: 0 });
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6, position: "relative", zIndex: open ? 40 : 1 }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 6, position: "relative" }}>
       <AvatarBubble src={avatar} name={name} size={22} />
       <button
+        ref={btnRef}
         type="button"
-        onClick={onKick ? () => setOpen((v) => !v) : undefined}
+        onClick={
+          onKick
+            ? () => {
+                const r = btnRef.current?.getBoundingClientRect();
+                if (r) {
+                  setMenuPos({
+                    top: r.bottom + 4,
+                    left: Math.max(8, Math.min(r.left, window.innerWidth - 148)),
+                  });
+                }
+                setOpen((v) => !v);
+              }
+            : undefined
+        }
         style={{
           padding: "2px 10px",
           borderRadius: 12,
@@ -2968,15 +2984,14 @@ function SeatLabel({
         <>
           <div
             onClick={() => setOpen(false)}
-            style={{ position: "fixed", inset: 0, zIndex: 90 }}
+            style={{ position: "fixed", inset: 0, zIndex: 140 }}
           />
           <div
             style={{
-              position: "absolute",
-              top: "100%",
-              left: 24,
-              marginTop: 4,
-              zIndex: 91,
+              position: "fixed",
+              top: menuPos.top,
+              left: menuPos.left,
+              zIndex: 141,
               minWidth: 132,
               padding: 6,
               borderRadius: 8,
@@ -5287,7 +5302,7 @@ function Table({
     !watching &&
     !!onKickPlayer &&
     (phase === "playing" || phase === "swap") &&
-    players.length >= 3;
+    unfinishedPlayers(players).length >= 3;
   function kickFor(pIdx: number) {
     if (!canKickOthers) return undefined;
     if (pIdx === 0) return undefined;
@@ -5883,7 +5898,7 @@ function Table({
         <WinnerOverlay
           name={winner.name}
           avatar={winner.avatar}
-          you={winnerIdx === 0}
+          you={winnerIdx === 0 && !watching}
           onDismiss={() => {
             setWinShow(false);
             setEndUi(true);
@@ -6544,7 +6559,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         cards: pickup.cards,
         toPlayer: pickup.toPlayer,
         playerCount: n,
-        hideFaces: pickup.toPlayer !== 0,
+        hideFaces: pickup.toPlayer !== 0 || !!finalView.spectator,
       });
       afterAnim(PICKUP_MS + Math.min(pickup.cards.length, 8) * 40, finish);
     };
@@ -6923,9 +6938,27 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     closeSocket();
   }
 
-  function leaveOnline() {
+  function leaveSpectate() {
     send({ type: "leave" });
-    forgetSession();
+    closeSocket();
+    if (dealTimerRef.current) clearTimeout(dealTimerRef.current);
+    clearTableAnims();
+    setView(null);
+    setChat([]);
+    setReacts([]);
+    setDropped(false);
+    setBusy(false);
+    setError("");
+    screenRef.current = "pick";
+    setScreen("pick");
+  }
+
+  function leaveOnline() {
+    const watching = !!view?.spectator;
+    const sess = sessionRef.current;
+    const code = view?.code;
+    send({ type: "leave" });
+    if (!watching || !sess || !code || sess.code === code) forgetSession();
     closeSocket();
     if (dealTimerRef.current) clearTimeout(dealTimerRef.current);
     setChat([]);
@@ -7615,6 +7648,29 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     return (
       <>
         {droppedOverlay}
+        {error ? (
+          <div
+            style={{
+              position: "fixed",
+              top: "max(12px, env(safe-area-inset-top))",
+              left: "50%",
+              transform: "translateX(-50%)",
+              zIndex: 220,
+              maxWidth: "min(360px, 86vw)",
+              padding: "8px 12px",
+              borderRadius: 10,
+              background: "rgba(80, 18, 18, 0.94)",
+              border: "1px solid rgba(245, 183, 177, 0.45)",
+              color: "#f5b7b1",
+              fontSize: 13,
+              lineHeight: 1.35,
+              textAlign: "center",
+              pointerEvents: "none",
+            }}
+          >
+            {error}
+          </div>
+        ) : null}
       <Table
         players={players}
         drawDeck={drawDeck}
@@ -7663,8 +7719,8 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         onKickPlayer={(targetId) => send({ type: "kick", targetId })}
         onKickVote={(yes) => send({ type: "kickVote", yes })}
         matchMenu={{
-          onToLobby: view.spectator ? leaveOnline : parkAtLobby,
-          onLeave: leaveOnline,
+          onToLobby: view.spectator ? leaveSpectate : parkAtLobby,
+          onLeave: view.spectator ? leaveSpectate : leaveOnline,
         }}
         onToLobby={view.phase === "finished" && !view.spectator ? () => send({ type: "lobby" }) : undefined}
       />
