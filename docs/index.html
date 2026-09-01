@@ -206,8 +206,21 @@ function canPlayCards(cards: string[], discard: string[]): boolean {
 
 function fourOfAKindBurn(discard: string[]): boolean {
   if (discard.length < 4) return false;
-  const last4 = discard.slice(-4).map(getRank);
-  return last4.every((r) => r === last4[0]);
+  let match: string | null = null;
+  let count = 0;
+  let topSevens = 0;
+  for (let i = discard.length - 1; i >= 0; i--) {
+    const r = getRank(discard[i]);
+    if (r === "7") {
+      if (match == null) topSevens++;
+      continue;
+    }
+    if (match == null) match = r;
+    if (r !== match) break;
+    count++;
+    if (count >= 4) return true;
+  }
+  return topSevens >= 4;
 }
 
 function shouldBurnAfterPlay(discard: string[], playedRank: string): boolean {
@@ -495,7 +508,7 @@ const SPECIALS_MEMO: { id: TutSpecial; label: string; text: string }[] = [
   { id: "6", label: "6", text: "Only 6 or lower, or a 7. No 10s." },
   { id: "7", label: "7", text: "Transparent — the card under it still counts." },
   { id: "10", label: "10", text: "Plays on anything except 6. Burns the pile." },
-  { id: "4", label: "4×", text: "Four of a kind in a row also burns." },
+  { id: "4", label: "4×", text: "Four of a kind burns — 7s in between don't count." },
 ];
 
 const TUTORIAL_STEPS: TutStep[] = [
@@ -612,7 +625,7 @@ const TUTORIAL_STEPS: TutStep[] = [
     special: "4",
   },
   {
-    text: "Select all three Queens, then Play. Four of a kind in a row burns, same as a 10.",
+    text: "Select all three Queens, then Play. Four of a kind burns, same as a 10 — 7s in between don't stop it.",
     wait: "play",
     hint: "hand",
     rank: "Q",
@@ -4261,7 +4274,7 @@ function RulesScreen({ onBack }: { onBack: () => void }) {
             <li><b style={{ color: "#fff" }}>6</b> — only 6 or lower, or 7. No 10s</li>
             <li><b style={{ color: "#fff" }}>7</b> — transparent</li>
             <li><b style={{ color: "#fff" }}>10</b> — plays on anything except 6; burns the discard</li>
-            <li><b style={{ color: "#fff" }}>4 of a kind</b> in a row — burn</li>
+            <li><b style={{ color: "#fff" }}>4 of a kind</b> — burn, even with 7s in between</li>
           </ul>
         </RuleBlock>
         <RuleBlock title="Winning">

@@ -54,8 +54,21 @@ function canPlayCards(cards, discard) {
 
 function fourOfAKindBurn(discard) {
   if (discard.length < 4) return false;
-  const last4 = discard.slice(-4).map(getRank);
-  return last4.every((r) => r === last4[0]);
+  let match = null;
+  let count = 0;
+  let topSevens = 0;
+  for (let i = discard.length - 1; i >= 0; i--) {
+    const r = getRank(discard[i]);
+    if (r === "7") {
+      if (match == null) topSevens++;
+      continue;
+    }
+    if (match == null) match = r;
+    if (r !== match) break;
+    count++;
+    if (count >= 4) return true;
+  }
+  return topSevens >= 4;
 }
 
 function shouldBurnAfterPlay(discard, playedRank) {
