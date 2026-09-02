@@ -193,6 +193,11 @@ function canTakeTableWithPickup(player: PlayerState): boolean {
   );
 }
 
+/** Empty hand + face-up cards: must take a face-up rank with the discard. */
+function mustTakeTableWithPickup(player: PlayerState): boolean {
+  return player.hand.length === 0 && player.faceUp.some((c) => c !== null);
+}
+
 /** Clicked index; for face-up, all matching ranks are taken. */
 type TableTake = { zone: "faceUp" | "faceDown"; index: number };
 
@@ -672,10 +677,10 @@ function tutorialLockedAt(step: number): boolean {
 
 // ─── CSS keyframes ───────────────────────────────────────────────────────────
 
-const STYLE_ID = "card-game-keyframes-v27";
+const STYLE_ID = "card-game-keyframes-v28";
 function ensureKeyframes() {
   if (typeof document === "undefined") return;
-  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7", "card-game-keyframes-v8", "card-game-keyframes-v9", "card-game-keyframes-v10", "card-game-keyframes-v11", "card-game-keyframes-v12", "card-game-keyframes-v13", "card-game-keyframes-v14", "card-game-keyframes-v15", "card-game-keyframes-v16", "card-game-keyframes-v17", "card-game-keyframes-v18", "card-game-keyframes-v19", "card-game-keyframes-v20", "card-game-keyframes-v21", "card-game-keyframes-v22", "card-game-keyframes-v23", "card-game-keyframes-v24", "card-game-keyframes-v25", "card-game-keyframes-v26"]) {
+  for (const id of ["card-game-keyframes", "card-game-keyframes-v3", "card-game-keyframes-v4", "card-game-keyframes-v5", "card-game-keyframes-v6", "card-game-keyframes-v7", "card-game-keyframes-v8", "card-game-keyframes-v9", "card-game-keyframes-v10", "card-game-keyframes-v11", "card-game-keyframes-v12", "card-game-keyframes-v13", "card-game-keyframes-v14", "card-game-keyframes-v15", "card-game-keyframes-v16", "card-game-keyframes-v17", "card-game-keyframes-v18", "card-game-keyframes-v19", "card-game-keyframes-v20", "card-game-keyframes-v21", "card-game-keyframes-v22", "card-game-keyframes-v23", "card-game-keyframes-v24", "card-game-keyframes-v25", "card-game-keyframes-v26", "card-game-keyframes-v27"]) {
     document.getElementById(id)?.remove();
   }
   if (document.getElementById(STYLE_ID)) return;
@@ -786,6 +791,11 @@ function ensureKeyframes() {
     }
     .tut-glow { animation: tutGlow 1.15s ease-in-out infinite; }
     .tut-glow-chip { animation: tutGlow 1.15s ease-in-out infinite; }
+    @keyframes takeTableHintIn {
+      0% { opacity: 0; transform: translate(-50%, 4px); }
+      100% { opacity: 1; transform: translate(-50%, -8px); }
+    }
+    .take-table-hint { animation: takeTableHintIn 0.28s ease-out both; }
     .lobby-felt-glow {
       position: absolute;
       inset: -10%;
@@ -4205,7 +4215,7 @@ function RulesScreen({ onBack }: { onBack: () => void }) {
           </p>
           <p style={{ margin: "0 0 8px" }}>If you can't play, take the discard pile.</p>
           <p style={{ margin: "0 0 8px" }}>
-            If your hand is empty and you play face-up or face-down table cards, you may also take table card(s) into hand with the discard. Matching face-up ranks are taken all at once; a face-down card is taken one at a time.
+            If your hand is empty and you take the discard, you must also take a face-up rank from the table (all matching cards). A face-down card is taken one at a time.
           </p>
           <p style={{ margin: 0 }}>
             Empty hand and empty deck → face-up cards, then face-down.
@@ -5314,8 +5324,24 @@ function Table({
     tutHint === "hand" && tutorial?.rank && players[0]
       ? players[0].hand.map((c) => getRank(c) === tutorial.rank)
       : undefined;
-  const faceUpGlow =
-    tutHint === "faceUp" && tutorial?.faceRank && players[0]
+  const mustTakeTable =
+    pickupAwaitTable &&
+    !watching &&
+    !tutorial &&
+    !!players[0] &&
+    mustTakeTableWithPickup(players[0]);
+  const [takeTableHint, setTakeTableHint] = useState(false);
+  useEffect(() => {
+    if (!mustTakeTable) {
+      setTakeTableHint(false);
+      return;
+    }
+    const t = window.setTimeout(() => setTakeTableHint(true), 3000);
+    return () => window.clearTimeout(t);
+  }, [mustTakeTable]);
+  const faceUpGlow = mustTakeTable
+    ? players[0].faceUp.map((c) => c !== null)
+    : tutHint === "faceUp" && tutorial?.faceRank && players[0]
       ? players[0].faceUp.map((c) => !!c && getRank(c) === tutorial.faceRank)
       : undefined;
 
@@ -5359,7 +5385,7 @@ function Table({
   const canSelectFaceUp =
     isHumanTurn &&
     (pickupAwaitTable
-      ? humanZone === "faceUp"
+      ? humanZone === "faceUp" || mustTakeTable
       : humanZone === "faceUp" || combineOk);
   const faceUpLegal = canSelectFaceUp
     ? players[0].faceUp.map((c) => {
@@ -5672,7 +5698,11 @@ function Table({
           lineHeight: 1.25,
         }}
       >
-        {tutorial ? null : statusMsg}
+        {tutorial
+          ? null
+          : mustTakeTable
+            ? "Tap a face-up card — matching ranks come with the discard"
+            : statusMsg}
       </div>
 
       {(finishOrder.length > 0 || phase === "finished") && (
@@ -5932,49 +5962,78 @@ function Table({
               offline={players[0]?.connected === false}
             />
           ) : null}
-          <TableStack
-            faceDown={playerFaceDown(0)}
-            faceUp={playerFaceUp(0)}
-            revealed={isPlaying || (dealProgress.faceUp[0] || 0) > 0}
-            animating={dealing}
-            fuAnimSlots={dealProgress.faceUp[0] || 0}
-            cardW={ownerW}
-            cardH={ownerH}
-            selectableFaceUp={
-              !watching && ((isSwap && !humanReady) || (isHumanTurn && canSelectFaceUp))
-            }
-            selectableFaceDown={
-              !watching &&
-              ((phase === "finished" && playerFaceDown(0).some((c, i) => c !== null && !playerFaceUp(0)[i])) ||
-                (isHumanTurn &&
-                  (pickupAwaitTable ? humanZone === "faceDown" : humanZone === "faceDown")))
-            }
-            locked={watching || (phase === "finished" ? false : isSwap ? humanReady : !isHumanTurn)}
-            peekedDown={
-              watching ? undefined : phase === "finished" ? playerFaceDown(0).map((_, i) => !!peekDown[i]) : undefined
-            }
-            selectedFaceUp={
-              isSwap
-                ? selection?.zone === "faceUp"
-                  ? [selection.index]
-                  : []
-                : pickupAwaitTable
-                  ? []
-                  : playSelected.faceUp
-            }
-            faceUpLegal={faceUpLegal}
-            glowFaceUp={faceUpGlow}
-            onSelectFaceUp={onSelectFaceUp}
-            onSelectFaceDown={
-              phase === "finished"
-                ? (i) => {
-                    if (playerFaceUp(0)[i]) return;
-                    setPeekDown((prev) => ({ ...prev, [i]: !prev[i] }));
-                  }
-                : onSelectFaceDown
-            }
-            swapKey={swapTick}
-          />
+          <div style={{ position: "relative" }}>
+            <TableStack
+              faceDown={playerFaceDown(0)}
+              faceUp={playerFaceUp(0)}
+              revealed={isPlaying || (dealProgress.faceUp[0] || 0) > 0}
+              animating={dealing}
+              fuAnimSlots={dealProgress.faceUp[0] || 0}
+              cardW={ownerW}
+              cardH={ownerH}
+              selectableFaceUp={
+                !watching && ((isSwap && !humanReady) || (isHumanTurn && canSelectFaceUp))
+              }
+              selectableFaceDown={
+                !watching &&
+                ((phase === "finished" && playerFaceDown(0).some((c, i) => c !== null && !playerFaceUp(0)[i])) ||
+                  (isHumanTurn &&
+                    (pickupAwaitTable ? humanZone === "faceDown" : humanZone === "faceDown")))
+              }
+              locked={watching || (phase === "finished" ? false : isSwap ? humanReady : !isHumanTurn)}
+              peekedDown={
+                watching ? undefined : phase === "finished" ? playerFaceDown(0).map((_, i) => !!peekDown[i]) : undefined
+              }
+              selectedFaceUp={
+                isSwap
+                  ? selection?.zone === "faceUp"
+                    ? [selection.index]
+                    : []
+                  : pickupAwaitTable
+                    ? []
+                    : playSelected.faceUp
+              }
+              faceUpLegal={faceUpLegal}
+              glowFaceUp={faceUpGlow}
+              onSelectFaceUp={onSelectFaceUp}
+              onSelectFaceDown={
+                phase === "finished"
+                  ? (i) => {
+                      if (playerFaceUp(0)[i]) return;
+                      setPeekDown((prev) => ({ ...prev, [i]: !prev[i] }));
+                    }
+                  : onSelectFaceDown
+              }
+              swapKey={swapTick}
+            />
+            {takeTableHint ? (
+              <div
+                className="take-table-hint"
+                style={{
+                  position: "absolute",
+                  left: "50%",
+                  bottom: "100%",
+                  transform: "translate(-50%, -8px)",
+                  zIndex: 30,
+                  pointerEvents: "none",
+                  maxWidth: 220,
+                  padding: "8px 10px",
+                  borderRadius: 10,
+                  background: "rgba(8, 18, 10, 0.94)",
+                  border: "1.5px solid rgba(241,196,15,0.85)",
+                  color: "#f1c40f",
+                  fontSize: 11,
+                  fontWeight: 800,
+                  lineHeight: 1.35,
+                  textAlign: "center",
+                  letterSpacing: 0.2,
+                  textShadow: "0 1px 4px rgba(0,0,0,0.8)",
+                }}
+              >
+                Tap a face-up card. Matching ranks come with the discard.
+              </div>
+            ) : null}
+          </div>
           {phase === "finished" && !watching && playerFaceDown(0).some((c, i) => c !== null && !playerFaceUp(0)[i]) ? (
             <div style={{ fontSize: 11, color: "rgba(255,255,255,0.7)", fontWeight: 700, textShadow: "0 1px 4px rgba(0,0,0,0.8)" }}>
               Tap a face-down card to peek
@@ -6034,7 +6093,10 @@ function Table({
         <>
       <FeltChip
         kind={myTurn || canMeddleSelected ? "play" : "ghost"}
-        disabled={phase === "playing" && currentPlayer !== 0 ? !canMeddleSelected : !myTurn}
+        disabled={
+          pickupAwaitTable ||
+          (phase === "playing" && currentPlayer !== 0 ? !canMeddleSelected : !myTurn)
+        }
         label={phase === "playing" && currentPlayer !== 0 ? "Meddle" : "Play"}
         glow={tutHint === "play"}
         onClick={phase === "playing" && currentPlayer !== 0 ? () => onMeddle?.() : onPlay}
@@ -6050,9 +6112,9 @@ function Table({
         }}
       />
       <FeltChip
-        kind={myTurn ? "take" : "ghost"}
-        disabled={!myTurn}
-        glow={tutHint === "take"}
+        kind={myTurn && !(pickupAwaitTable && mustTakeTable) ? "take" : "ghost"}
+        disabled={!myTurn || (pickupAwaitTable && mustTakeTable)}
+        glow={tutHint === "take" && !mustTakeTable}
         label={
           <>
             Take
@@ -6062,8 +6124,10 @@ function Table({
         }
         onClick={() => {
           if (!pickupClickable) return;
-          if (pickupAwaitTable) onPickUpOnly();
-          else onPickUp();
+          if (pickupAwaitTable) {
+            if (mustTakeTable) return;
+            onPickUpOnly();
+          } else onPickUp();
         }}
         style={{
           position: "absolute",
@@ -7947,6 +8011,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         onMeddle={onMeddle}
         onPickUp={onPickUp}
         onPickUpOnly={() => {
+          if (view && mustTakeTableWithPickup(view.players[0])) return;
           send({ type: "pickup", tableTake: null });
           setPickupAwaitTable(false);
         }}
@@ -8633,6 +8698,15 @@ export default function CardGame() {
     const pl = playersNext[playerIndex];
     const extras: string[] = [];
 
+    if (mustTakeTableWithPickup(pl) && (!tableTake || tableTake.zone !== "faceUp")) {
+      return {
+        players: pls,
+        discard: pile,
+        message: "Tap a face-up card to take it with the discard",
+        pickupCards: [] as string[],
+      };
+    }
+
     if (tableTake) {
       if (pl.hand.length > 0) {
         return {
@@ -9158,6 +9232,16 @@ export default function CardGame() {
   function executePickUp(tableTake?: TableTake | null) {
     if (phase !== "playing" || currentPlayerRef.current !== 0 || playLockRef.current) return;
     const pile = discardRef.current;
+    const waiting = playersRef.current[0];
+    if (
+      waiting &&
+      mustTakeTableWithPickup(waiting) &&
+      (!tableTake || tableTake.zone !== "faceUp") &&
+      !tutLocked()
+    ) {
+      setStatusMsg("Tap a face-up card to take it with the discard");
+      return;
+    }
     const result = applyPickUp(0, playersRef.current, pile, tableTake ?? null);
     if (result.pickupCards.length === 0) {
       setStatusMsg(result.message);
@@ -9187,9 +9271,11 @@ export default function CardGame() {
       setPickupAwaitTable(true);
       setPlaySelected(emptyPlay());
       setStatusMsg(
-        activePlayZone(pl, drawDeckRef.current.length) === "faceUp"
-          ? "Pick a matching rank on the table, or take discard only"
-          : "Pick a table card or take discard only"
+        mustTakeTableWithPickup(pl)
+          ? "Tap a face-up card — matching ranks come with the discard"
+          : activePlayZone(pl, drawDeckRef.current.length) === "faceUp"
+            ? "Pick a matching rank on the table, or take discard only"
+            : "Pick a table card or take discard only"
       );
       return;
     }

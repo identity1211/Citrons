@@ -1008,6 +1008,9 @@ function handlePickup(room, player, tableTake) {
   if (room.phase !== "playing") return error(player.ws, "You can't take cards right now");
   const idx = room.seats.indexOf(player);
   if (idx !== room.currentPlayer) return error(player.ws, "It's not your turn");
+  if (engine.mustTakeTableWithPickup(player) && (!tableTake || tableTake.zone !== "faceUp")) {
+    return error(player.ws, "Tap a face-up card to take it with the discard");
+  }
   const result = engine.applyPickUp(idx, room.seats, room.discard, tableTake || null);
   if (!result.ok) return error(player.ws, result.message);
   for (let i = 0; i < room.seats.length; i++) {

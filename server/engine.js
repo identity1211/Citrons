@@ -330,6 +330,10 @@ function applyPlay(playerIndex, play, pls, deck, pile) {
   };
 }
 
+function mustTakeTableWithPickup(player) {
+  return player.hand.length === 0 && (player.faceUp || []).some((c) => c !== null);
+}
+
 function applyPickUp(playerIndex, pls, pile, tableTake) {
   if (pile.length === 0) {
     return { ok: false, players: pls, discard: pile, message: "Discard is empty", pickupCards: [] };
@@ -337,6 +341,16 @@ function applyPickUp(playerIndex, pls, pile, tableTake) {
   const playersNext = clonePlayers(pls);
   const pl = playersNext[playerIndex];
   const extras = [];
+
+  if (mustTakeTableWithPickup(pl) && (!tableTake || tableTake.zone !== "faceUp")) {
+    return {
+      ok: false,
+      players: pls,
+      discard: pile,
+      message: "Tap a face-up card to take it with the discard",
+      pickupCards: [],
+    };
+  }
 
   if (tableTake) {
     if (pl.hand.length > 0) {
@@ -408,5 +422,6 @@ module.exports = {
   canPlayCards,
   canMeddlePlay,
   canCombineHandWithFaceUp,
+  mustTakeTableWithPickup,
   sortHand,
 };
