@@ -15,7 +15,7 @@ const MIN_PLAYERS = 2;
 const MAX_SPECTATORS = 16;
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const ROOM_TTL_MS = 3 * 60 * 60 * 1000;
-const REJOIN_MS = 10 * 60 * 1000;
+const REJOIN_MS = 3 * 60 * 1000;
 const WAITING_REJOIN_MS = 2 * 60 * 1000;
 const TABLE_SKINS = new Set(["felt", "peli"]);
 const CARD_BACKS = new Set(["classic", "shades"]);
@@ -977,6 +977,33 @@ function handlePlay(room, player, play) {
   afterPlay(room, idx, result);
 }
 
+function handleMeddle(room, player, play) {
+  if (room.phase !== "playing") return error(player.ws, "You can only meddle during the match");
+  const idx = room.seats.indexOf(player);
+  if (idx < 0) return error(player.ws, "Join a lobby first");
+  if (idx === room.currentPlayer) return error(player.ws, "It's your turn — use Play");
+  if (engine.playerFinished(player)) return error(player.ws, "You're out of this match");
+  const handIdx = play && Array.isArray(play.hand) ? play.hand.map(Number) : [];
+  if (handIdx.length === 0) return error(player.ws, "Select cards to meddle");
+  if ((play && play.faceUp && play.faceUp.length > 0) || (play && play.faceDown !== undefined)) {
+    return error(player.ws, "Meddle from your hand");
+  }
+  const cards = [];
+  for (const i of handIdx) {
+    const c = player.hand[i];
+    if (!c) return error(player.ws, "Can't play that");
+    cards.push(c);
+  }
+  if (!engine.canMeddlePlay(cards, room.discard)) {
+    return error(player.ws, "Meddle only if those cards burn the pile");
+  }
+  const result = engine.applyPlay(idx, { hand: handIdx, faceUp: [] }, room.seats, room.deck, room.discard);
+  if (!result.ok) return error(player.ws, result.message);
+  if (!result.willBurn) return error(player.ws, "Meddle only if those cards burn the pile");
+  result.message = `${player.name} meddles — discard burned!`;
+  afterPlay(room, idx, result);
+}
+
 function handlePickup(room, player, tableTake) {
   if (room.phase !== "playing") return error(player.ws, "You can't take cards right now");
   const idx = room.seats.indexOf(player);
@@ -1151,6 +1178,7 @@ function onMessage(ws, data) {
   if (type === "kick") return handleKickStart(room, player, msg.targetId);
   if (type === "kickVote") return handleKickVote(room, player, !!msg.yes);
   if (type === "play") return handlePlay(room, player, msg.play);
+  if (type === "meddle") return handleMeddle(room, player, msg.play);
   if (type === "pickup") return handlePickup(room, player, msg.tableTake || null);
   if (type === "leave") {
     leave(ws, true);

@@ -228,6 +228,53 @@ function shouldBurnAfterPlay(discard: string[], playedRank: string): boolean {
   return fourOfAKindBurn(discard);
 }
 
+/** Off-turn interrupt: the cards must be a legal play that completes a 4-of-a-kind burn (not a lone 10). */
+function canMeddlePlay(cards: string[], discard: string[]): boolean {
+  if (cards.length === 0) return false;
+  if (!canPlayCards(cards, discard)) return false;
+  return fourOfAKindBurn([...discard, ...cards]);
+}
+
+function rankCanMeddle(hand: string[], discard: string[], rank: string): boolean {
+  const cards = hand.filter((c) => getRank(c) === rank);
+  for (let k = 1; k <= cards.length; k++) {
+    if (canMeddlePlay(cards.slice(0, k), discard)) return true;
+  }
+  return false;
+}
+
+function playerCanMeddle(player: PlayerState, discard: string[]): boolean {
+  if (!player || player.hand.length === 0) return false;
+  const seen = new Set<string>();
+  for (const c of player.hand) {
+    const r = getRank(c);
+    if (seen.has(r)) continue;
+    seen.add(r);
+    if (rankCanMeddle(player.hand, discard, r)) return true;
+  }
+  return false;
+}
+
+function aiChooseMeddle(player: PlayerState, discard: string[]): { hand: number[] } | null {
+  if (!player || player.hand.length === 0) return null;
+  let best: number[] | null = null;
+  const seen = new Set<string>();
+  for (const c of player.hand) {
+    const rank = getRank(c);
+    if (seen.has(rank)) continue;
+    seen.add(rank);
+    const idxs = handIndicesOfRank(player.hand, rank);
+    const cards = idxs.map((i) => player.hand[i]);
+    for (let k = 1; k <= idxs.length; k++) {
+      if (!canMeddlePlay(cards.slice(0, k), discard)) continue;
+      const hand = idxs.slice(0, k);
+      if (!best || hand.length > best.length) best = hand;
+      break;
+    }
+  }
+  return best ? { hand: best } : null;
+}
+
 function sortHand(hand: string[]): string[] {
   return [...hand].sort((a, b) => {
     const d = rankValue(getRank(a)) - rankValue(getRank(b));
@@ -508,7 +555,7 @@ const SPECIALS_MEMO: { id: TutSpecial; label: string; text: string }[] = [
   { id: "6", label: "6", text: "Only 6 or lower, or a 7. No 10s." },
   { id: "7", label: "7", text: "Transparent — the card under it still counts." },
   { id: "10", label: "10", text: "Plays on anything except 6. Burns the pile." },
-  { id: "4", label: "4×", text: "Four of a kind burns — 7s in between don't count." },
+  { id: "4", label: "4×", text: "Four of a kind burns — 7s in between don't count. Off-turn, Meddle if you can complete it." },
 ];
 
 const TUTORIAL_STEPS: TutStep[] = [
@@ -4275,6 +4322,7 @@ function RulesScreen({ onBack }: { onBack: () => void }) {
             <li><b style={{ color: "#fff" }}>7</b> — transparent</li>
             <li><b style={{ color: "#fff" }}>10</b> — plays on anything except 6; burns the discard</li>
             <li><b style={{ color: "#fff" }}>4 of a kind</b> — burn, even with 7s in between</li>
+            <li><b style={{ color: "#fff" }}>Meddle</b> — off-turn, play from your hand if that completes a 4-of-a-kind burn; you take the extra turn. A 10 alone cannot meddle.</li>
           </ul>
         </RuleBlock>
         <RuleBlock title="Winning">
@@ -4414,6 +4462,45 @@ function LobbyBack({ onClick, label }: { onClick: () => void; label?: string }) 
   );
 }
 
+function HamburgerButton({
+  open,
+  onClick,
+  label,
+}: {
+  open: boolean;
+  onClick: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      aria-expanded={open}
+      onClick={onClick}
+      style={{
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        border: "1.5px solid rgba(255,255,255,0.4)",
+        background: "rgba(0,0,0,0.35)",
+        boxShadow: "0 2px 8px rgba(0,0,0,0.28)",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 3.5,
+        padding: 0,
+        cursor: "pointer",
+        touchAction: "manipulation",
+      }}
+    >
+      <span style={{ display: "block", width: 16, height: 2, borderRadius: 1, background: "#f5f0e6" }} />
+      <span style={{ display: "block", width: 16, height: 2, borderRadius: 1, background: "#f5f0e6" }} />
+      <span style={{ display: "block", width: 16, height: 2, borderRadius: 1, background: "#f5f0e6" }} />
+    </button>
+  );
+}
+
 function MatchMenu({
   onToLobby,
   onLeave,
@@ -4449,16 +4536,7 @@ function MatchMenu({
           pointerEvents: "auto",
         }}
       >
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          style={{
-            ...LOBBY_CORNER_BTN,
-            position: "static",
-          }}
-        >
-          {open ? "Menu ▾" : "Menu"}
-        </button>
+        <HamburgerButton open={open} label="Match menu" onClick={() => setOpen((v) => !v)} />
           {open ? (
           <div
             className="match-menu-fly"
@@ -4506,6 +4584,93 @@ function MatchMenu({
               }}
             >
               Leave
+            </button>
+          </div>
+        ) : null}
+      </div>
+    </>
+  );
+}
+
+function WaitingMenu({
+  onMainMenu,
+  onLeaveLobby,
+}: {
+  onMainMenu: () => void;
+  onLeaveLobby: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      {open ? (
+        <div
+          onClick={() => setOpen(false)}
+          style={{
+            position: "absolute",
+            inset: 0,
+            zIndex: 95,
+            pointerEvents: "auto",
+          }}
+        />
+      ) : null}
+      <div
+        style={{
+          position: "absolute",
+          top: FELT_INSET_TOP,
+          right: `calc(${FELT_INSET_RIGHT} + 48px)`,
+          zIndex: 96,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "flex-end",
+          pointerEvents: "auto",
+        }}
+      >
+        <HamburgerButton open={open} label="Lobby menu" onClick={() => setOpen((v) => !v)} />
+        {open ? (
+          <div
+            className="match-menu-fly"
+            style={{
+              marginTop: 6,
+              minWidth: 148,
+              padding: 6,
+              borderRadius: 8,
+              border: "1px solid rgba(255,255,255,0.28)",
+              background: "rgba(8, 18, 10, 0.94)",
+              boxShadow: "0 10px 24px rgba(0,0,0,0.4)",
+              display: "flex",
+              flexDirection: "column",
+              gap: 6,
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                onMainMenu();
+              }}
+              style={{
+                ...LOBBY_CORNER_BTN,
+                position: "static",
+                width: "100%",
+                justifyContent: "flex-start",
+              }}
+            >
+              Main menu
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                onLeaveLobby();
+              }}
+              style={{
+                ...LOBBY_CORNER_BTN,
+                position: "static",
+                width: "100%",
+                justifyContent: "flex-start",
+              }}
+            >
+              Leave lobby
             </button>
           </div>
         ) : null}
@@ -5139,6 +5304,7 @@ function Table({
   onSelectFaceDown,
   onReady,
   onPlay,
+  onMeddle,
   onPickUp,
   onPickUpOnly,
   onCancelPickupAwait,
@@ -5186,6 +5352,7 @@ function Table({
   onSelectFaceDown: (index: number) => void;
   onReady: () => void;
   onPlay: () => void;
+  onMeddle?: () => void;
   onPickUp: () => void;
   onPickUpOnly: () => void;
   onCancelPickupAwait: () => void;
@@ -5233,7 +5400,18 @@ function Table({
     !pickupAnim &&
     !revealCard &&
     !drawAnim;
+  const tableBusy = !!(flyAnim || burnAnim || pickupAnim || revealCard || drawAnim);
   const humanZone = players[0] ? activePlayZone(players[0], drawDeck.length) : null;
+  const canMeddleNow =
+    !watching &&
+    !tutorial &&
+    phase === "playing" &&
+    currentPlayer !== 0 &&
+    !tableBusy &&
+    humanZone === "hand" &&
+    !!onMeddle &&
+    !!players[0] &&
+    !playerFinished(players[0]);
   const selRank = players[0] ? playSelectionRank(players[0], playSelected) : null;
   const tutHint = tutorial?.hint ?? "none";
   const handGlow =
@@ -5269,7 +5447,13 @@ function Table({
           if (selRank && r !== selRank) return false;
           return canPlayRankOnDiscard(r, discard);
         })
-      : undefined;
+      : canMeddleNow
+        ? players[0].hand.map((c) => {
+            const r = getRank(c);
+            if (selRank && r !== selRank) return false;
+            return rankCanMeddle(players[0].hand, discard, r);
+          })
+        : undefined;
 
   // Face-up alone when hand empty; combine with hand only if deck empty & emptying entire hand
   const combineOk =
@@ -5311,6 +5495,11 @@ function Table({
     !(humanZone === "hand" && playSelected.hand.length === 0) &&
     comboLegal &&
     canPlayCards(selectedCards, discard);
+  const canMeddleSelected =
+    canMeddleNow &&
+    selectedCards.length > 0 &&
+    playSelected.faceUp.length === 0 &&
+    canMeddlePlay(selectedCards, discard);
 
   const displayDiscard =
     pickupAnim
@@ -5333,7 +5522,6 @@ function Table({
   const seenReactRef = useRef(new Set<string>());
   const winnerIdx = finishOrder.length > 0 ? finishOrder[0] : null;
   const winner = winnerIdx != null ? players[winnerIdx] : null;
-  const tableBusy = !!(flyAnim || burnAnim || pickupAnim || revealCard || drawAnim);
 
   useEffect(() => {
     if (phase !== "finished") {
@@ -5904,8 +6092,8 @@ function Table({
               cardH={ownerH}
               maxWidth={handMax}
               animating={!!isAnimTarget(0, "hand")}
-              selectable={!watching && ((isSwap && !humanReady) || (isHumanTurn && humanZone === "hand"))}
-              locked={watching || (isSwap ? humanReady : !isHumanTurn)}
+              selectable={!watching && ((isSwap && !humanReady) || (isHumanTurn && humanZone === "hand") || canMeddleNow)}
+              locked={watching || (isSwap ? humanReady : !(isHumanTurn || canMeddleNow))}
               selectedIndices={
                 isSwap
                   ? selection?.zone === "hand"
@@ -5916,7 +6104,7 @@ function Table({
               legalMask={handLegal}
               glowMask={handGlow}
               onSelect={onSelectHand}
-              enableLongPress={isHumanTurn && humanZone === "hand" && !pickupAwaitTable}
+              enableLongPress={(isHumanTurn || canMeddleNow) && humanZone === "hand" && !pickupAwaitTable}
               swapKey={swapTick}
               seatId={0}
             />
@@ -5949,11 +6137,11 @@ function Table({
       ) : (
         <>
       <FeltChip
-        kind={myTurn ? "play" : "ghost"}
-        disabled={!myTurn}
-        label="Play"
+        kind={myTurn || canMeddleSelected ? "play" : "ghost"}
+        disabled={phase === "playing" && currentPlayer !== 0 ? !canMeddleSelected : !myTurn}
+        label={phase === "playing" && currentPlayer !== 0 ? "Meddle" : "Play"}
         glow={tutHint === "play"}
-        onClick={onPlay}
+        onClick={phase === "playing" && currentPlayer !== 0 ? () => onMeddle?.() : onPlay}
         style={{
           position: "absolute",
           left: "max(8px, env(safe-area-inset-left))",
@@ -6040,7 +6228,7 @@ const ROOM_TITLE_KEY = "citrons-room-title";
 const ROOM_TITLE_MAX = 28;
 const WS_KEY = "citrons-ws";
 const SESSION_KEY = "citrons-mp-session";
-const REJOIN_KEEP_MS = 10 * 60 * 1000;
+const REJOIN_KEEP_MS = 3 * 60 * 1000;
 
 type MpSession = { code: string; token: string; name: string; savedAt: number };
 
@@ -6134,10 +6322,12 @@ type LobbyInfo = {
 function OpenLobbyList({
   lobbies,
   busy,
+  rejoinCode,
   onJoin,
 }: {
   lobbies: LobbyInfo[];
   busy: boolean;
+  rejoinCode?: string;
   onJoin: (code: string) => void;
 }) {
   return (
@@ -6173,9 +6363,12 @@ function OpenLobbyList({
         ) : (
           lobbies.map((lobby) => {
             const live = !!lobby.live;
-            const full = live
-              ? (lobby.watchers || 0) >= (lobby.watchMax || 16)
-              : lobby.count >= lobby.max;
+            const mine = !!rejoinCode && rejoinCode === lobby.code;
+            const full = mine
+              ? false
+              : live
+                ? (lobby.watchers || 0) >= (lobby.watchMax || 16)
+                : lobby.count >= lobby.max;
             const names = lobby.players.map((p) => p.name).join(", ");
             const watchers = lobby.watchers || 0;
             return (
@@ -6233,15 +6426,15 @@ function OpenLobbyList({
                     height: 32,
                     padding: "0 12px",
                     borderRadius: 8,
-                    border: live && !full ? "1px solid #f1c40f" : "none",
-                    background: full ? "rgba(255,255,255,0.12)" : live ? "rgba(241,196,15,0.18)" : "#f1c40f",
-                    color: full ? "rgba(255,255,255,0.45)" : live ? "#f1c40f" : "#1a2e1a",
+                    border: live && !full && !mine ? "1px solid #f1c40f" : "none",
+                    background: full ? "rgba(255,255,255,0.12)" : mine || !live ? "#f1c40f" : "rgba(241,196,15,0.18)",
+                    color: full ? "rgba(255,255,255,0.45)" : mine || !live ? "#1a2e1a" : "#f1c40f",
                     fontSize: 12,
                     fontWeight: 700,
                     cursor: busy || full ? "default" : "pointer",
                   }}
                 >
-                  {full ? "Full" : live ? "Watch" : "Join"}
+                  {full ? "Full" : mine ? "Rejoin" : live ? "Watch" : "Join"}
                 </button>
               </div>
             );
@@ -6962,6 +7155,11 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   function joinOpenLobby(roomCode: string) {
     const c = String(roomCode || "").trim().toUpperCase();
     if (!c) return;
+    const sess = sessionRef.current || readMpSession();
+    if (sess && sess.code === c) {
+      rejoinSavedGame();
+      return;
+    }
     void (async () => {
       try {
         const payload = await clerkPayload();
@@ -7041,6 +7239,32 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     setChat([]);
     setReacts([]);
     onLeave();
+  }
+
+  function exitWaitingToMenu() {
+    send({ type: "leave" });
+    forgetSession();
+    closeSocket();
+    if (dealTimerRef.current) clearTimeout(dealTimerRef.current);
+    setChat([]);
+    setReacts([]);
+    onLeave();
+  }
+
+  function leaveWaitingLobby() {
+    send({ type: "leave" });
+    forgetSession();
+    closeSocket();
+    if (dealTimerRef.current) clearTimeout(dealTimerRef.current);
+    clearTableAnims();
+    setView(null);
+    setChat([]);
+    setReacts([]);
+    setDropped(false);
+    setBusy(false);
+    setError("");
+    screenRef.current = "pick";
+    setScreen("pick");
   }
 
   function parkAtLobby() {
@@ -7190,7 +7414,8 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       else setSelection({ zone: "hand", index });
       return;
     }
-    if (view.phase !== "playing" || view.currentPlayer !== 0) return;
+    if (view.phase !== "playing") return;
+    if (view.spectator) return;
     const pl = view.players[0];
     if (activePlayZone(pl, view.deckCount) !== "hand") return;
     if (opts?.allOfRank) {
@@ -7262,6 +7487,13 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     setPlaySelected(emptyPlay());
   }
 
+  function onMeddle() {
+    if (!view || view.phase !== "playing" || view.currentPlayer === 0 || view.spectator) return;
+    if (playSelected.hand.length === 0) return;
+    send({ type: "meddle", play: { hand: playSelected.hand } });
+    setPlaySelected(emptyPlay());
+  }
+
   function onPickUp() {
     if (!view || view.phase !== "playing" || view.currentPlayer !== 0) return;
     if (view.discard.length === 0) return;
@@ -7330,7 +7562,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       >
         <div style={{ color: "#f5f0e6", fontWeight: 800, fontSize: 18, marginBottom: 8 }}>Connection lost</div>
         <div style={{ color: "rgba(255,255,255,0.72)", fontSize: 13, lineHeight: 1.4, marginBottom: 16 }}>
-          Your seat is saved. Rejoin this game when you're back online.
+          Your seat is held for 3 minutes. Rejoin this game when you're back.
         </div>
         <button
           type="button"
@@ -7430,6 +7662,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
             <OpenLobbyList
               lobbies={lobbies}
               busy={busy}
+              rejoinCode={savedGame?.code}
               onJoin={(c) => {
                 if (!auth.user) {
                   setError("Sign in with Google first");
@@ -7585,7 +7818,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         overlay={
           <>
             <WindowButton />
-            <LobbyBack onClick={exitToMenu} />
+            <WaitingMenu onMainMenu={exitWaitingToMenu} onLeaveLobby={leaveWaitingLobby} />
             <div
               style={{
                 position: "absolute",
@@ -7657,7 +7890,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
               fontWeight: 800,
               fontSize: 22,
               fontFamily: 'Georgia, "Times New Roman", serif',
-              padding: "0 72px",
+              padding: "0 128px",
               overflow: "hidden",
               textOverflow: "ellipsis",
               whiteSpace: "nowrap",
@@ -7815,6 +8048,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         onSelectFaceDown={onSelectFaceDown}
         onReady={() => send({ type: "ready" })}
         onPlay={onPlay}
+        onMeddle={onMeddle}
         onPickUp={onPickUp}
         onPickUpOnly={() => {
           send({ type: "pickup", tableTake: null });
@@ -8587,6 +8821,9 @@ function CardGame() {
     if (flyAnim || burnAnim || pickupAnim || revealCard || drawAnim) return;
     if (playerFinished(players[currentPlayer])) return;
 
+    const humanCan = !tutorialRef.current && playerCanMeddle(players[0], discard);
+    const delay = humanCan ? 2800 : 700 + Math.random() * 500;
+
     const t = setTimeout(() => {
       const pls = playersRef.current;
       const deck = drawDeckRef.current;
@@ -8595,6 +8832,19 @@ function CardGame() {
       if (pIdx === 0 || phaseRef.current !== "playing") return;
       if (playLockRef.current) return;
       if (tutorialRef.current && tutorialLockedAt(tutStepRef.current)) return;
+
+      if (!tutorialRef.current) {
+        for (let i = 1; i < pls.length; i++) {
+          if (i === pIdx || playerFinished(pls[i])) continue;
+          const steal = aiChooseMeddle(pls[i], pile);
+          if (!steal) continue;
+          const result = applyPlay(i, { hand: steal.hand, faceUp: [] }, pls, deck, pile);
+          if (!result.willBurn) continue;
+          result.message = `${pls[i].name} meddles — discard burned!`;
+          runPlayResult(i, result, true);
+          return;
+        }
+      }
 
       const choice = aiChoosePlay(pls[pIdx], pile, deck.length);
       if (!choice) {
@@ -8616,7 +8866,7 @@ function CardGame() {
       const result = applyPlay(pIdx, play, pls, deck, pile);
       const shouldFly = result.played.length > 0 || !!result.pickup;
       runPlayResult(pIdx, result, shouldFly);
-    }, 700 + Math.random() * 500);
+    }, delay);
 
     return () => clearTimeout(t);
   }, [phase, currentPlayer, finishOrder, discard, players, drawDeck, flyAnim, burnAnim, pickupAnim, revealCard, drawAnim, tutorial, tutStep]);
@@ -8787,10 +9037,11 @@ function CardGame() {
       return;
     }
 
-    if (phase !== "playing" || currentPlayerRef.current !== 0) return;
+    if (phase !== "playing") return;
     const pl = playersRef.current[0];
     if (activePlayZone(pl, drawDeckRef.current.length) !== "hand") return;
     const rank = getRank(pl.hand[index]);
+    if (currentPlayerRef.current !== 0 && tutLocked()) return;
     if (opts?.allOfRank) {
       if (tutLocked()) {
         const step = tutStepNow();
@@ -8979,6 +9230,35 @@ function CardGame() {
     runPlayResult(0, result, true);
   }
 
+  function handleMeddle() {
+    if (phase !== "playing" || currentPlayerRef.current === 0 || playLockRef.current) return;
+    if (tutorialRef.current) return;
+    if (selectionCount(playSelected) === 0) {
+      setStatusMsg("Select cards that complete a 4-of-a-kind burn");
+      return;
+    }
+    const pl = playersRef.current[0];
+    if (playSelected.faceUp.length > 0) return;
+    const cards = cardsFromSelection(pl, playSelected);
+    if (!canMeddlePlay(cards, discardRef.current)) {
+      setStatusMsg("Meddle only if those cards burn the pile");
+      return;
+    }
+    const result = applyPlay(
+      0,
+      { hand: playSelected.hand, faceUp: [] },
+      playersRef.current,
+      drawDeckRef.current,
+      discardRef.current
+    );
+    if (!result.willBurn) {
+      setStatusMsg("Meddle only if those cards burn the pile");
+      return;
+    }
+    result.message = "You meddle — discard burned!";
+    runPlayResult(0, result, true);
+  }
+
   function executePickUp(tableTake?: TableTake | null) {
     if (phase !== "playing" || currentPlayerRef.current !== 0 || playLockRef.current) return;
     const pile = discardRef.current;
@@ -9105,6 +9385,7 @@ function CardGame() {
       onSelectFaceDown={handleSelectFaceDown}
       onReady={handleReady}
       onPlay={handlePlay}
+      onMeddle={handleMeddle}
       onPickUp={handlePickUp}
       onPickUpOnly={handlePickUpOnly}
       onCancelPickupAwait={handleCancelPickupAwait}

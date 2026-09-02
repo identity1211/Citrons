@@ -76,6 +76,13 @@ function shouldBurnAfterPlay(discard, playedRank) {
   return fourOfAKindBurn(discard);
 }
 
+/** Off-turn interrupt: the cards must be a legal play that completes a 4-of-a-kind burn (not a lone 10). */
+function canMeddlePlay(cards, discard) {
+  if (!Array.isArray(cards) || cards.length === 0) return false;
+  if (!canPlayCards(cards, discard)) return false;
+  return fourOfAKindBurn([...discard, ...cards]);
+}
+
 function sortHand(hand) {
   return [...hand].sort((a, b) => {
     const d = rankValue(getRank(a)) - rankValue(getRank(b));
@@ -399,6 +406,7 @@ module.exports = {
   nextAlive,
   activePlayZone,
   canPlayCards,
+  canMeddlePlay,
   canCombineHandWithFaceUp,
   sortHand,
 };
