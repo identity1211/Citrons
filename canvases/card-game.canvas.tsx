@@ -5326,6 +5326,7 @@ function Table({
       : undefined;
   const mustTakeTable =
     pickupAwaitTable &&
+    isHumanTurn &&
     !watching &&
     !tutorial &&
     !!players[0] &&
@@ -6094,7 +6095,7 @@ function Table({
       <FeltChip
         kind={myTurn || canMeddleSelected ? "play" : "ghost"}
         disabled={
-          pickupAwaitTable ||
+          (pickupAwaitTable && isHumanTurn) ||
           (phase === "playing" && currentPlayer !== 0 ? !canMeddleSelected : !myTurn)
         }
         label={phase === "playing" && currentPlayer !== 0 ? "Meddle" : "Play"}
@@ -6718,6 +6719,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   const dealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const revealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sessionRef = useRef<MpSession | null>(readMpSession());
+  const pickupSentRef = useRef(false);
   const titleInputRef = useRef<HTMLInputElement | null>(null);
   const reconnectTriesRef = useRef(0);
   const viewRef = useRef<OnlineView | null>(null);
@@ -6754,6 +6756,14 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     } catch {
       /* ignore */
     }
+  }
+
+  function touchMpSession() {
+    const sess = sessionRef.current;
+    if (!sess) return;
+    const next = { ...sess, savedAt: Date.now() };
+    sessionRef.current = next;
+    writeMpSession(next);
   }
 
   function send(msg: Record<string, unknown>) {
@@ -6906,6 +6916,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       return;
     }
     if (msg.type === "error") {
+      pickupSentRef.current = false;
       setBusy(false);
       setError(msg.message || "Server error");
       if (/lobby not found/i.test(msg.message || "")) {
@@ -6957,6 +6968,8 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       setError("");
       setDropped(false);
       reconnectTriesRef.current = 0;
+      pickupSentRef.current = false;
+      touchMpSession();
       if (Array.isArray(msg.view.chat)) {
         const incoming = msg.view.chat;
         setChat((prev) => {
@@ -7051,7 +7064,10 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     }
     wsRef.current = ws;
     ws.onopen = () => {
-      pingRef.current = setInterval(() => send({ type: "ping" }), 25000);
+      pingRef.current = setInterval(() => {
+        send({ type: "ping" });
+        touchMpSession();
+      }, 25000);
       then(ws);
     };
     ws.onmessage = (ev) => handleMessage(String(ev.data));
@@ -7065,6 +7081,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       const sess = sessionRef.current;
       const inMatch = screenRef.current === "waiting" || screenRef.current === "table";
       if (sess && inMatch) {
+        touchMpSession();
         if (reconnectTriesRef.current < 2) {
           reconnectTriesRef.current += 1;
           window.setTimeout(() => {
@@ -7337,6 +7354,14 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     };
   }, [view?.phase, view?.players.length]);
 
+  useEffect(() => {
+    if (!pickupAwaitTable) return;
+    if (!view || view.phase !== "playing" || view.currentPlayer !== 0 || view.discard.length === 0) {
+      pickupSentRef.current = false;
+      setPickupAwaitTable(false);
+    }
+  }, [pickupAwaitTable, view, view?.phase, view?.currentPlayer, view?.discard.length]);
+
   useEffect(
     () => () => {
       closeSocket();
@@ -7406,8 +7431,9 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     }
     if (view.phase !== "playing" || view.currentPlayer !== 0) return;
     if (pickupAwaitTable) {
+      if (pickupSentRef.current) return;
+      pickupSentRef.current = true;
       send({ type: "pickup", tableTake: { zone: "faceUp", index } });
-      setPickupAwaitTable(false);
       return;
     }
     const pl = view.players[0];
@@ -7432,8 +7458,9 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   function onSelectFaceDown(index: number) {
     if (!view || view.phase !== "playing" || view.currentPlayer !== 0) return;
     if (pickupAwaitTable) {
+      if (pickupSentRef.current) return;
+      pickupSentRef.current = true;
       send({ type: "pickup", tableTake: { zone: "faceDown", index } });
-      setPickupAwaitTable(false);
       return;
     }
     if (activePlayZone(view.players[0], view.deckCount) !== "faceDown") return;
@@ -7458,6 +7485,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     if (!view || view.phase !== "playing" || view.currentPlayer !== 0) return;
     if (view.discard.length === 0) return;
     if (canTakeTableWithPickup(view.players[0])) {
+      pickupSentRef.current = false;
       setPickupAwaitTable(true);
       setPlaySelected(emptyPlay());
       return;
@@ -8015,7 +8043,10 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
           send({ type: "pickup", tableTake: null });
           setPickupAwaitTable(false);
         }}
-        onCancelPickupAwait={() => setPickupAwaitTable(false)}
+        onCancelPickupAwait={() => {
+          pickupSentRef.current = false;
+          setPickupAwaitTable(false);
+        }}
         onReset={leaveOnline}
         resetLabel="← Leave"
         tableSkin={isTableSkin(view.tableSkin) ? view.tableSkin : "felt"}
@@ -8782,6 +8813,13 @@ export default function CardGame() {
     setStatusMsg(`Turn: ${pls[nxt].name}`);
     return nxt;
   }
+
+  useEffect(() => {
+    if (!pickupAwaitTable) return;
+    if (currentPlayer !== 0 || phase !== "playing" || discard.length === 0) {
+      setPickupAwaitTable(false);
+    }
+  }, [pickupAwaitTable, currentPlayer, phase, discard.length]);
 
   // AI turns
   useEffect(() => {
