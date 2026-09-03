@@ -6715,6 +6715,18 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
 
 let swRegisterPromise: Promise<ServiceWorkerRegistration | null> | null = null;
 
+function pendingJoinCode(): string {
+  if (typeof window === "undefined") return "";
+  rememberJoinFromUrl();
+  try {
+    return String(sessionStorage.getItem(JOIN_KEY) || "")
+      .trim()
+      .toUpperCase();
+  } catch {
+    return "";
+  }
+}
+
 function registerCitronsSW(): Promise<ServiceWorkerRegistration | null> {
   if (typeof window === "undefined" || !("serviceWorker" in navigator)) return Promise.resolve(null);
   if (!swRegisterPromise) {
@@ -6747,12 +6759,17 @@ async function ensurePushSubscription(wsUrl: string): Promise<PushSubscriptionJS
   return sub.toJSON();
 }
 
-async function pushSyncToSocket(ws: WebSocket, wsUrl: string, clerkFn: () => Promise<{ name: string; avatar: string; clerkToken: string }>) {
+async function pushSyncToSocket(
+  ws: WebSocket,
+  wsUrl: string,
+  clerkFn: () => Promise<{ name: string; avatar: string; clerkToken: string }>,
+  opts?: { welcome?: boolean }
+) {
   if (ws.readyState !== 1 || !pushSupported() || Notification.permission !== "granted") return;
   const subscription = await ensurePushSubscription(wsUrl);
   if (!subscription || ws.readyState !== 1) return;
   const payload = await clerkFn();
-  ws.send(JSON.stringify({ type: "pushSubscribe", ...payload, subscription }));
+  ws.send(JSON.stringify({ type: "pushSubscribe", ...payload, subscription, welcome: !!opts?.welcome }));
 }
 
 const DEFAULT_WS = "wss://web-production-b9cc89.up.railway.app";
@@ -7053,6 +7070,8 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       sent?: number;
       failed?: number;
       ok?: boolean;
+      test?: boolean;
+      welcome?: boolean;
     };
     try {
       msg = JSON.parse(raw);
@@ -7183,6 +7202,17 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       setReacts([]);
       setError(msg.message || "The table voted you out");
       setScreen("pick");
+      return;
+    }
+    if (msg.type === "pushReady") {
+      setInviteBusy(false);
+      if (msg.ok) {
+        setInviteNeedPermission(false);
+        if (inviteOpenRef.current && msg.test) setInviteMsg("Test ping sent — check your notifications");
+        else if (inviteOpenRef.current && msg.welcome) setInviteMsg("Invites are on — check your notifications");
+      } else if (inviteOpenRef.current) {
+        setInviteMsg("Couldn't save this device for invites");
+      }
       return;
     }
     if (msg.type === "inviteList" && Array.isArray(msg.users)) {
@@ -7336,6 +7366,12 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   }
 
   function requestInviteList() {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== 1) {
+      setInviteLoading(false);
+      setInviteMsg("No connection to the server");
+      return;
+    }
     setInviteLoading(true);
     setInviteMsg("");
     send({ type: "inviteList" });
@@ -7377,13 +7413,27 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       }
       const ws = wsRef.current;
       if (!ws || ws.readyState !== 1) throw new Error("No connection to the server");
-      await pushSyncToSocket(ws, wsUrl, clerkPayload);
-      setInviteNeedPermission(false);
-      setInviteBusy(false);
+      await pushSyncToSocket(ws, wsUrl, clerkPayload, { welcome: true });
     } catch (e) {
       setInviteBusy(false);
       setInviteMsg(clerkErrorText(e));
     }
+  }
+
+  function sendTestPush() {
+    setInviteBusy(true);
+    setInviteMsg("");
+    void (async () => {
+      try {
+        const payload = await clerkPayload();
+        const ws = wsRef.current;
+        if (!ws || ws.readyState !== 1) throw new Error("No connection to the server");
+        ws.send(JSON.stringify({ type: "pushTest", clerkToken: payload.clerkToken }));
+      } catch (e) {
+        setInviteBusy(false);
+        setInviteMsg(clerkErrorText(e));
+      }
+    })();
   }
 
   function sendInvites() {
@@ -8276,13 +8326,23 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
                       opacity: inviteBusy || invitePicked.length === 0 ? 0.55 : 1,
                       cursor: inviteBusy || invitePicked.length === 0 ? "default" : "pointer",
                     }}
-                  >
-                    {inviteBusy
-                      ? "Sending…"
-                      : invitePicked.length > 1
-                        ? `Send invites (${invitePicked.length})`
-                        : "Send invite"}
-                  </button>
+                      >
+                        {inviteBusy
+                          ? "Sending…"
+                          : invitePicked.length > 1
+                            ? `Send invites (${invitePicked.length})`
+                            : "Send invite"}
+                      </button>
+                      {!inviteNeedPermission && !inviteNeedInstall ? (
+                        <button
+                          type="button"
+                          disabled={inviteBusy}
+                          onClick={sendTestPush}
+                          style={{ ...PROFILE_GHOST, marginTop: 8, height: 32, fontSize: 13 }}
+                        >
+                          Send me a test
+                        </button>
+                      ) : null}
                   {inviteMsg ? (
                     <div
                       style={{
@@ -8556,7 +8616,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
 // ─── Root ────────────────────────────────────────────────────────────────────
 
 export default function CardGame() {
-  const [online, setOnline] = useState(false);
+  const [online, setOnline] = useState(() => !!pendingJoinCode());
   const [phase, setPhase] = useState<Phase>("lobby");
   const [players, setPlayers] = useState<PlayerState[]>([]);
   const [drawDeck, setDrawDeck] = useState<string[]>([]);
@@ -8611,6 +8671,12 @@ export default function CardGame() {
 
   useEffect(() => {
     void registerCitronsSW();
+    function onJoin(e: Event) {
+      const code = String((e as CustomEvent).detail || "").trim();
+      if (code) setOnline(true);
+    }
+    window.addEventListener("citrons-join", onJoin);
+    return () => window.removeEventListener("citrons-join", onJoin);
   }, []);
 
   function tutStepNow(): TutStep | null {

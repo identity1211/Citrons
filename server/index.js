@@ -1113,7 +1113,16 @@ async function handlePushSubscribe(ws, msg) {
   const auth = await identifyClerk(ws, msg.clerkToken, { required: true });
   if (!auth || !auth.userId) return;
   const ok = push.subscribe(auth.userId, msg.name, msg.avatar, msg.subscription);
-  send(ws, { type: "pushReady", ok: !!ok });
+  send(ws, { type: "pushReady", ok: !!ok, welcome: !!(ok && msg.welcome) });
+  if (ok && msg.welcome) void push.sendWelcome(auth.userId);
+}
+
+async function handlePushTest(ws, msg) {
+  const auth = await identifyClerk(ws, msg.clerkToken, { required: true });
+  if (!auth || !auth.userId) return;
+  const result = await push.sendTest(auth.userId);
+  if (result.sent) send(ws, { type: "pushReady", ok: true, test: true });
+  else error(ws, "Turn on invites on this device first");
 }
 
 async function handlePushUnsubscribe(ws, msg) {
@@ -1196,6 +1205,10 @@ function onMessage(ws, data) {
   }
   if (type === "pushUnsubscribe") {
     void handlePushUnsubscribe(ws, msg);
+    return;
+  }
+  if (type === "pushTest") {
+    void handlePushTest(ws, msg);
     return;
   }
 

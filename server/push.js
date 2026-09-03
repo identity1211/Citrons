@@ -53,9 +53,9 @@ function validSub(sub) {
   const endpoint = String(sub.endpoint || "").trim();
   const p256dh = String((sub.keys && sub.keys.p256dh) || "").trim();
   const auth = String((sub.keys && sub.keys.auth) || "").trim();
-  if (!/^https:\/\//i.test(endpoint) || endpoint.length > 2000) return null;
-  if (p256dh.length < 20 || p256dh.length > 200) return null;
-  if (auth.length < 8 || auth.length > 80) return null;
+  if (!/^https:\/\//i.test(endpoint) || endpoint.length > 4000) return null;
+  if (p256dh.length < 20 || p256dh.length > 400) return null;
+  if (auth.length < 8 || auth.length > 200) return null;
   return { endpoint, keys: { p256dh, auth } };
 }
 
@@ -203,6 +203,37 @@ async function sendOne(sub, payload) {
   }
 }
 
+async function sendToUser(userId, payload) {
+  if (!ready()) return { sent: 0, failed: 1 };
+  const id = sanitizeId(userId);
+  const row = store.users[id];
+  const subs = row && Array.isArray(row.subs) ? row.subs : [];
+  if (!id || subs.length === 0) return { sent: 0, failed: 1 };
+  let ok = false;
+  for (const sub of subs) {
+    if (await sendOne(sub, payload)) ok = true;
+  }
+  return ok ? { sent: 1, failed: 0 } : { sent: 0, failed: 1 };
+}
+
+function sitePayload(body, url) {
+  return {
+    title: "Citrons",
+    body,
+    url: url || SITE,
+    icon: `${SITE}/icon-192.png`,
+    badge: `${SITE}/icon-192.png`,
+  };
+}
+
+async function sendWelcome(userId) {
+  return sendToUser(userId, sitePayload("Invites are on. This is how a table invite will look.", SITE));
+}
+
+async function sendTest(userId) {
+  return sendToUser(userId, sitePayload("Test ping from Citrons.", SITE));
+}
+
 async function sendInvite({ fromName, code, title, userIds }) {
   if (!ready()) return { sent: 0, failed: userIds.length };
   const bodyTitle = sanitizeName(fromName);
@@ -214,13 +245,10 @@ async function sendInvite({ fromName, code, title, userIds }) {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 28);
-  const payload = {
-    title: "Citrons",
-    body: roomTitle ? `${bodyTitle} invited you to ${roomTitle}` : `${bodyTitle} invited you to play · ${room}`,
-    url: `${SITE}/?join=${encodeURIComponent(room)}`,
-    icon: `${SITE}/icon-192.png`,
-    badge: `${SITE}/icon-192.png`,
-  };
+  const payload = sitePayload(
+    roomTitle ? `${bodyTitle} invited you to ${roomTitle}` : `${bodyTitle} invited you to play · ${room}`,
+    `${SITE}/?join=${encodeURIComponent(room)}`
+  );
   let sent = 0;
   let failed = 0;
   const seen = new Set();
@@ -228,17 +256,8 @@ async function sendInvite({ fromName, code, title, userIds }) {
     const id = sanitizeId(rawId);
     if (!id || seen.has(id)) continue;
     seen.add(id);
-    const row = store.users[id];
-    const subs = row && Array.isArray(row.subs) ? row.subs : [];
-    if (subs.length === 0) {
-      failed += 1;
-      continue;
-    }
-    let ok = false;
-    for (const sub of subs) {
-      if (await sendOne(sub, payload)) ok = true;
-    }
-    if (ok) sent += 1;
+    const result = await sendToUser(id, payload);
+    if (result.sent) sent += 1;
     else failed += 1;
   }
   return { sent, failed };
@@ -252,4 +271,6 @@ module.exports = {
   unsubscribe,
   listUsers,
   sendInvite,
+  sendWelcome,
+  sendTest,
 };
