@@ -76,10 +76,11 @@ function shouldBurnAfterPlay(discard, playedRank) {
   return fourOfAKindBurn(discard);
 }
 
-/** Off-turn interrupt: the cards must be a legal play that completes a 4-of-a-kind burn (not a lone 10). */
+/** Off-turn interrupt: complete a 4-of-a-kind with the pile (not a lone 10, not a 4× already in hand). */
 function canMeddlePlay(cards, discard) {
   if (!Array.isArray(cards) || cards.length === 0) return false;
   if (!canPlayCards(cards, discard)) return false;
+  if (fourOfAKindBurn(cards)) return false;
   return fourOfAKindBurn([...discard, ...cards]);
 }
 

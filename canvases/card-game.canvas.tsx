@@ -124,19 +124,25 @@ function shouldBurnAfterPlay(discard: string[], playedRank: string): boolean {
   return fourOfAKindBurn(discard);
 }
 
-/** Off-turn interrupt: the cards must be a legal play that completes a 4-of-a-kind burn (not a lone 10). */
+/** Off-turn interrupt: complete a 4-of-a-kind with the pile (not a lone 10, not a 4× already in hand). */
 function canMeddlePlay(cards: string[], discard: string[]): boolean {
   if (cards.length === 0) return false;
   if (!canPlayCards(cards, discard)) return false;
+  if (fourOfAKindBurn(cards)) return false;
   return fourOfAKindBurn([...discard, ...cards]);
 }
 
 function rankCanMeddle(hand: string[], discard: string[], rank: string): boolean {
-  const cards = hand.filter((c) => getRank(c) === rank);
-  for (let k = 1; k <= cards.length; k++) {
-    if (canMeddlePlay(cards.slice(0, k), discard)) return true;
+  return meddleIndicesForRank(hand, discard, rank) !== null;
+}
+
+function meddleIndicesForRank(hand: string[], discard: string[], rank: string): number[] | null {
+  const idxs = handIndicesOfRank(hand, rank);
+  const cards = idxs.map((i) => hand[i]);
+  for (let k = 1; k <= idxs.length; k++) {
+    if (canMeddlePlay(cards.slice(0, k), discard)) return idxs.slice(0, k);
   }
-  return false;
+  return null;
 }
 
 function playerCanMeddle(player: PlayerState, discard: string[]): boolean {
@@ -456,7 +462,7 @@ const SPECIALS_MEMO: { id: TutSpecial; label: string; text: string }[] = [
   { id: "6", label: "6", text: "Only 6 or lower, or a 7. No 10s." },
   { id: "7", label: "7", text: "Transparent — the card under it still counts." },
   { id: "10", label: "10", text: "Plays on anything except 6. Burns the pile." },
-  { id: "4", label: "4×", text: "Four of a kind burns — 7s in between don't count. Off-turn, Meddle if you can complete it." },
+  { id: "4", label: "4×", text: "Four of a kind burns — 7s in between don't count. Off-turn, Meddle if you complete it with the pile. A 4× already in hand waits for your turn." },
 ];
 
 const TUTORIAL_STEPS: TutStep[] = [
@@ -1666,13 +1672,7 @@ function Hand({
             selected={selectedIndices.includes(i)}
             selectable={selectable && isOwner}
             locked={locked}
-            dimmed={
-              isOwner && glowMask
-                ? !glowMask[i]
-                : isOwner && legalMask
-                  ? !legalMask[i]
-                  : false
-            }
+            dimmed={isOwner && legalMask ? !legalMask[i] : false}
             highlighted={!!isOwner && !!glowMask?.[i]}
             onClick={() => onSelect?.(i)}
             onLongPress={enableLongPress ? () => onSelect?.(i, { allOfRank: true }) : undefined}
@@ -4228,7 +4228,7 @@ function RulesScreen({ onBack }: { onBack: () => void }) {
             <li><b style={{ color: "#fff" }}>7</b> — transparent</li>
             <li><b style={{ color: "#fff" }}>10</b> — plays on anything except 6; burns the discard</li>
             <li><b style={{ color: "#fff" }}>4 of a kind</b> — burn, even with 7s in between</li>
-            <li><b style={{ color: "#fff" }}>Meddle</b> — off-turn, play from your hand if that completes a 4-of-a-kind burn; you take the extra turn. A 10 alone cannot meddle.</li>
+            <li><b style={{ color: "#fff" }}>Meddle</b> — off-turn, play from your hand only if that completes a 4-of-a-kind already on the pile; you take the extra turn. A 10 alone cannot meddle. Four matching cards already in hand burn only on your turn.</li>
           </ul>
         </RuleBlock>
         <RuleBlock title="Winning">
@@ -5317,13 +5317,16 @@ function Table({
     humanZone === "hand" &&
     !!onMeddle &&
     !!players[0] &&
-    !playerFinished(players[0]);
+    !playerFinished(players[0]) &&
+    playerCanMeddle(players[0], discard);
   const selRank = players[0] ? playSelectionRank(players[0], playSelected) : null;
   const tutHint = tutorial?.hint ?? "none";
   const handGlow =
     tutHint === "hand" && tutorial?.rank && players[0]
       ? players[0].hand.map((c) => getRank(c) === tutorial.rank)
-      : undefined;
+      : canMeddleNow && players[0]
+        ? players[0].hand.map((c) => rankCanMeddle(players[0].hand, discard, getRank(c)))
+        : undefined;
   const mustTakeTable =
     pickupAwaitTable &&
     isHumanTurn &&
@@ -5370,13 +5373,7 @@ function Table({
           if (selRank && r !== selRank) return false;
           return canPlayRankOnDiscard(r, discard);
         })
-      : canMeddleNow
-        ? players[0].hand.map((c) => {
-            const r = getRank(c);
-            if (selRank && r !== selRank) return false;
-            return rankCanMeddle(players[0].hand, discard, r);
-          })
-        : undefined;
+      : undefined;
 
   // Face-up alone when hand empty; combine with hand only if deck empty & emptying entire hand
   const combineOk =
@@ -5703,7 +5700,9 @@ function Table({
           ? null
           : mustTakeTable
             ? "Tap a face-up card — matching ranks come with the discard"
-            : statusMsg}
+            : canMeddleNow
+              ? "You can Meddle — tap cards to complete 4-of-a-kind"
+              : statusMsg}
       </div>
 
       {(finishOrder.length > 0 || phase === "finished") && (
@@ -6098,8 +6097,8 @@ function Table({
           (pickupAwaitTable && isHumanTurn) ||
           (phase === "playing" && currentPlayer !== 0 ? !canMeddleSelected : !myTurn)
         }
-        label={phase === "playing" && currentPlayer !== 0 ? "Meddle" : "Play"}
-        glow={tutHint === "play"}
+        label={canMeddleNow ? "Meddle" : "Play"}
+        glow={tutHint === "play" || canMeddleNow}
         onClick={phase === "playing" && currentPlayer !== 0 ? () => onMeddle?.() : onPlay}
         style={{
           position: "absolute",
@@ -7403,7 +7402,13 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     if (view.spectator) return;
     const pl = view.players[0];
     if (activePlayZone(pl, view.deckCount) !== "hand") return;
+    if (view.currentPlayer !== 0 && !rankCanMeddle(pl.hand, view.discard, getRank(pl.hand[index]))) return;
     if (opts?.allOfRank) {
+      if (view.currentPlayer !== 0) {
+        const hand = meddleIndicesForRank(pl.hand, view.discard, getRank(pl.hand[index]));
+        if (hand) setPlaySelected({ hand, faceUp: [] });
+        return;
+      }
       setPlaySelected((prev) => selectAllOfHandRank(pl, prev, index));
       return;
     }
@@ -7411,8 +7416,12 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     setPlaySelected((prev) => {
       const curRank = playSelectionRank(pl, prev);
       if (prev.hand.includes(index)) return { hand: prev.hand.filter((i) => i !== index), faceUp: [] };
-      if (!curRank || curRank !== rank) return { hand: [index], faceUp: [] };
-      return { hand: [...prev.hand, index], faceUp: prev.faceUp };
+      const nextHand = !curRank || curRank !== rank ? [index] : [...prev.hand, index];
+      if (view.currentPlayer !== 0) {
+        const need = meddleIndicesForRank(pl.hand, view.discard, rank);
+        if (!need || nextHand.length > need.length) return prev;
+      }
+      return { hand: nextHand, faceUp: [] };
     });
   }
 
@@ -9049,11 +9058,19 @@ export default function CardGame() {
     const pl = playersRef.current[0];
     if (activePlayZone(pl, drawDeckRef.current.length) !== "hand") return;
     const rank = getRank(pl.hand[index]);
-    if (currentPlayerRef.current !== 0 && tutLocked()) return;
+    if (currentPlayerRef.current !== 0) {
+      if (tutLocked()) return;
+      if (!rankCanMeddle(pl.hand, discardRef.current, rank)) return;
+    }
     if (opts?.allOfRank) {
       if (tutLocked()) {
         const step = tutStepNow();
         if (step?.wait !== "play" || rank !== step.rank) return;
+      }
+      if (currentPlayerRef.current !== 0) {
+        const hand = meddleIndicesForRank(pl.hand, discardRef.current, rank);
+        if (hand) setPlaySelected({ hand, faceUp: [] });
+        return;
       }
       setPlaySelected((prev) => selectAllOfHandRank(pl, prev, index));
       return;
@@ -9068,6 +9085,18 @@ export default function CardGame() {
         setPlaySelected({ hand, faceUp: [] });
         return;
       }
+    }
+
+    if (currentPlayerRef.current !== 0) {
+      setPlaySelected((prev) => {
+        if (prev.hand.includes(index)) return { hand: prev.hand.filter((i) => i !== index), faceUp: [] };
+        const curRank = playSelectionRank(pl, prev);
+        const nextHand = !curRank || curRank !== rank ? [index] : [...prev.hand, index];
+        const need = meddleIndicesForRank(pl.hand, discardRef.current, rank);
+        if (!need || nextHand.length > need.length) return prev;
+        return { hand: nextHand, faceUp: [] };
+      });
+      return;
     }
 
     setPlaySelected((prev) => {
