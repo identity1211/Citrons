@@ -6,6 +6,13 @@ const { WebSocketServer } = require("ws");
 const engine = require("./engine");
 const clerk = require("./clerk");
 const leaderboard = require("./leaderboard");
+const push = require("./push");
+
+push.init();
+
+const INVITE_GAP_MS = 4000;
+const MAX_INVITE_IDS = 8;
+const inviteAt = new Map();
 
 const PORT = Number(process.env.PORT) || 8787;
 const SWAP_SECONDS = 20;
@@ -1102,6 +1109,58 @@ function leave(ws, immediate) {
   }, delay);
 }
 
+async function handlePushSubscribe(ws, msg) {
+  const auth = await identifyClerk(ws, msg.clerkToken, { required: true });
+  if (!auth || !auth.userId) return;
+  const ok = push.subscribe(auth.userId, msg.name, msg.avatar, msg.subscription);
+  send(ws, { type: "pushReady", ok: !!ok });
+}
+
+async function handlePushUnsubscribe(ws, msg) {
+  const auth = await identifyClerk(ws, msg.clerkToken, { required: true });
+  if (!auth || !auth.userId) return;
+  push.unsubscribe(auth.userId, msg.endpoint);
+  send(ws, { type: "pushReady", ok: true });
+}
+
+function handleInviteList(ws, room, player) {
+  if (room.phase !== "waiting") return error(ws, "Invite from the waiting room");
+  if (!player.clerkUserId) return error(ws, "Sign in to invite");
+  const seated = new Set(room.seats.map((p) => p.clerkUserId).filter(Boolean));
+  const users = push.listUsers(player.clerkUserId).filter((u) => !seated.has(u.id));
+  send(ws, { type: "inviteList", users });
+}
+
+async function handleInvite(ws, room, player, userIds) {
+  if (room.phase !== "waiting") return error(ws, "Invite from the waiting room");
+  if (!player.clerkUserId) return error(ws, "Sign in to invite");
+  if (!push.ready()) return error(ws, "Invites are not available yet");
+  const now = Date.now();
+  const last = inviteAt.get(player.clerkUserId) || 0;
+  if (now - last < INVITE_GAP_MS) return error(ws, "Wait a moment before inviting again");
+  const seated = new Set(room.seats.map((p) => p.clerkUserId).filter(Boolean));
+  const ids = Array.isArray(userIds) ? userIds.slice(0, MAX_INVITE_IDS) : [];
+  const targets = [];
+  const seen = new Set();
+  for (const raw of ids) {
+    const id = String(raw || "")
+      .replace(/[^\w-]/g, "")
+      .slice(0, 64);
+    if (!id || seen.has(id) || id === player.clerkUserId || seated.has(id)) continue;
+    seen.add(id);
+    targets.push(id);
+  }
+  if (targets.length === 0) return error(ws, "Pick someone to invite");
+  inviteAt.set(player.clerkUserId, now);
+  const result = await push.sendInvite({
+    fromName: player.name,
+    code: room.code,
+    title: room.title,
+    userIds: targets,
+  });
+  send(ws, { type: "inviteSent", sent: result.sent, failed: result.failed });
+}
+
 function onMessage(ws, data) {
   let msg;
   try {
@@ -1129,6 +1188,14 @@ function onMessage(ws, data) {
   if (type === "ping") return send(ws, { type: "pong" });
   if (type === "browse") {
     addBrowser(ws);
+    return;
+  }
+  if (type === "pushSubscribe") {
+    void handlePushSubscribe(ws, msg);
+    return;
+  }
+  if (type === "pushUnsubscribe") {
+    void handlePushUnsubscribe(ws, msg);
     return;
   }
 
@@ -1188,6 +1255,13 @@ function onMessage(ws, data) {
     send(ws, { type: "left", code: room.code });
     return;
   }
+  if (type === "inviteList") {
+    return handleInviteList(ws, room, player);
+  }
+  if (type === "invite") {
+    void handleInvite(ws, room, player, msg.userIds);
+    return;
+  }
   error(ws, "Unknown command");
 }
 
@@ -1223,6 +1297,11 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({ players: leaderboard.top() }));
     return;
   }
+  if (path === "/push/vapid") {
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ publicKey: push.publicKey() }));
+    return;
+  }
   if (path === "/health" || path === "/") {
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
     res.end(
@@ -1233,6 +1312,7 @@ const server = http.createServer((req, res) => {
         waiting: [...rooms.values()].filter((r) => r.phase === "waiting").length,
         live: [...rooms.values()].filter((r) => roomLive(r)).length,
         clerk: clerk.clerkConfigured(),
+        push: push.ready(),
         leaderboard: (() => {
           const board = leaderboard.info();
           return {

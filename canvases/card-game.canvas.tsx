@@ -1,6 +1,45 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, createContext, useContext, type CSSProperties, type ReactNode } from "react";
 import { useHostTheme, Text, Row, Spacer } from "cursor/canvas";
 
+const JOIN_KEY = "citrons-join";
+
+function rememberJoinFromUrl() {
+  if (typeof window === "undefined") return;
+  try {
+    const q = new URLSearchParams(window.location.search).get("join");
+    const code = String(q || "")
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, "")
+      .slice(0, 12);
+    if (code) sessionStorage.setItem(JOIN_KEY, code);
+  } catch {
+    /* ignore */
+  }
+}
+
+rememberJoinFromUrl();
+
+if (typeof window !== "undefined" && navigator.serviceWorker) {
+  navigator.serviceWorker.addEventListener("message", (ev) => {
+    const data = ev.data;
+    if (!data || data.type !== "citrons-join") return;
+    const code = String(data.code || "")
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, "")
+      .slice(0, 12);
+    if (code) {
+      try {
+        sessionStorage.setItem(JOIN_KEY, code);
+      } catch {
+        /* ignore */
+      }
+    }
+    window.dispatchEvent(new CustomEvent("citrons-join", { detail: code }));
+  });
+}
+
 // ─── Card definitions ───────────────────────────────────────────────────────
 
 const RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"];
@@ -6640,6 +6679,82 @@ function httpUrlFromWs(wsUrl: string, path: string): string {
   return u.replace(/\/$/, "") + (path.startsWith("/") ? path : `/${path}`);
 }
 
+type InviteUser = { id: string; name: string; avatar: string };
+
+function isIosDevice(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  if (/iphone|ipad|ipod/i.test(ua)) return true;
+  return navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
+}
+
+function isStandaloneApp(): boolean {
+  if (typeof window === "undefined") return false;
+  const nav = window.navigator as Navigator & { standalone?: boolean };
+  if (nav.standalone) return true;
+  return window.matchMedia("(display-mode: standalone)").matches;
+}
+
+function pushSupported(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    "serviceWorker" in navigator &&
+    "PushManager" in window &&
+    "Notification" in window
+  );
+}
+
+function urlBase64ToUint8Array(base64String: string): Uint8Array {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(base64);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
+let swRegisterPromise: Promise<ServiceWorkerRegistration | null> | null = null;
+
+function registerCitronsSW(): Promise<ServiceWorkerRegistration | null> {
+  if (typeof window === "undefined" || !("serviceWorker" in navigator)) return Promise.resolve(null);
+  if (!swRegisterPromise) {
+    const src = new URL("sw.js", appUrl() || window.location.href).href;
+    swRegisterPromise = navigator.serviceWorker.register(src).catch(() => null);
+  }
+  return swRegisterPromise;
+}
+
+async function fetchVapidKey(wsUrl: string): Promise<string> {
+  const res = await fetch(httpUrlFromWs(wsUrl, "/push/vapid"));
+  const data = await res.json();
+  return String((data && data.publicKey) || "");
+}
+
+async function ensurePushSubscription(wsUrl: string): Promise<PushSubscriptionJSON | null> {
+  if (!pushSupported() || Notification.permission !== "granted") return null;
+  const reg = await registerCitronsSW();
+  if (!reg) return null;
+  const ready = await navigator.serviceWorker.ready;
+  let sub = await ready.pushManager.getSubscription();
+  if (!sub) {
+    const key = await fetchVapidKey(wsUrl);
+    if (!key) return null;
+    sub = await ready.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(key) as BufferSource,
+    });
+  }
+  return sub.toJSON();
+}
+
+async function pushSyncToSocket(ws: WebSocket, wsUrl: string, clerkFn: () => Promise<{ name: string; avatar: string; clerkToken: string }>) {
+  if (ws.readyState !== 1 || !pushSupported() || Notification.permission !== "granted") return;
+  const subscription = await ensurePushSubscription(wsUrl);
+  if (!subscription || ws.readyState !== 1) return;
+  const payload = await clerkFn();
+  ws.send(JSON.stringify({ type: "pushSubscribe", ...payload, subscription }));
+}
+
 const DEFAULT_WS = "wss://web-production-b9cc89.up.railway.app";
 
 function defaultWsUrl(): string {
@@ -6725,6 +6840,15 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   const [savedGame, setSavedGame] = useState<MpSession | null>(() => readMpSession());
   const [chat, setChat] = useState<ChatLine[]>([]);
   const [reacts, setReacts] = useState<ReactBurst[]>([]);
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [inviteUsers, setInviteUsers] = useState<InviteUser[]>([]);
+  const [invitePicked, setInvitePicked] = useState<string[]>([]);
+  const [inviteSearch, setInviteSearch] = useState("");
+  const [inviteBusy, setInviteBusy] = useState(false);
+  const [inviteLoading, setInviteLoading] = useState(false);
+  const [inviteMsg, setInviteMsg] = useState("");
+  const [inviteNeedPermission, setInviteNeedPermission] = useState(false);
+  const [inviteNeedInstall, setInviteNeedInstall] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const pingRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -6736,10 +6860,14 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   const reconnectTriesRef = useRef(0);
   const viewRef = useRef<OnlineView | null>(null);
   const screenRef = useRef(screen);
+  const inviteOpenRef = useRef(false);
+  const consumedJoinRef = useRef("");
+  const joinOpenLobbyRef = useRef<(code: string) => void>(() => {});
   const animIdRef = useRef(0);
   const animTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   viewRef.current = view;
   screenRef.current = screen;
+  inviteOpenRef.current = inviteOpen;
 
   function persistName(n: string) {
     setName(n);
@@ -6921,6 +7049,10 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       lobbies?: LobbyInfo[];
       line?: ChatLine;
       react?: ReactBurst;
+      users?: InviteUser[];
+      sent?: number;
+      failed?: number;
+      ok?: boolean;
     };
     try {
       msg = JSON.parse(raw);
@@ -6930,7 +7062,10 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     if (msg.type === "error") {
       pickupSentRef.current = false;
       setBusy(false);
+      setInviteBusy(false);
+      setInviteLoading(false);
       setError(msg.message || "Server error");
+      if (inviteOpenRef.current) setInviteMsg(msg.message || "Server error");
       if (/lobby not found/i.test(msg.message || "")) {
         const inMatch = screenRef.current === "waiting" || screenRef.current === "table";
         if (!inMatch) forgetSession();
@@ -7050,6 +7185,26 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       setScreen("pick");
       return;
     }
+    if (msg.type === "inviteList" && Array.isArray(msg.users)) {
+      setInviteUsers(
+        msg.users
+          .filter((u) => u && u.id && u.name)
+          .map((u) => ({ id: String(u.id), name: String(u.name), avatar: String(u.avatar || "") }))
+      );
+      setInviteBusy(false);
+      setInviteLoading(false);
+      return;
+    }
+    if (msg.type === "inviteSent") {
+      setInviteBusy(false);
+      const sent = Number(msg.sent) || 0;
+      setInviteMsg(sent === 1 ? "Invite sent" : sent > 1 ? `Invites sent to ${sent}` : "Could not send invites");
+      if (sent) {
+        setInvitePicked([]);
+        window.setTimeout(() => setInviteOpen(false), 900);
+      }
+      return;
+    }
     if (msg.type === "left") {
       if (!msg.code || (sessionRef.current && sessionRef.current.code === msg.code)) forgetSession();
       setDropped(false);
@@ -7081,6 +7236,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         touchMpSession();
       }, 25000);
       then(ws);
+      void pushSyncToSocket(ws, wsUrl, clerkPayload);
     };
     ws.onmessage = (ev) => handleMessage(String(ev.data));
     ws.onerror = () => {
@@ -7163,6 +7319,78 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         setError(clerkErrorText(e));
       }
     })();
+  }
+  joinOpenLobbyRef.current = joinOpenLobby;
+
+  function closeInvite() {
+    setInviteOpen(false);
+    setInviteBusy(false);
+    setInviteLoading(false);
+    setInviteMsg("");
+    setInviteSearch("");
+    setInvitePicked([]);
+  }
+
+  function toggleInviteUser(id: string) {
+    setInvitePicked((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : prev.length >= 8 ? prev : [...prev, id]));
+  }
+
+  function requestInviteList() {
+    setInviteLoading(true);
+    setInviteMsg("");
+    send({ type: "inviteList" });
+  }
+
+  function openInvite() {
+    setInviteOpen(true);
+    setInviteSearch("");
+    setInvitePicked([]);
+    setInviteUsers([]);
+    setInviteMsg("");
+    setInviteNeedInstall(isIosDevice() && !isStandaloneApp());
+    setInviteNeedPermission(pushSupported() && Notification.permission !== "granted");
+    if (!pushSupported()) {
+      setInviteMsg("This browser cannot receive invites.");
+    }
+    requestInviteList();
+  }
+
+  async function enableInvites() {
+    setInviteBusy(true);
+    setInviteMsg("");
+    try {
+      if (!pushSupported()) {
+        setInviteMsg("This browser cannot receive invites.");
+        setInviteBusy(false);
+        return;
+      }
+      if (isIosDevice() && !isStandaloneApp()) {
+        setInviteNeedInstall(true);
+        setInviteBusy(false);
+        return;
+      }
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") {
+        setInviteMsg("Notifications were not allowed");
+        setInviteBusy(false);
+        return;
+      }
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== 1) throw new Error("No connection to the server");
+      await pushSyncToSocket(ws, wsUrl, clerkPayload);
+      setInviteNeedPermission(false);
+      setInviteBusy(false);
+    } catch (e) {
+      setInviteBusy(false);
+      setInviteMsg(clerkErrorText(e));
+    }
+  }
+
+  function sendInvites() {
+    if (invitePicked.length === 0) return;
+    setInviteBusy(true);
+    setInviteMsg("");
+    send({ type: "invite", userIds: invitePicked });
   }
 
   function startBrowse() {
@@ -7306,6 +7534,49 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     }, 2000);
     return () => window.clearInterval(t);
   }, [screen, wsUrl]);
+
+  useEffect(() => {
+    if (screen !== "pick" || !auth.user) return;
+    let code = "";
+    try {
+      code = String(sessionStorage.getItem(JOIN_KEY) || "")
+        .trim()
+        .toUpperCase();
+    } catch {
+      return;
+    }
+    if (!code || consumedJoinRef.current === code) return;
+    consumedJoinRef.current = code;
+    try {
+      sessionStorage.removeItem(JOIN_KEY);
+    } catch {
+      /* ignore */
+    }
+    joinOpenLobby(code);
+  }, [screen, auth.user]);
+
+  useEffect(() => {
+    function onJoin(e: Event) {
+      const code = String((e as CustomEvent).detail || "")
+        .trim()
+        .toUpperCase();
+      if (!code) return;
+      if (viewRef.current && viewRef.current.code === code) return;
+      try {
+        sessionStorage.removeItem(JOIN_KEY);
+      } catch {
+        /* ignore */
+      }
+      consumedJoinRef.current = code;
+      joinOpenLobbyRef.current(code);
+    }
+    window.addEventListener("citrons-join", onJoin);
+    return () => window.removeEventListener("citrons-join", onJoin);
+  }, []);
+
+  useEffect(() => {
+    if (screen !== "waiting") closeInvite();
+  }, [screen]);
 
   useEffect(() => {
     if (screen !== "pick") setCreateOpen(false);
@@ -7826,6 +8097,10 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       marginBottom: 8,
       textAlign: "left",
     };
+    const q = inviteSearch.trim().toLowerCase();
+    const inviteFiltered = q
+      ? inviteUsers.filter((u) => u.name.toLowerCase().includes(q))
+      : inviteUsers;
     return (
       <FeltShell
         skin={waitSkin}
@@ -7875,6 +8150,162 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
               )}
             </div>
             <ProfileButton />
+            {inviteOpen ? (
+              <div
+                onClick={closeInvite}
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  zIndex: 80,
+                  pointerEvents: "auto",
+                  background: "rgba(0,0,0,0.48)",
+                  display: "flex",
+                  alignItems: "stretch",
+                  justifyContent: "center",
+                  overflow: "auto",
+                  padding:
+                    "max(8px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left))",
+                  boxSizing: "border-box",
+                }}
+              >
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  style={{ ...PROFILE_PANEL, width: "min(360px, 100%)", textAlign: "left" }}
+                >
+                  <div
+                    style={{
+                      fontFamily: 'Georgia, "Times New Roman", serif',
+                      fontSize: 18,
+                      fontWeight: 700,
+                      marginBottom: 8,
+                      textAlign: "center",
+                    }}
+                  >
+                    Invite
+                  </div>
+                  {inviteNeedInstall ? (
+                    <div style={{ fontSize: 13, lineHeight: 1.45, color: "rgba(255,255,255,0.78)", textAlign: "center", marginBottom: 10 }}>
+                      On iPhone, add Citrons to your Home Screen, then open it from there to get invites.
+                    </div>
+                  ) : null}
+                  {inviteNeedPermission && !inviteNeedInstall ? (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 10 }}>
+                      <div style={{ fontSize: 13, lineHeight: 1.45, color: "rgba(255,255,255,0.78)", textAlign: "center" }}>
+                        Turn on notifications so friends can invite you too.
+                      </div>
+                      <button
+                        type="button"
+                        disabled={inviteBusy}
+                        onClick={() => void enableInvites()}
+                        style={{ ...LOBBY_GOLD_BTN, maxWidth: "100%", height: 36, fontSize: 14 }}
+                      >
+                        {inviteBusy ? "Enabling…" : "Enable invites"}
+                      </button>
+                    </div>
+                  ) : null}
+                  <input
+                    value={inviteSearch}
+                    onChange={(e) => setInviteSearch(e.target.value.slice(0, 24))}
+                    placeholder="Search players"
+                    maxLength={24}
+                    style={{ ...LOBBY_INPUT, maxWidth: "100%", height: 38, marginBottom: 8, fontSize: 15 }}
+                  />
+                  <div
+                    style={{
+                      maxHeight: 220,
+                      overflowY: "auto",
+                      WebkitOverflowScrolling: "touch",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 6,
+                      marginBottom: 10,
+                    }}
+                  >
+                    {inviteLoading && inviteUsers.length === 0 ? (
+                      <div style={{ fontSize: 13, color: "rgba(255,255,255,0.62)", textAlign: "center", padding: 12 }}>
+                        Loading…
+                      </div>
+                    ) : inviteFiltered.length === 0 ? (
+                      <div style={{ fontSize: 13, lineHeight: 1.45, color: "rgba(255,255,255,0.62)", textAlign: "center", padding: 12 }}>
+                        {inviteSearch.trim()
+                          ? "No matching players"
+                          : "Nobody has turned on invites yet. Ask them to tap Invite and enable notifications."}
+                      </div>
+                    ) : (
+                      inviteFiltered.map((u) => {
+                        const on = invitePicked.includes(u.id);
+                        return (
+                          <button
+                            key={u.id}
+                            type="button"
+                            onClick={() => toggleInviteUser(u.id)}
+                            style={{
+                              padding: "8px 10px",
+                              borderRadius: 8,
+                              border: on ? "1.5px solid #f1c40f" : "1.5px solid rgba(255,255,255,0.16)",
+                              background: on ? "rgba(241,196,15,0.16)" : "rgba(0,0,0,0.28)",
+                              color: "#f5f0e6",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 8,
+                              fontSize: 14,
+                              fontWeight: 600,
+                              cursor: "pointer",
+                              textAlign: "left",
+                            }}
+                          >
+                            <AvatarBubble src={u.avatar} name={u.name} size={28} />
+                            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+                              {u.name}
+                            </span>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    className="lobby-play-btn"
+                    disabled={inviteBusy || invitePicked.length === 0}
+                    onClick={sendInvites}
+                    style={{
+                      ...LOBBY_GOLD_BTN,
+                      maxWidth: "100%",
+                      height: 40,
+                      fontSize: 15,
+                      opacity: inviteBusy || invitePicked.length === 0 ? 0.55 : 1,
+                      cursor: inviteBusy || invitePicked.length === 0 ? "default" : "pointer",
+                    }}
+                  >
+                    {inviteBusy
+                      ? "Sending…"
+                      : invitePicked.length > 1
+                        ? `Send invites (${invitePicked.length})`
+                        : "Send invite"}
+                  </button>
+                  {inviteMsg ? (
+                    <div
+                      style={{
+                        marginTop: 8,
+                        fontSize: 12,
+                        lineHeight: 1.35,
+                        color: /sent/i.test(inviteMsg) ? "#d5f5e3" : "#f5b7b1",
+                        textAlign: "center",
+                      }}
+                    >
+                      {inviteMsg}
+                    </div>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={closeInvite}
+                    style={{ ...PROFILE_GHOST, marginTop: 8, height: 32, fontSize: 13 }}
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </>
         }
         style={{
@@ -7932,7 +8363,29 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
                 boxSizing: "border-box",
               }}
             >
-              <div style={sectionLabel}>Players</div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 8 }}>
+                <div style={{ ...sectionLabel, marginBottom: 0 }}>Players</div>
+                {!view.spectator ? (
+                  <button
+                    type="button"
+                    onClick={openInvite}
+                    style={{
+                      ...LOBBY_CORNER_BTN,
+                      position: "static",
+                      height: 28,
+                      minHeight: 28,
+                      padding: "0 10px",
+                      fontSize: 11,
+                      background: "#f1c40f",
+                      color: "#1a2e1a",
+                      border: "none",
+                      boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
+                    }}
+                  >
+                    Invite
+                  </button>
+                ) : null}
+              </div>
               <div
                 style={{
                   flex: 1,
@@ -8155,6 +8608,10 @@ export default function CardGame() {
   phaseRef.current = phase;
   tutorialRef.current = tutorial;
   tutStepRef.current = tutStep;
+
+  useEffect(() => {
+    void registerCitronsSW();
+  }, []);
 
   function tutStepNow(): TutStep | null {
     if (!tutorialRef.current) return null;
