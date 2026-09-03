@@ -145,6 +145,19 @@ function meddleIndicesForRank(hand: string[], discard: string[], rank: string): 
   return null;
 }
 
+function meddleGlowMask(hand: string[], discard: string[]): boolean[] {
+  const mark = hand.map(() => false);
+  const seen = new Set<string>();
+  for (const c of hand) {
+    const r = getRank(c);
+    if (seen.has(r)) continue;
+    seen.add(r);
+    const idxs = meddleIndicesForRank(hand, discard, r);
+    if (idxs) for (const i of idxs) mark[i] = true;
+  }
+  return mark;
+}
+
 function playerCanMeddle(player: PlayerState, discard: string[]): boolean {
   if (!player || player.hand.length === 0) return false;
   const seen = new Set<string>();
@@ -5325,7 +5338,7 @@ function Table({
     tutHint === "hand" && tutorial?.rank && players[0]
       ? players[0].hand.map((c) => getRank(c) === tutorial.rank)
       : canMeddleNow && players[0]
-        ? players[0].hand.map((c) => rankCanMeddle(players[0].hand, discard, getRank(c)))
+        ? meddleGlowMask(players[0].hand, discard)
         : undefined;
   const mustTakeTable =
     pickupAwaitTable &&
@@ -7361,6 +7374,10 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     }
   }, [pickupAwaitTable, view, view?.phase, view?.currentPlayer, view?.discard.length]);
 
+  useEffect(() => {
+    setPlaySelected(emptyPlay());
+  }, [view?.currentPlayer, view?.discard.length]);
+
   useEffect(
     () => () => {
       closeSocket();
@@ -8829,6 +8846,10 @@ export default function CardGame() {
       setPickupAwaitTable(false);
     }
   }, [pickupAwaitTable, currentPlayer, phase, discard.length]);
+
+  useEffect(() => {
+    setPlaySelected(emptyPlay());
+  }, [currentPlayer, discard.length]);
 
   // AI turns
   useEffect(() => {
