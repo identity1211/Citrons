@@ -2964,6 +2964,7 @@ function PlayerStatsBody({ userId }: { userId: string }) {
     void (async () => {
       try {
         const res = await fetch(httpUrlFromWs(defaultWsUrl(), `/stats?id=${encodeURIComponent(userId)}`));
+        if (!res.ok) throw new Error("bad");
         const json = await res.json();
         if (stop) return;
         const p = json && json.player;

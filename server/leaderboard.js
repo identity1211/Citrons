@@ -141,7 +141,7 @@ function normalizeRow(raw) {
       season1: numSeason(prev.season1),
       points,
       games: num(prev.games),
-      wins: num(prev.wins) || places[0],
+      wins: num(prev.wins),
       lasts: num(prev.lasts),
       places,
       fields,
@@ -186,7 +186,11 @@ function normalizeRow(raw) {
 
 function winsTotal() {
   let n = 0;
-  for (const row of Object.values(store.users)) n += num(row && row.wins);
+  for (const row of Object.values(store.users)) {
+    const u = row || {};
+    n += num(u.wins);
+    n += num(u.season1 && u.season1.wins);
+  }
   return n;
 }
 
@@ -546,9 +550,19 @@ function matches() {
 
 function stats(userId) {
   const id = sanitizeId(userId);
-  const u = id ? normalizeRow(store.users[id] || { name: "Player" }) : normalizeRow({});
+  const stored = id ? store.users[id] : null;
+  if (!stored) {
+    return {
+      id: id || "",
+      name: "Player",
+      avatar: "",
+      season1: { games: 0, wins: 0 },
+      season: { games: 0, points: 0, wins: 0, lasts: 0 },
+    };
+  }
+  const u = normalizeRow(stored);
   return {
-    id: id || "",
+    id,
     name: u.name,
     avatar: u.avatar,
     season1: { games: u.season1.games, wins: u.season1.wins },
