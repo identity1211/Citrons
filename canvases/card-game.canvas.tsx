@@ -2,6 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef, useCallback, createContex
 import { useHostTheme, Text, Row, Spacer } from "cursor/canvas";
 
 const JOIN_KEY = "citrons-join";
+const INVITE_PROMPT_KEY = "citrons-invite-prompt-dismissed";
 
 function rememberJoinFromUrl() {
   if (typeof window === "undefined") return;
@@ -6865,6 +6866,107 @@ async function pushSyncToSocket(
   ws.send(JSON.stringify({ type: "pushSubscribe", ...payload, subscription, welcome: !!opts?.welcome }));
 }
 
+function invitePromptDismissed(): boolean {
+  try {
+    return sessionStorage.getItem(INVITE_PROMPT_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function dismissInvitePrompt() {
+  try {
+    sessionStorage.setItem(INVITE_PROMPT_KEY, "1");
+  } catch {
+    /* ignore */
+  }
+}
+
+function needsInviteSetup(): boolean {
+  if (typeof window === "undefined") return false;
+  if (isIosDevice() && !isStandaloneApp()) return true;
+  if (!pushSupported()) return false;
+  return Notification.permission !== "granted";
+}
+
+function InviteEnablePrompt({
+  busy,
+  needInstall,
+  denied,
+  message,
+  onEnable,
+  onLater,
+}: {
+  busy: boolean;
+  needInstall: boolean;
+  denied: boolean;
+  message: string;
+  onEnable: () => void;
+  onLater: () => void;
+}) {
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 120,
+        background: "rgba(8, 18, 10, 0.62)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "16px 12px",
+        boxSizing: "border-box",
+      }}
+    >
+      <div
+        role="dialog"
+        aria-labelledby="invite-prompt-title"
+        style={{
+          ...PROFILE_PANEL,
+          width: "min(340px, 100%)",
+          padding: "18px 16px 14px",
+        }}
+      >
+        <div
+          id="invite-prompt-title"
+          style={{
+            fontFamily: 'Georgia, "Times New Roman", serif',
+            fontSize: 20,
+            fontWeight: 700,
+            marginBottom: 8,
+          }}
+        >
+          Enable invites
+        </div>
+        <div style={{ fontSize: 14, lineHeight: 1.45, color: "rgba(255,255,255,0.78)", marginBottom: 14 }}>
+          {needInstall
+            ? "On iPhone, add Citrons to your Home Screen, then open it from there to get game invites."
+            : denied
+              ? "Notifications are blocked for this site. Allow them in your browser settings to get invites."
+              : "Turn on notifications so friends can ping you when a lobby is waiting."}
+        </div>
+        {message ? (
+          <div style={{ fontSize: 13, lineHeight: 1.4, color: "#f5b7b1", marginBottom: 12 }}>{message}</div>
+        ) : null}
+        {!needInstall && !denied ? (
+          <button
+            type="button"
+            className="lobby-play-btn"
+            disabled={busy}
+            onClick={onEnable}
+            style={{ ...LOBBY_GOLD_BTN, maxWidth: "100%", height: 44, marginBottom: 8 }}
+          >
+            {busy ? "Enabling…" : "Enable invites"}
+          </button>
+        ) : null}
+        <button type="button" onClick={onLater} style={{ ...PROFILE_GHOST, height: 40 }}>
+          Not now
+        </button>
+      </div>
+    </div>
+  );
+}
+
 const DEFAULT_WS = "wss://web-production-b9cc89.up.railway.app";
 
 function defaultWsUrl(): string {
@@ -6959,6 +7061,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   const [inviteMsg, setInviteMsg] = useState("");
   const [inviteNeedPermission, setInviteNeedPermission] = useState(false);
   const [inviteNeedInstall, setInviteNeedInstall] = useState(false);
+  const [invitePromptOpen, setInvitePromptOpen] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const pingRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -7301,9 +7404,10 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       setInviteBusy(false);
       if (msg.ok) {
         setInviteNeedPermission(false);
+        setInvitePromptOpen(false);
         if (inviteOpenRef.current && msg.test) setInviteMsg("Test ping sent — check your notifications");
         else if (inviteOpenRef.current && msg.welcome) setInviteMsg("Invites are on — check your notifications");
-      } else if (inviteOpenRef.current) {
+      } else {
         setInviteMsg("Couldn't save this device for invites");
       }
       return;
@@ -7722,6 +7826,22 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   }, [screen]);
 
   useEffect(() => {
+    if (screen === "table" || !auth.loaded || !auth.user) {
+      setInvitePromptOpen(false);
+      return;
+    }
+    if (screen !== "pick" && screen !== "waiting") return;
+    if (inviteOpen || createOpen) return;
+    if (invitePromptDismissed() || !needsInviteSetup()) {
+      setInvitePromptOpen(false);
+      return;
+    }
+    setInviteNeedInstall(isIosDevice() && !isStandaloneApp());
+    setInviteNeedPermission(pushSupported() && Notification.permission !== "granted");
+    setInvitePromptOpen(true);
+  }, [screen, auth.loaded, auth.user, inviteOpen, createOpen]);
+
+  useEffect(() => {
     if (screen !== "pick") setCreateOpen(false);
   }, [screen]);
 
@@ -8022,6 +8142,22 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     </div>
   ) : null;
 
+  const invitePrompt =
+    invitePromptOpen && !inviteOpen && !createOpen && (screen === "pick" || screen === "waiting") ? (
+      <InviteEnablePrompt
+        busy={inviteBusy}
+        needInstall={isIosDevice() && !isStandaloneApp()}
+        denied={pushSupported() && Notification.permission === "denied"}
+        message={inviteMsg}
+        onEnable={() => void enableInvites()}
+        onLater={() => {
+          dismissInvitePrompt();
+          setInvitePromptOpen(false);
+          setInviteMsg("");
+        }}
+      />
+    ) : null;
+
   if (screen === "pick") {
     const openCreate = () => {
       if (!auth.user) {
@@ -8224,6 +8360,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
             </div>
           </div>
         ) : null}
+        {invitePrompt}
       </>
     );
   }
@@ -8245,6 +8382,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       ? inviteUsers.filter((u) => u.name.toLowerCase().includes(q))
       : inviteUsers;
     return (
+      <>
       <FeltShell
         skin={waitSkin}
         overlay={
@@ -8611,7 +8749,8 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         </div>
         {droppedOverlay}
       </FeltShell>
-    );
+      {invitePrompt}
+    </>
   }
 
   if (screen === "table" && view) {
