@@ -4740,6 +4740,7 @@ function Lobby({
           >
             Citrons
           </div>
+          {view === "main" ? <GamesPlayedLine /> : null}
         </div>
 
         {view !== "board" && <LobbyCardFan />}
@@ -6462,7 +6463,7 @@ type BoardRow = {
   id: string;
   name: string;
   avatar: string;
-  wins: number;
+  points: number;
   games: number;
 };
 
@@ -6471,6 +6472,44 @@ function medalColor(rank: number): string {
   if (rank === 2) return "#d5d8dc";
   if (rank === 3) return "#cd7f32";
   return "rgba(255,255,255,0.45)";
+}
+
+function GamesPlayedLine() {
+  const [total, setTotal] = useState<number | null>(null);
+
+  useEffect(() => {
+    let stop = false;
+    void (async () => {
+      try {
+        const res = await fetch(httpUrlFromWs(defaultWsUrl(), "/leaderboard"));
+        const data = await res.json();
+        if (stop) return;
+        const n = Number(data && data.matches);
+        setTotal(Number.isFinite(n) && n > 0 ? Math.floor(n) : 0);
+      } catch {
+        if (!stop) setTotal(null);
+      }
+    })();
+    return () => {
+      stop = true;
+    };
+  }, []);
+
+  if (total === null) return null;
+  return (
+    <div
+      style={{
+        marginTop: 10,
+        color: "rgba(255,255,255,0.55)",
+        fontSize: 13,
+        fontWeight: 600,
+        letterSpacing: 0.4,
+        textShadow: "0 1px 8px rgba(0,0,0,0.35)",
+      }}
+    >
+      {total.toLocaleString("en-US")} {total === 1 ? "game played" : "games played"}
+    </div>
+  );
 }
 
 function LeaderboardPanel() {
@@ -6488,14 +6527,26 @@ function LeaderboardPanel() {
         if (stop) return;
         const players = Array.isArray(data.players) ? data.players : [];
         setRows(
-          players.map((p: { rank?: number; id?: string; name?: string; avatar?: string; wins?: number; games?: number }, i: number) => ({
-            rank: Number(p.rank) || i + 1,
-            id: String(p.id || ""),
-            name: String(p.name || "Player"),
-            avatar: String(p.avatar || ""),
-            wins: Number(p.wins) || 0,
-            games: Number(p.games) || 0,
-          }))
+          players.map(
+            (
+              p: {
+                rank?: number;
+                id?: string;
+                name?: string;
+                avatar?: string;
+                points?: number;
+                games?: number;
+              },
+              i: number
+            ) => ({
+              rank: Number(p.rank) || i + 1,
+              id: String(p.id || ""),
+              name: String(p.name || "Player"),
+              avatar: String(p.avatar || ""),
+              points: Number(p.points) || 0,
+              games: Number(p.games) || 0,
+            })
+          )
         );
         setFail("");
       } catch {
@@ -6525,7 +6576,7 @@ function LeaderboardPanel() {
           lineHeight: 1.4,
         }}
       >
-        Signed-in multiplayer wins
+        Finish above others to score. Last place is 0.
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: "52vh", overflowY: "auto" }}>
         {rows === null ? (
@@ -6567,7 +6618,7 @@ function LeaderboardPanel() {
               lineHeight: 1.4,
             }}
           >
-            Win a signed-in multiplayer game to appear here.
+            Finish a signed-in multiplayer game to appear here.
           </div>
         ) : (
           rows.map((row) => {
@@ -6612,16 +6663,21 @@ function LeaderboardPanel() {
                     {row.name}
                     {mine ? " (you)" : ""}
                   </div>
-                  <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 11 }}>
-                    {row.games} {row.games === 1 ? "game" : "games"}
-                  </div>
                 </div>
-                <div style={{ flexShrink: 0, textAlign: "right" }}>
-                  <div style={{ color: "#f1c40f", fontWeight: 800, fontSize: 16, lineHeight: 1 }}>
-                    {row.wins}
+                <div style={{ flexShrink: 0, textAlign: "right", minWidth: 44 }}>
+                  <div style={{ color: "#f5f0e6", fontWeight: 800, fontSize: 16, lineHeight: 1 }}>
+                    {row.games}
                   </div>
                   <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 10, fontWeight: 600 }}>
-                    {row.wins === 1 ? "win" : "wins"}
+                    {row.games === 1 ? "game" : "games"}
+                  </div>
+                </div>
+                <div style={{ flexShrink: 0, textAlign: "right", minWidth: 44 }}>
+                  <div style={{ color: "#f1c40f", fontWeight: 800, fontSize: 16, lineHeight: 1 }}>
+                    {row.points}
+                  </div>
+                  <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 10, fontWeight: 600 }}>
+                    {row.points === 1 ? "pt" : "pts"}
                   </div>
                 </div>
               </div>

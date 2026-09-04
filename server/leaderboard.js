@@ -6,8 +6,9 @@ const path = require("path");
 const TOP = 25;
 const CLERK_META_KEY = "citrons";
 const DEFAULT_LIVE_PK = "pk_live_";
+const RECENT_MAX = 40;
 
-let store = { users: {} };
+let store = { users: {}, matches: 0 };
 const pending = new Set();
 let lastError = "";
 let flushTimer = null;
@@ -44,42 +45,12 @@ function filePath() {
   return path.join(__dirname, "..", "data", "leaderboard.json");
 }
 
-function load() {
-  try {
-    const raw = fs.readFileSync(filePath(), "utf8");
-    const parsed = JSON.parse(raw);
-    if (parsed && parsed.users && typeof parsed.users === "object") store = { users: parsed.users };
-    if (Array.isArray(parsed && parsed.pending)) {
-      for (const id of parsed.pending) {
-        if (sanitizeId(id)) pending.add(sanitizeId(id));
-      }
-    }
-  } catch {
-    store = { users: {} };
-  }
+function emptyPlaces() {
+  return [0, 0, 0, 0, 0];
 }
 
-function save() {
-  const file = filePath();
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp`;
-  fs.writeFileSync(
-    tmp,
-    JSON.stringify({ users: store.users, pending: [...pending] }, null, 2)
-  );
-  fs.renameSync(tmp, file);
-}
-
-function saveSafe() {
-  try {
-    save();
-  } catch (err) {
-    console.error("leaderboard file save failed", err);
-  }
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function emptyFields() {
+  return { 2: 0, 3: 0, 4: 0, 5: 0 };
 }
 
 function sanitizeId(id) {
@@ -103,26 +74,180 @@ function sanitizeAvatar(url) {
   return u;
 }
 
+function num(v) {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+}
+
+function numPlaces(v) {
+  const out = emptyPlaces();
+  if (Array.isArray(v)) {
+    for (let i = 0; i < 5; i++) out[i] = num(v[i]);
+  } else if (v && typeof v === "object") {
+    for (let i = 0; i < 5; i++) out[i] = num(v[i + 1] ?? v[String(i + 1)]);
+  }
+  return out;
+}
+
+function numFields(v) {
+  const out = emptyFields();
+  if (!v || typeof v !== "object") return out;
+  for (const n of [2, 3, 4, 5]) out[n] = num(v[n] ?? v[String(n)]);
+  return out;
+}
+
+function numRecent(list) {
+  if (!Array.isArray(list)) return [];
+  const rows = [];
+  for (const item of list) {
+    if (!item || typeof item !== "object") continue;
+    const field = num(item.field);
+    const place = num(item.place);
+    if (field < 2 || field > 5 || place < 1 || place > field) continue;
+    rows.push({
+      at: num(item.at) || Date.now(),
+      field,
+      place,
+      points: num(item.points) || Math.max(0, field - place),
+    });
+  }
+  return rows.slice(-RECENT_MAX);
+}
+
+function normalizeRow(raw) {
+  const prev = raw && typeof raw === "object" ? raw : {};
+  const places = numPlaces(prev.places);
+  const fields = numFields(prev.fields);
+  const points = num(prev.points);
+  return {
+    name: sanitizeName(prev.name),
+    avatar: sanitizeAvatar(prev.avatar),
+    points,
+    games: num(prev.games),
+    wins: num(prev.wins) || places[0],
+    lasts: num(prev.lasts),
+    places,
+    fields,
+    beaten: num(prev.beaten) || points,
+    faced: num(prev.faced),
+    streak: num(prev.streak),
+    bestStreak: num(prev.bestStreak),
+    lastPlace: num(prev.lastPlace),
+    lastField: num(prev.lastField),
+    lastPoints: num(prev.lastPoints),
+    lastPlayedAt: num(prev.lastPlayedAt) || num(prev.updatedAt),
+    updatedAt: num(prev.updatedAt) || Date.now(),
+    recent: numRecent(prev.recent),
+  };
+}
+
+function winsTotal() {
+  let n = 0;
+  for (const row of Object.values(store.users)) n += num(row && row.wins);
+  return n;
+}
+
+function liftMatches() {
+  const floor = winsTotal();
+  if (num(store.matches) < floor) store.matches = floor;
+}
+
+function load() {
+  try {
+    const raw = fs.readFileSync(filePath(), "utf8");
+    const parsed = JSON.parse(raw);
+    if (parsed && parsed.users && typeof parsed.users === "object") {
+      const users = {};
+      for (const [id, row] of Object.entries(parsed.users)) {
+        const clean = sanitizeId(id);
+        if (clean) users[clean] = normalizeRow(row);
+      }
+      store = { users, matches: num(parsed.matches) };
+    }
+    if (Array.isArray(parsed && parsed.pending)) {
+      for (const id of parsed.pending) {
+        if (sanitizeId(id)) pending.add(sanitizeId(id));
+      }
+    }
+    liftMatches();
+  } catch {
+    store = { users: {}, matches: 0 };
+  }
+}
+
+function save() {
+  const file = filePath();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(
+    tmp,
+    JSON.stringify({ users: store.users, matches: num(store.matches), pending: [...pending] }, null, 2)
+  );
+  fs.renameSync(tmp, file);
+}
+
+function saveSafe() {
+  try {
+    save();
+  } catch (err) {
+    console.error("leaderboard file save failed", err);
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function rowNewer(a, b) {
   if (!a) return false;
   if (!b) return true;
-  const aGames = Number(a.games) || 0;
-  const bGames = Number(b.games) || 0;
+  const aGames = num(a.games);
+  const bGames = num(b.games);
   if (aGames !== bGames) return aGames > bGames;
-  return (Number(a.updatedAt) || 0) >= (Number(b.updatedAt) || 0);
+  const aPts = num(a.points);
+  const bPts = num(b.points);
+  if (aPts !== bPts) return aPts > bPts;
+  return (num(a.updatedAt) || 0) >= (num(b.updatedAt) || 0);
 }
 
-function bump(userId, name, avatar, { win, last }) {
+function bump(userId, name, avatar, { place, field }) {
   const id = sanitizeId(userId);
   if (!id) return "";
-  const prev = store.users[id] || { name: "Player", avatar: "", wins: 0, games: 0, lasts: 0 };
+  const n = num(field);
+  const p = num(place);
+  if (n < 2 || n > 5 || p < 1 || p > n) return "";
+  const pts = n - p;
+  const prev = normalizeRow(store.users[id]);
+  const places = [...prev.places];
+  places[p - 1] += 1;
+  const fields = { ...prev.fields };
+  fields[n] = (fields[n] || 0) + 1;
+  const win = p === 1;
+  const last = p === n;
+  const streak = win ? prev.streak + 1 : 0;
+  const recent = [
+    ...prev.recent,
+    { at: Date.now(), field: n, place: p, points: pts },
+  ].slice(-RECENT_MAX);
   store.users[id] = {
     name: sanitizeName(name) || prev.name,
     avatar: sanitizeAvatar(avatar) || prev.avatar,
-    wins: (Number(prev.wins) || 0) + (win ? 1 : 0),
-    games: (Number(prev.games) || 0) + 1,
-    lasts: (Number(prev.lasts) || 0) + (last ? 1 : 0),
+    points: prev.points + pts,
+    games: prev.games + 1,
+    wins: prev.wins + (win ? 1 : 0),
+    lasts: prev.lasts + (last ? 1 : 0),
+    places,
+    fields,
+    beaten: prev.beaten + pts,
+    faced: prev.faced + (n - 1),
+    streak,
+    bestStreak: Math.max(prev.bestStreak, streak),
+    lastPlace: p,
+    lastField: n,
+    lastPoints: pts,
+    lastPlayedAt: Date.now(),
     updatedAt: Date.now(),
+    recent,
   };
   return id;
 }
@@ -149,33 +274,37 @@ async function clerkApi(method, urlPath, body) {
 function rowFromClerkUser(user) {
   const meta = user && user.public_metadata && user.public_metadata[CLERK_META_KEY];
   if (!meta || typeof meta !== "object") return null;
-  const games = Number(meta.games) || 0;
-  const wins = Number(meta.wins) || 0;
-  if (games <= 0 && wins <= 0) return null;
+  const row = normalizeRow({
+    ...meta,
+    name: meta.name || [user.first_name, user.last_name].filter(Boolean).join(" ") || user.username,
+    avatar: meta.avatar || user.image_url,
+  });
+  if (row.games <= 0 && row.wins <= 0 && row.points <= 0) return null;
   const id = sanitizeId(user.id);
   if (!id) return null;
-  const nameFromClerk = [user.first_name, user.last_name].filter(Boolean).join(" ") || user.username;
-  return {
-    id,
-    row: {
-      name: sanitizeName(meta.name || nameFromClerk),
-      avatar: sanitizeAvatar(meta.avatar || user.image_url),
-      wins,
-      games,
-      lasts: Number(meta.lasts) || 0,
-      updatedAt: Number(meta.updatedAt) || Date.now(),
-    },
-  };
+  return { id, row };
 }
 
 function citronsPayload(row) {
+  const n = normalizeRow(row);
   return {
-    wins: Number(row.wins) || 0,
-    games: Number(row.games) || 0,
-    lasts: Number(row.lasts) || 0,
-    name: sanitizeName(row.name),
-    avatar: sanitizeAvatar(row.avatar),
-    updatedAt: Number(row.updatedAt) || Date.now(),
+    name: n.name,
+    avatar: n.avatar,
+    points: n.points,
+    games: n.games,
+    wins: n.wins,
+    lasts: n.lasts,
+    places: n.places,
+    fields: n.fields,
+    beaten: n.beaten,
+    faced: n.faced,
+    streak: n.streak,
+    bestStreak: n.bestStreak,
+    lastPlace: n.lastPlace,
+    lastField: n.lastField,
+    lastPoints: n.lastPoints,
+    lastPlayedAt: n.lastPlayedAt,
+    updatedAt: n.updatedAt,
   };
 }
 
@@ -254,13 +383,14 @@ async function parsedRowFromListedUser(user) {
 
 function mergeClerkRow(parsed) {
   if (!parsed) return false;
+  const next = normalizeRow(parsed.row);
   const prev = store.users[parsed.id];
-  if (rowNewer(parsed.row, prev)) {
-    store.users[parsed.id] = parsed.row;
+  if (rowNewer(next, prev)) {
+    store.users[parsed.id] = { ...next, recent: (prev && prev.recent) || next.recent || [] };
     pending.delete(parsed.id);
     return true;
   }
-  if (prev && !rowNewer(parsed.row, prev)) pending.add(parsed.id);
+  if (prev && !rowNewer(next, prev)) pending.add(parsed.id);
   return false;
 }
 
@@ -293,6 +423,7 @@ async function hydrateFromClerk() {
   console.log(
     `leaderboard hydrate clerk=${clerkKind()} scored=${found} store=${Object.keys(store.users).length} pending=${pending.size}`
   );
+  liftMatches();
   await flushPending();
   await healClerkFromStore();
 }
@@ -309,7 +440,8 @@ async function healClerkFromStore() {
 function recordGame(room) {
   const order = room && Array.isArray(room.finishOrder) ? room.finishOrder : [];
   const seats = room && Array.isArray(room.seats) ? room.seats : [];
-  if (order.length < 2) return;
+  const field = order.length;
+  if (field < 2 || field > 5) return;
   const seen = new Set();
   const changed = [];
   for (let i = 0; i < order.length; i++) {
@@ -318,12 +450,13 @@ function recordGame(room) {
     const id = sanitizeId(player.clerkUserId);
     if (!id || seen.has(id)) continue;
     seen.add(id);
-    bump(id, player.name, player.avatar, { win: i === 0, last: i === order.length - 1 });
+    bump(id, player.name, player.avatar, { place: i + 1, field });
     pending.add(id);
     changed.push(id);
   }
-  if (changed.length === 0) return;
+  store.matches = num(store.matches) + 1;
   saveSafe();
+  if (changed.length === 0) return;
   Promise.all(changed.map((id) => pushUserToClerkWithRetry(id, store.users[id]))).catch((err) => {
     console.error("leaderboard clerk sync failed", err);
   });
@@ -333,22 +466,30 @@ function top(limit) {
   const n = Math.max(1, Math.min(100, Number(limit) || TOP));
   return Object.keys(store.users)
     .map((id) => {
-      const u = store.users[id];
+      const u = normalizeRow(store.users[id]);
       return {
         id,
-        name: sanitizeName(u && u.name),
-        avatar: sanitizeAvatar(u && u.avatar),
-        wins: Number(u && u.wins) || 0,
-        games: Number(u && u.games) || 0,
-        lasts: Number(u && u.lasts) || 0,
+        name: u.name,
+        avatar: u.avatar,
+        points: u.points,
+        games: u.games,
+        wins: u.wins,
+        lasts: u.lasts,
       };
     })
     .sort(
       (a, b) =>
-        b.wins - a.wins || b.games - a.games || a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
+        b.points - a.points ||
+        b.wins - a.wins ||
+        b.games - a.games ||
+        a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
     )
     .slice(0, n)
     .map((row, i) => ({ rank: i + 1, ...row }));
+}
+
+function matches() {
+  return num(store.matches);
 }
 
 function info() {
@@ -359,6 +500,7 @@ function info() {
     expectedKind: expectedClerkKind(),
     mismatch: clerkMismatch(),
     players: Object.keys(store.users).length,
+    matches: num(store.matches),
     pending: pending.size,
     lastError,
   };
@@ -374,4 +516,4 @@ function startSyncLoop() {
 
 load();
 
-module.exports = { recordGame, top, hydrateFromClerk, info, startSyncLoop };
+module.exports = { recordGame, top, matches, hydrateFromClerk, info, startSyncLoop };

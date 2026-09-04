@@ -1307,7 +1307,7 @@ const server = http.createServer((req, res) => {
   }
   if (path === "/leaderboard") {
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify({ players: leaderboard.top() }));
+    res.end(JSON.stringify({ players: leaderboard.top(), matches: leaderboard.matches() }));
     return;
   }
   if (path === "/push/vapid") {
