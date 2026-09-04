@@ -319,12 +319,6 @@ function placeLabel(place: number, total: number): string {
   return `${place}${suf}`;
 }
 
-/** Points = opponents finished ahead of. Last place is always 0. */
-function placePoints(place: number, field: number): number {
-  if (field < 2 || place < 1 || place > field) return 0;
-  return field - place;
-}
-
 function refillHand(
   hand: string[],
   deck: string[]
@@ -2297,15 +2291,15 @@ function MatchResultsOverlay({
   youSeat: number | null;
   onLobby: () => void;
 }) {
-  const field = finishOrder.length;
-  const rows = finishOrder.map((pIdx, i) => {
-    const place = i + 1;
+  const order = finishOrder.length > 0 ? finishOrder : players.map((_, i) => i);
+  const field = order.length;
+  const rows = order.map((pIdx, i) => {
     const p = players[pIdx];
     return {
-      place,
+      pIdx,
+      place: i + 1,
       name: p?.name || "Player",
       avatar: p?.avatar || "",
-      points: placePoints(place, field),
       you: youSeat != null && pIdx === youSeat,
     };
   });
@@ -2349,6 +2343,7 @@ function MatchResultsOverlay({
             borderRadius: b.round ? 99 : 2,
             background: b.color,
             boxShadow: "0 0 6px rgba(241,196,15,0.35)",
+            pointerEvents: "none",
             ["--cx" as string]: b.left,
             ["--cdx" as string]: b.dx,
             ["--crot" as string]: b.rot,
@@ -2389,7 +2384,7 @@ function MatchResultsOverlay({
         <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: "min(52vh, 360px)", overflowY: "auto" }}>
           {rows.map((row) => (
             <div
-              key={`${row.place}-${row.name}`}
+              key={row.pIdx}
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -2426,21 +2421,6 @@ function MatchResultsOverlay({
               >
                 {row.name}
                 {row.you ? " (you)" : ""}
-              </div>
-              <div
-                style={{
-                  flexShrink: 0,
-                  textAlign: "right",
-                  color: row.place === 1 ? "#f1c40f" : "#f5f0e6",
-                  fontWeight: 800,
-                  fontSize: 16,
-                  minWidth: 42,
-                }}
-              >
-                {row.points}
-                <span style={{ marginLeft: 4, color: "rgba(255,255,255,0.5)", fontSize: 10, fontWeight: 600 }}>
-                  {row.points === 1 ? "pt" : "pts"}
-                </span>
               </div>
             </div>
           ))}
@@ -5645,14 +5625,14 @@ function Table({
   }, [phase]);
 
   useEffect(() => {
-    if (phase !== "finished" || finishOrder.length < 2) {
-      if (phase !== "finished") setEndUi(false);
+    if (phase !== "finished") {
+      setEndUi(false);
       return;
     }
     if (tableBusy) return;
     const show = window.setTimeout(() => setEndUi(true), END_LINGER_MS);
     return () => window.clearTimeout(show);
-  }, [phase, finishOrder.length, tableBusy]);
+  }, [phase, tableBusy]);
 
   function spawnEmojiFly(id: string, emoji: string) {
     const drift = driftFromId(id);
@@ -6203,7 +6183,7 @@ function Table({
         >
           Watching
         </div>
-      ) : (
+      ) : phase === "finished" ? null : (
         <>
       <FeltChip
         kind={myTurn || canMeddleSelected ? "play" : "ghost"}
@@ -6273,7 +6253,7 @@ function Table({
       {phase !== "lobby" && phase !== "rules" && showSpecials ? (
         <SpecialsMemo active={tutorial?.special} drop={!!tutorial} />
       ) : null}
-      {phase === "finished" && endUi && finishOrder.length >= 2 ? (
+      {phase === "finished" && endUi ? (
         <MatchResultsOverlay
           players={players}
           finishOrder={finishOrder}
