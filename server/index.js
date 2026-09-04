@@ -950,15 +950,12 @@ function afterPlay(room, playerIndex, result) {
       return;
     }
   }
-  const stillIn = engine.unfinishedPlayers(room.seats).length;
-  const outPrefix =
-    result.won && stillIn > 1 ? `${room.seats[playerIndex].name} is out · ${stillIn} still in. ` : "";
   if (result.extraTurn && !engine.playerFinished(room.seats[playerIndex])) {
     room.currentPlayer = playerIndex;
-    room.statusMsg = `${outPrefix}Turn: ${room.seats[playerIndex].name} (again)`;
+    room.statusMsg = `Turn: ${room.seats[playerIndex].name} (again)`;
   } else {
     room.currentPlayer = engine.nextAlive(playerIndex, room.seats);
-    room.statusMsg = `${outPrefix}Turn: ${room.seats[room.currentPlayer].name}`;
+    room.statusMsg = `Turn: ${room.seats[room.currentPlayer].name}`;
   }
   broadcast(room, makePlayAnim(playerIndex, result));
 }

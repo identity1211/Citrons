@@ -319,6 +319,12 @@ function placeLabel(place: number, total: number): string {
   return `${place}${suf}`;
 }
 
+/** Points = opponents finished ahead of. Last place is always 0. */
+function placePoints(place: number, field: number): number {
+  if (field < 2 || place < 1 || place > field) return 0;
+  return field - place;
+}
+
 function refillHand(
   hand: string[],
   deck: string[]
@@ -1803,7 +1809,6 @@ const REVEAL_MS = 900;
 const DRAW_MS = 680;
 const DRAW_STAGGER_MS = 80;
 const END_LINGER_MS = 1800;
-const WIN_BANNER_MS = 2800;
 
 interface FlyAnim {
   id: number;
@@ -2281,19 +2286,31 @@ function DrawOverlay({ anim }: { anim: DrawAnim }) {
   );
 }
 
-function WinnerOverlay({
-  name,
-  avatar,
-  you,
-  onDismiss,
+function MatchResultsOverlay({
+  players,
+  finishOrder,
+  youSeat,
+  onLobby,
 }: {
-  name: string;
-  avatar?: string;
-  you: boolean;
-  onDismiss: () => void;
+  players: PlayerState[];
+  finishOrder: number[];
+  youSeat: number | null;
+  onLobby: () => void;
 }) {
+  const field = finishOrder.length;
+  const rows = finishOrder.map((pIdx, i) => {
+    const place = i + 1;
+    const p = players[pIdx];
+    return {
+      place,
+      name: p?.name || "Player",
+      avatar: p?.avatar || "",
+      points: placePoints(place, field),
+      you: youSeat != null && pIdx === youSeat,
+    };
+  });
   const colors = ["#f1c40f", "#fdebd0", "#ffffff", "#2ecc71", "#e67e22", "#f8e6a0"];
-  const bits = Array.from({ length: 24 }, (_, i) => ({
+  const bits = Array.from({ length: 18 }, (_, i) => ({
     left: `${(i * 17 + 9) % 94}%`,
     delay: `${(i % 8) * 0.07}s`,
     dur: `${1.65 + (i % 5) * 0.2}s`,
@@ -2309,12 +2326,14 @@ function WinnerOverlay({
       style={{
         position: "absolute",
         inset: 0,
-        zIndex: 90,
+        zIndex: 150,
         overflow: "hidden",
-        pointerEvents: "none",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
+        background: "rgba(8, 18, 10, 0.55)",
+        padding: "16px 12px",
+        boxSizing: "border-box",
       }}
     >
       {bits.map((b, i) => (
@@ -2339,37 +2358,20 @@ function WinnerOverlay({
         />
       ))}
       <div
-        className="winner-burst"
-        style={{
-          position: "absolute",
-          width: 220,
-          height: 220,
-          borderRadius: 110,
-          background: "radial-gradient(circle, rgba(241,196,15,0.45) 0%, transparent 70%)",
-        }}
-      />
-      <button
-        type="button"
-        onClick={onDismiss}
-        aria-label="Dismiss winner"
         className="winner-banner"
         style={{
           position: "relative",
           zIndex: 1,
-          pointerEvents: "auto",
-          minWidth: 200,
-          maxWidth: "86%",
-          padding: "18px 22px 14px",
+          width: "min(320px, 100%)",
+          padding: "16px 14px 14px",
           borderRadius: 16,
           border: "1.5px solid rgba(241,196,15,0.75)",
-          background: "linear-gradient(180deg, rgba(26,43,26,0.94), rgba(16,32,18,0.96))",
+          background: "linear-gradient(180deg, rgba(26,43,26,0.96), rgba(16,32,18,0.98))",
           boxShadow: "0 16px 40px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.08) inset",
           color: "#f5f0e6",
           display: "flex",
           flexDirection: "column",
-          alignItems: "center",
-          gap: 8,
-          cursor: "pointer",
+          gap: 12,
         }}
       >
         <div
@@ -2379,53 +2381,84 @@ function WinnerOverlay({
             letterSpacing: 2.4,
             textTransform: "uppercase",
             color: "#f1c40f",
-          }}
-        >
-          1st place
-        </div>
-        <AvatarBubble src={avatar} name={name} size={56} />
-        <div
-          style={{
-            fontFamily: 'Georgia, "Times New Roman", serif',
-            fontSize: 28,
-            fontWeight: 700,
-            lineHeight: 1.1,
             textAlign: "center",
           }}
         >
-          {you ? "You win!" : `${name} wins!`}
+          Results
         </div>
-        <div style={{ fontSize: 11, color: "rgba(255,255,255,0.55)" }}>Tap to continue</div>
-      </button>
-    </div>
-  );
-}
-
-function FinishedLobbyOverlay({ onLobby }: { onLobby: () => void }) {
-  return (
-    <div
-      style={{
-        position: "absolute",
-        left: "50%",
-        bottom: "max(64px, calc(env(safe-area-inset-bottom) + 58px))",
-        transform: "translateX(-50%)",
-        zIndex: 85,
-        pointerEvents: "auto",
-      }}
-    >
-      <button
-        type="button"
-        className="lobby-play-btn"
-        onClick={onLobby}
-        style={{
-          ...LOBBY_GOLD_BTN,
-          width: 148,
-          height: 44,
-          maxWidth: 148,
-        }}
-      >
-        Lobby
-      </button>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: "min(52vh, 360px)", overflowY: "auto" }}>
+          {rows.map((row) => (
+            <div
+              key={`${row.place}-${row.name}`}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "7px 8px",
+                borderRadius: 10,
+                background: row.you ? "rgba(241,196,15,0.16)" : "rgba(0,0,0,0.28)",
+                border: row.you ? "1px solid rgba(241,196,15,0.55)" : "1px solid rgba(255,255,255,0.1)",
+              }}
+            >
+              <div
+                style={{
+                  width: 36,
+                  flexShrink: 0,
+                  fontWeight: 800,
+                  fontSize: 12,
+                  textAlign: "center",
+                  color: row.place === 1 ? "#f1c40f" : "rgba(255,255,255,0.7)",
+                }}
+              >
+                {placeLabel(row.place, field)}
+              </div>
+              <AvatarBubble src={row.avatar} name={row.name} size={28} />
+              <div
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  fontWeight: 700,
+                  fontSize: 14,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {row.name}
+                {row.you ? " (you)" : ""}
+              </div>
+              <div
+                style={{
+                  flexShrink: 0,
+                  textAlign: "right",
+                  color: row.place === 1 ? "#f1c40f" : "#f5f0e6",
+                  fontWeight: 800,
+                  fontSize: 16,
+                  minWidth: 42,
+                }}
+              >
+                {row.points}
+                <span style={{ marginLeft: 4, color: "rgba(255,255,255,0.5)", fontSize: 10, fontWeight: 600 }}>
+                  {row.points === 1 ? "pt" : "pts"}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+        <button
+          type="button"
+          className="lobby-play-btn"
+          onClick={onLobby}
+          style={{
+            ...LOBBY_GOLD_BTN,
+            width: "100%",
+            maxWidth: "none",
+            height: 44,
+          }}
+        >
+          To lobby
+        </button>
+      </div>
     </div>
   );
 }
@@ -5598,15 +5631,11 @@ function Table({
   const vp = useViewport();
   const fsOn = useFullscreen();
   const [fsNote, setFsNote] = useState("");
-  const [winShow, setWinShow] = useState(false);
   const [endUi, setEndUi] = useState(false);
   const [peekDown, setPeekDown] = useState<Record<number, boolean>>({});
-  const [outNote, setOutNote] = useState("");
-  const seenFinishRef = useRef(0);
   const [emojiFlies, setEmojiFlies] = useState<EmojiFly[]>([]);
   const seenReactRef = useRef(new Set<string>());
-  const winnerIdx = finishOrder.length > 0 ? finishOrder[0] : null;
-  const winner = winnerIdx != null ? players[winnerIdx] : null;
+  const toLobby = onToLobby || (watching ? matchMenu?.onToLobby : undefined) || onReset;
 
   useEffect(() => {
     if (phase !== "finished") {
@@ -5616,40 +5645,14 @@ function Table({
   }, [phase]);
 
   useEffect(() => {
-    if (phase !== "finished" || winnerIdx == null) {
-      if (phase !== "finished") setWinShow(false);
+    if (phase !== "finished" || finishOrder.length < 2) {
+      if (phase !== "finished") setEndUi(false);
       return;
     }
     if (tableBusy) return;
-    const show = window.setTimeout(() => setWinShow(true), END_LINGER_MS);
-    const hide = window.setTimeout(() => {
-      setWinShow(false);
-      setEndUi(true);
-    }, END_LINGER_MS + WIN_BANNER_MS);
-    return () => {
-      window.clearTimeout(show);
-      window.clearTimeout(hide);
-    };
-  }, [phase, winnerIdx, tableBusy]);
-
-  useEffect(() => {
-    if (phase !== "playing") {
-      seenFinishRef.current = finishOrder.length;
-      if (phase !== "finished") setOutNote("");
-      return;
-    }
-    if (finishOrder.length <= seenFinishRef.current) {
-      seenFinishRef.current = finishOrder.length;
-      return;
-    }
-    const pIdx = finishOrder[finishOrder.length - 1];
-    const stillIn = unfinishedPlayers(players).length;
-    const name = players[pIdx]?.name || "Player";
-    setOutNote(stillIn > 1 ? `${name} is out · ${stillIn} still in` : `${name} is out`);
-    seenFinishRef.current = finishOrder.length;
-    const t = window.setTimeout(() => setOutNote(""), 2400);
-    return () => window.clearTimeout(t);
-  }, [finishOrder, phase, players]);
+    const show = window.setTimeout(() => setEndUi(true), END_LINGER_MS);
+    return () => window.clearTimeout(show);
+  }, [phase, finishOrder.length, tableBusy]);
 
   function spawnEmojiFly(id: string, emoji: string) {
     const drift = driftFromId(id);
@@ -5869,60 +5872,6 @@ function Table({
               ? "You can Meddle — tap cards to complete 4-of-a-kind"
               : statusMsg}
       </div>
-
-      {(finishOrder.length > 0 || phase === "finished") && (
-        <div
-          style={{
-            position: "absolute",
-            top: 34,
-            left: "50%",
-            transform: "translateX(-50%)",
-            zIndex: 8,
-            padding: "3px 10px",
-            borderRadius: 8,
-            background: "rgba(0,0,0,0.45)",
-            border: `1px solid ${theme.stroke.focused}`,
-            color: theme.text.primary,
-            fontSize: 11,
-            maxWidth: "70%",
-            textAlign: "center",
-          }}
-        >
-          {phase === "finished" ? "Results · " : finishOrder.length > 0 ? "Still playing · " : ""}
-          {finishOrder.map((pIdx, i) => {
-            const place = i + 1;
-            const isLast = phase === "finished" && place === finishOrder.length && finishOrder.length > 1;
-            return (
-              <span key={pIdx} style={{ fontWeight: pIdx === 0 || place === 1 ? 700 : 500 }}>
-                {isLast ? "Last" : `${place}`} {players[pIdx].name}
-                {i < finishOrder.length - 1 ? " · " : ""}
-              </span>
-            );
-          })}
-        </div>
-      )}
-      {outNote ? (
-        <div
-          style={{
-            position: "absolute",
-            top: 62,
-            left: "50%",
-            transform: "translateX(-50%)",
-            zIndex: 70,
-            padding: "6px 12px",
-            borderRadius: 10,
-            background: "rgba(8, 18, 10, 0.9)",
-            border: "1px solid rgba(241,196,15,0.55)",
-            color: "#f5f0e6",
-            fontSize: 13,
-            fontWeight: 700,
-            pointerEvents: "none",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {outNote}
-        </div>
-      ) : null}
 
       <div
         style={{
@@ -6324,18 +6273,14 @@ function Table({
       {phase !== "lobby" && phase !== "rules" && showSpecials ? (
         <SpecialsMemo active={tutorial?.special} drop={!!tutorial} />
       ) : null}
-      {winShow && winner ? (
-        <WinnerOverlay
-          name={winner.name}
-          avatar={winner.avatar}
-          you={winnerIdx === 0 && !watching}
-          onDismiss={() => {
-            setWinShow(false);
-            setEndUi(true);
-          }}
+      {phase === "finished" && endUi && finishOrder.length >= 2 ? (
+        <MatchResultsOverlay
+          players={players}
+          finishOrder={finishOrder}
+          youSeat={watching ? null : 0}
+          onLobby={toLobby}
         />
       ) : null}
-      {phase === "finished" && onToLobby && endUi && !winShow ? <FinishedLobbyOverlay onLobby={onToLobby} /> : null}
       {kickVote ? (
         <KickVoteOverlay
           vote={kickVote}
@@ -8936,8 +8881,6 @@ export default function CardGame() {
         return;
       }
       advanceTurn(playerIndex, result.players, false);
-      const stillIn = unfinishedPlayers(result.players).length;
-      setStatusMsg(`${result.players[playerIndex].name} is out · ${stillIn} still in`);
       return;
     }
 
