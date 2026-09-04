@@ -517,6 +517,10 @@ function recordGame(room) {
   });
 }
 
+function onBoard(u) {
+  return num(u.games) > 0 || num(u.points) > 0 || seasonHasData(u.season1);
+}
+
 function top(limit) {
   const n = Math.max(1, Math.min(100, Number(limit) || TOP));
   return Object.keys(store.users)
@@ -530,9 +534,10 @@ function top(limit) {
         games: u.games,
         wins: u.wins,
         lasts: u.lasts,
+        season1: u.season1,
       };
     })
-    .filter((row) => row.games > 0 || row.points > 0)
+    .filter((row) => onBoard(row))
     .sort(
       (a, b) =>
         b.points - a.points ||
@@ -541,7 +546,7 @@ function top(limit) {
         a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
     )
     .slice(0, n)
-    .map((row, i) => ({ rank: i + 1, ...row }));
+    .map(({ season1: _season1, ...row }, i) => ({ rank: i + 1, ...row }));
 }
 
 function matches() {
