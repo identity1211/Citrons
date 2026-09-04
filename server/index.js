@@ -583,6 +583,7 @@ async function createRoom(ws, name, avatar, clerkToken, title) {
     swapSeconds: SWAP_SECONDS,
     burnCount: 0,
     boardSaved: false,
+    lastWinnerId: "",
     tableSkin: "felt",
     cardBack: "classic",
     chat: [],
@@ -889,7 +890,8 @@ function beginPlaying(room) {
   clearRoomTimers(room);
   for (const p of room.seats) p.ready = true;
   room.phase = "playing";
-  room.currentPlayer = Math.floor(Math.random() * room.seats.length);
+  room.currentPlayer = firstSeatIndex(room);
+  room.lastWinnerId = "";
   room.discard = [];
   room.statusMsg = `Turn: ${room.seats[room.currentPlayer].name}`;
   broadcast(room);
@@ -901,7 +903,9 @@ function maybeAllReady(room) {
 }
 
 function resolveStandings(room, finisher) {
+  const tookFirst = room.finishOrder.length === 0;
   if (!room.finishOrder.includes(finisher)) room.finishOrder.push(finisher);
+  if (tookFirst) noteWinner(room, finisher);
   const left = engine.unfinishedPlayers(room.seats);
   if (left.length <= 1) {
     if (left.length === 1 && !room.finishOrder.includes(left[0])) room.finishOrder.push(left[0]);
@@ -913,7 +917,25 @@ function resolveStandings(room, finisher) {
   return false;
 }
 
+function noteWinner(room, seatIndex) {
+  if (room.lastWinnerId) return;
+  const winner = room.seats[seatIndex];
+  if (winner && winner.id) room.lastWinnerId = winner.id;
+}
+
+function firstSeatIndex(room) {
+  const n = room.seats.length;
+  if (n <= 0) return 0;
+  const id = room.lastWinnerId;
+  if (id) {
+    const i = room.seats.findIndex((p) => p.id === id);
+    if (i >= 0) return i;
+  }
+  return Math.floor(Math.random() * n);
+}
+
 function saveFinishedGame(room) {
+  if (!room.lastWinnerId) noteWinner(room, Array.isArray(room.finishOrder) ? room.finishOrder[0] : -1);
   if (room.boardSaved) return;
   room.boardSaved = true;
   try {
