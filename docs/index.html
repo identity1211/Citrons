@@ -107,6 +107,7 @@ function Spacer() {
 
 const JOIN_KEY = "citrons-join";
 const INVITE_PROMPT_KEY = "citrons-invite-prompt-dismissed";
+const IOS_INSTALL_KEY = "citrons-ios-install-seen";
 
 function rememberJoinFromUrl() {
   if (typeof window === "undefined") return;
@@ -1114,6 +1115,11 @@ function ensureKeyframes() {
       animation: matchMenuIn 0.18s ease-out both;
       transform-origin: top center;
     }
+    .ios-hint-pulse { animation: iosHintPulse 1.25s ease-in-out infinite; }
+    @keyframes iosHintPulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.08); }
+    }
     @media (prefers-reduced-motion: reduce) {
       .winner-banner { animation: none !important; }
       .winner-burst, .winner-confetti { animation: none !important; opacity: 0 !important; }
@@ -1121,6 +1127,7 @@ function ensureKeyframes() {
       .emoji-react-fly { animation: none !important; opacity: 0 !important; }
       .match-menu-fly { animation: none !important; }
       .skin-menu-fly { animation: none !important; }
+      .ios-hint-pulse { animation: none !important; }
     }
   `;
   document.head.appendChild(style);
@@ -4867,6 +4874,195 @@ function WaitingMenu({
   );
 }
 
+function ShareGlyph({ size = 22, color = "#f1c40f" }: { size?: number; color?: string }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M12 3v12M8 7l4-4 4 4"
+        stroke={color}
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"
+        stroke={color}
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function IosInstallTutorial({ onDone }: { onDone: () => void }) {
+  const [step, setStep] = useState(0);
+  const last = 3;
+  function finish() {
+    markIosInstallSeen();
+    onDone();
+  }
+  function next() {
+    if (step >= last) finish();
+    else setStep((s) => s + 1);
+  }
+  const titles = ["Save Citrons to your phone", "1 · Tap Share", "2 · Add to Home Screen", "3 · Tap Add"];
+  const bodies = [
+    "Safari can put Citrons on your Home Screen like an app — no browser bar, and invites can reach you.",
+    "Safari’s Share button is on the bar under this game — a square with an arrow up. Tap the picture here, then tap the real one.",
+    "In Safari’s share list, scroll if needed, then tap Add to Home Screen.",
+    "Tap Add at the top right of Safari. Then open Citrons from the new Home Screen icon.",
+  ];
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 130,
+        background: "rgba(8, 18, 10, 0.72)",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        overflowY: "auto",
+        padding: "16px 12px max(12px, env(safe-area-inset-bottom))",
+        boxSizing: "border-box",
+      }}
+    >
+      <div
+        role="dialog"
+        aria-labelledby="ios-install-title"
+        style={{
+          ...PROFILE_PANEL,
+          width: "min(360px, 100%)",
+          padding: "16px 14px 12px",
+          marginBottom: step === 1 ? 12 : 10,
+          flexShrink: 0,
+        }}
+      >
+        <div
+          id="ios-install-title"
+          style={{
+            fontFamily: 'Georgia, "Times New Roman", serif',
+            fontSize: 20,
+            fontWeight: 700,
+            marginBottom: 8,
+          }}
+        >
+          {titles[step]}
+        </div>
+        <div style={{ fontSize: 14, lineHeight: 1.45, color: "rgba(255,255,255,0.78)", marginBottom: 12 }}>
+          {bodies[step]}
+        </div>
+        {step === 2 ? (
+          <button
+            type="button"
+            className="ios-hint-pulse"
+            onClick={next}
+            style={{
+              width: "100%",
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              padding: "10px 12px",
+              marginBottom: 12,
+              borderRadius: 10,
+              border: "1.5px solid rgba(241,196,15,0.75)",
+              background: "rgba(241,196,15,0.16)",
+              color: "#f5f0e6",
+              fontWeight: 700,
+              fontSize: 15,
+              cursor: "pointer",
+            }}
+          >
+            <span
+              style={{
+                width: 28,
+                height: 28,
+                borderRadius: 6,
+                border: "1.5px solid #f1c40f",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "#f1c40f",
+                fontSize: 18,
+                fontWeight: 800,
+                flexShrink: 0,
+              }}
+            >
+              +
+            </span>
+            Add to Home Screen
+          </button>
+        ) : null}
+        {step === 3 ? (
+          <button
+            type="button"
+            className="ios-hint-pulse lobby-play-btn"
+            onClick={finish}
+            style={{ ...LOBBY_GOLD_BTN, maxWidth: "100%", height: 40, marginBottom: 12, fontSize: 15 }}
+          >
+            Add
+          </button>
+        ) : null}
+        <div style={{ display: "flex", gap: 8 }}>
+          <button type="button" onClick={finish} style={{ ...PROFILE_GHOST, height: 40 }}>
+            Skip
+          </button>
+          {step < last ? (
+            <button
+              type="button"
+              className="lobby-play-btn"
+              onClick={next}
+              style={{ ...LOBBY_GOLD_BTN, maxWidth: "none", flex: 1, height: 40, fontSize: 15 }}
+            >
+              {step === 0 ? "Show me" : "Next"}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="lobby-play-btn"
+              onClick={finish}
+              style={{ ...LOBBY_GOLD_BTN, maxWidth: "none", flex: 1, height: 40, fontSize: 15 }}
+            >
+              Done
+            </button>
+          )}
+        </div>
+        <div style={{ marginTop: 10, fontSize: 11, color: "rgba(255,255,255,0.4)" }}>
+          {step + 1} / {last + 1}
+        </div>
+      </div>
+      {step === 1 ? (
+        <button
+          type="button"
+          aria-label="Share"
+          className="ios-hint-pulse"
+          onClick={next}
+          style={{
+            width: "100%",
+            maxWidth: 360,
+            height: 52,
+            borderRadius: 12,
+            border: "1.5px solid rgba(255,255,255,0.22)",
+            background: "rgba(20, 28, 36, 0.96)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-around",
+            padding: "0 18px",
+            cursor: "pointer",
+            marginBottom: 4,
+          }}
+        >
+          <span style={{ width: 22, height: 22, borderRadius: 4, background: "rgba(255,255,255,0.2)" }} />
+          <span style={{ width: 22, height: 22, borderRadius: 11, border: "2px solid rgba(255,255,255,0.28)" }} />
+          <ShareGlyph />
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 function Lobby({
   onStart,
   onRules,
@@ -4879,6 +5075,9 @@ function Lobby({
   const [view, setView] = useState<LobbyView>("main");
   const [selected, setSelected] = useState(4);
   const [popKey, setPopKey] = useState(0);
+  const [iosInstall, setIosInstall] = useState(
+    () => shouldShowIosInstallTutorial()
+  );
 
   function pickCount(n: number) {
     setSelected(n);
@@ -4886,6 +5085,7 @@ function Lobby({
   }
 
   return (
+    <>
     <FeltShell
       center
       overlay={
@@ -5158,6 +5358,15 @@ function Lobby({
         </div>
       </div>
     </FeltShell>
+    {iosInstall ? (
+      <IosInstallTutorial
+        onDone={() => {
+          markIosInstallSeen();
+          setIosInstall(false);
+        }}
+      />
+    ) : null}
+    </>
   );
 }
 
@@ -6893,6 +7102,46 @@ function isStandaloneApp(): boolean {
   return window.matchMedia("(display-mode: standalone)").matches;
 }
 
+function isIosSafariPhone(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  if (!/iphone|ipod/i.test(ua)) return false;
+  if (isStandaloneApp()) return false;
+  if (/CriOS|FxiOS|EdgiOS|OPiOS|OPT\/|Instagram|FBAN|FBAV|Line\//i.test(ua)) return false;
+  return true;
+}
+
+function isReturningCitronsPlayer(): boolean {
+  try {
+    if (String(localStorage.getItem(NAME_KEY) || "").trim()) return true;
+    if (localStorage.getItem(SESSION_KEY)) return true;
+  } catch {
+    return true;
+  }
+  return false;
+}
+
+function shouldShowIosInstallTutorial(): boolean {
+  if (typeof window === "undefined") return false;
+  return isIosSafariPhone() && !iosInstallSeen() && !isReturningCitronsPlayer();
+}
+
+function iosInstallSeen(): boolean {
+  try {
+    return localStorage.getItem(IOS_INSTALL_KEY) === "1";
+  } catch {
+    return true;
+  }
+}
+
+function markIosInstallSeen() {
+  try {
+    localStorage.setItem(IOS_INSTALL_KEY, "1");
+  } catch {
+    /* ignore */
+  }
+}
+
 function pushSupported(): boolean {
   return (
     typeof window !== "undefined" &&
@@ -6988,7 +7237,10 @@ function dismissInvitePrompt() {
 
 function needsInviteSetup(): boolean {
   if (typeof window === "undefined") return false;
-  if (isIosDevice() && !isStandaloneApp()) return true;
+  if (isIosDevice() && !isStandaloneApp()) {
+    if (iosInstallSeen()) return false;
+    return true;
+  }
   if (!pushSupported()) return false;
   return Notification.permission !== "granted";
 }
@@ -7166,6 +7418,9 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   const [inviteNeedPermission, setInviteNeedPermission] = useState(false);
   const [inviteNeedInstall, setInviteNeedInstall] = useState(false);
   const [invitePromptOpen, setInvitePromptOpen] = useState(false);
+  const [iosInstall, setIosInstall] = useState(
+    () => shouldShowIosInstallTutorial()
+  );
 
   const wsRef = useRef<WebSocket | null>(null);
   const pingRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -7935,7 +8190,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       return;
     }
     if (screen !== "pick" && screen !== "waiting") return;
-    if (inviteOpen || createOpen) return;
+    if (inviteOpen || createOpen || iosInstall) return;
     if (invitePromptDismissed() || !needsInviteSetup()) {
       setInvitePromptOpen(false);
       return;
@@ -7943,7 +8198,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     setInviteNeedInstall(isIosDevice() && !isStandaloneApp());
     setInviteNeedPermission(pushSupported() && Notification.permission !== "granted");
     setInvitePromptOpen(true);
-  }, [screen, auth.loaded, auth.user, inviteOpen, createOpen]);
+  }, [screen, auth.loaded, auth.user, inviteOpen, createOpen, iosInstall]);
 
   useEffect(() => {
     if (screen !== "pick") setCreateOpen(false);
@@ -8247,7 +8502,11 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   ) : null;
 
   const invitePrompt =
-    invitePromptOpen && !inviteOpen && !createOpen && (screen === "pick" || screen === "waiting") ? (
+    invitePromptOpen &&
+    !inviteOpen &&
+    !createOpen &&
+    !iosInstall &&
+    (screen === "pick" || screen === "waiting") ? (
       <InviteEnablePrompt
         busy={inviteBusy}
         needInstall={isIosDevice() && !isStandaloneApp()}
@@ -8258,6 +8517,16 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
           dismissInvitePrompt();
           setInvitePromptOpen(false);
           setInviteMsg("");
+        }}
+      />
+    ) : null;
+
+  const iosInstallUi =
+    iosInstall && (screen === "pick" || screen === "waiting") ? (
+      <IosInstallTutorial
+        onDone={() => {
+          markIosInstallSeen();
+          setIosInstall(false);
         }}
       />
     ) : null;
@@ -8465,6 +8734,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
           </div>
         ) : null}
         {invitePrompt}
+        {iosInstallUi}
       </>
     );
   }
@@ -8854,6 +9124,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         {droppedOverlay}
       </FeltShell>
       {invitePrompt}
+      {iosInstallUi}
     </>
   }
 
