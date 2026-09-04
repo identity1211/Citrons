@@ -1310,6 +1310,12 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({ players: leaderboard.top(), matches: leaderboard.matches() }));
     return;
   }
+  if (path === "/stats") {
+    const q = new URL(req.url || "/", "http://citrons.local").searchParams.get("id");
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ player: leaderboard.stats(q) }));
+    return;
+  }
   if (path === "/push/vapid") {
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
     res.end(JSON.stringify({ publicKey: push.publicKey() }));

@@ -114,30 +114,73 @@ function numRecent(list) {
   return rows.slice(-RECENT_MAX);
 }
 
+function emptySeason() {
+  return { games: 0, wins: 0, lasts: 0 };
+}
+
+function numSeason(v) {
+  if (!v || typeof v !== "object") return emptySeason();
+  return { games: num(v.games), wins: num(v.wins), lasts: num(v.lasts) };
+}
+
+function seasonHasData(s) {
+  return !!(s && (num(s.games) || num(s.wins) || num(s.lasts)));
+}
+
 function normalizeRow(raw) {
   const prev = raw && typeof raw === "object" ? raw : {};
-  const places = numPlaces(prev.places);
-  const fields = numFields(prev.fields);
-  const points = num(prev.points);
+  const name = sanitizeName(prev.name);
+  const avatar = sanitizeAvatar(prev.avatar);
+  if (prev.season1 && typeof prev.season1 === "object") {
+    const places = numPlaces(prev.places);
+    const fields = numFields(prev.fields);
+    const points = num(prev.points);
+    return {
+      name,
+      avatar,
+      season1: numSeason(prev.season1),
+      points,
+      games: num(prev.games),
+      wins: num(prev.wins) || places[0],
+      lasts: num(prev.lasts),
+      places,
+      fields,
+      beaten: num(prev.beaten) || points,
+      faced: num(prev.faced),
+      streak: num(prev.streak),
+      bestStreak: num(prev.bestStreak),
+      lastPlace: num(prev.lastPlace),
+      lastField: num(prev.lastField),
+      lastPoints: num(prev.lastPoints),
+      lastPlayedAt: num(prev.lastPlayedAt) || num(prev.updatedAt),
+      updatedAt: num(prev.updatedAt) || Date.now(),
+      recent: numRecent(prev.recent),
+    };
+  }
   return {
-    name: sanitizeName(prev.name),
-    avatar: sanitizeAvatar(prev.avatar),
-    points,
-    games: num(prev.games),
-    wins: num(prev.wins) || places[0],
-    lasts: num(prev.lasts),
-    places,
-    fields,
-    beaten: num(prev.beaten) || points,
-    faced: num(prev.faced),
-    streak: num(prev.streak),
-    bestStreak: num(prev.bestStreak),
-    lastPlace: num(prev.lastPlace),
-    lastField: num(prev.lastField),
-    lastPoints: num(prev.lastPoints),
-    lastPlayedAt: num(prev.lastPlayedAt) || num(prev.updatedAt),
+    name,
+    avatar,
+    season1: {
+      games: num(prev.games),
+      wins: num(prev.wins) || numPlaces(prev.places)[0],
+      lasts: num(prev.lasts),
+    },
+    points: 0,
+    games: 0,
+    wins: 0,
+    lasts: 0,
+    places: emptyPlaces(),
+    fields: emptyFields(),
+    beaten: 0,
+    faced: 0,
+    streak: 0,
+    bestStreak: 0,
+    lastPlace: 0,
+    lastField: 0,
+    lastPoints: 0,
+    lastPlayedAt: 0,
     updatedAt: num(prev.updatedAt) || Date.now(),
-    recent: numRecent(prev.recent),
+    recent: [],
   };
 }
 
@@ -170,6 +213,7 @@ function load() {
       }
     }
     liftMatches();
+    saveSafe();
   } catch {
     store = { users: {}, matches: 0 };
   }
@@ -232,6 +276,7 @@ function bump(userId, name, avatar, { place, field }) {
   store.users[id] = {
     name: sanitizeName(name) || prev.name,
     avatar: sanitizeAvatar(avatar) || prev.avatar,
+    season1: prev.season1 || emptySeason(),
     points: prev.points + pts,
     games: prev.games + 1,
     wins: prev.wins + (win ? 1 : 0),
@@ -279,7 +324,7 @@ function rowFromClerkUser(user) {
     name: meta.name || [user.first_name, user.last_name].filter(Boolean).join(" ") || user.username,
     avatar: meta.avatar || user.image_url,
   });
-  if (row.games <= 0 && row.wins <= 0 && row.points <= 0) return null;
+  if (row.games <= 0 && row.wins <= 0 && row.points <= 0 && !seasonHasData(row.season1)) return null;
   const id = sanitizeId(user.id);
   if (!id) return null;
   return { id, row };
@@ -290,6 +335,7 @@ function citronsPayload(row) {
   return {
     name: n.name,
     avatar: n.avatar,
+    season1: n.season1,
     points: n.points,
     games: n.games,
     wins: n.wins,
@@ -386,7 +432,12 @@ function mergeClerkRow(parsed) {
   const next = normalizeRow(parsed.row);
   const prev = store.users[parsed.id];
   if (rowNewer(next, prev)) {
-    store.users[parsed.id] = { ...next, recent: (prev && prev.recent) || next.recent || [] };
+    const season1 = seasonHasData(next.season1) ? next.season1 : (prev && prev.season1) || next.season1;
+    store.users[parsed.id] = {
+      ...next,
+      season1,
+      recent: (prev && prev.recent) || next.recent || [],
+    };
     pending.delete(parsed.id);
     return true;
   }
@@ -477,6 +528,7 @@ function top(limit) {
         lasts: u.lasts,
       };
     })
+    .filter((row) => row.games > 0 || row.points > 0)
     .sort(
       (a, b) =>
         b.points - a.points ||
@@ -490,6 +542,23 @@ function top(limit) {
 
 function matches() {
   return num(store.matches);
+}
+
+function stats(userId) {
+  const id = sanitizeId(userId);
+  const u = id ? normalizeRow(store.users[id] || { name: "Player" }) : normalizeRow({});
+  return {
+    id: id || "",
+    name: u.name,
+    avatar: u.avatar,
+    season1: { games: u.season1.games, wins: u.season1.wins },
+    season: {
+      games: u.games,
+      points: u.points,
+      wins: u.wins,
+      lasts: u.lasts,
+    },
+  };
 }
 
 function info() {
@@ -516,4 +585,4 @@ function startSyncLoop() {
 
 load();
 
-module.exports = { recordGame, top, matches, hydrateFromClerk, info, startSyncLoop };
+module.exports = { recordGame, top, matches, stats, hydrateFromClerk, info, startSyncLoop };

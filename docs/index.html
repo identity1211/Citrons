@@ -2943,9 +2943,98 @@ const PROFILE_GHOST: CSSProperties = {
   flexShrink: 0,
 };
 
+function StatPair({ label, value }: { label: string; value: number }) {
+  return (
+    <div style={{ flex: 1, textAlign: "center" }}>
+      <div style={{ color: "#f1c40f", fontWeight: 800, fontSize: 22, lineHeight: 1 }}>{value}</div>
+      <div style={{ marginTop: 4, color: "rgba(255,255,255,0.55)", fontSize: 11, fontWeight: 600 }}>{label}</div>
+    </div>
+  );
+}
+
+function PlayerStatsBody({ userId }: { userId: string }) {
+  const [data, setData] = useState<{
+    season1: { games: number; wins: number };
+    season: { games: number; points: number; wins: number };
+  } | null>(null);
+  const [fail, setFail] = useState("");
+
+  useEffect(() => {
+    let stop = false;
+    void (async () => {
+      try {
+        const res = await fetch(httpUrlFromWs(defaultWsUrl(), `/stats?id=${encodeURIComponent(userId)}`));
+        const json = await res.json();
+        if (stop) return;
+        const p = json && json.player;
+        setData({
+          season1: { games: Number(p?.season1?.games) || 0, wins: Number(p?.season1?.wins) || 0 },
+          season: {
+            games: Number(p?.season?.games) || 0,
+            points: Number(p?.season?.points) || 0,
+            wins: Number(p?.season?.wins) || 0,
+          },
+        });
+        setFail("");
+      } catch {
+        if (!stop) setFail("Couldn't load stats");
+      }
+    })();
+    return () => {
+      stop = true;
+    };
+  }, [userId]);
+
+  if (fail) {
+    return <div style={{ fontSize: 13, color: "#f5b7b1", marginBottom: 8 }}>{fail}</div>;
+  }
+  if (!data) {
+    return (
+      <div style={{ fontSize: 13, color: "rgba(255,255,255,0.62)", marginBottom: 8, padding: 12 }}>Loading…</div>
+    );
+  }
+  return (
+    <div style={{ textAlign: "left", marginBottom: 4 }}>
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 800,
+          letterSpacing: 1.1,
+          textTransform: "uppercase",
+          color: "rgba(255,255,255,0.5)",
+          marginBottom: 8,
+        }}
+      >
+        Season 1
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        <StatPair label="games" value={data.season1.games} />
+        <StatPair label={data.season1.wins === 1 ? "win" : "wins"} value={data.season1.wins} />
+      </div>
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 800,
+          letterSpacing: 1.1,
+          textTransform: "uppercase",
+          color: "rgba(255,255,255,0.5)",
+          marginBottom: 8,
+        }}
+      >
+        Now
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <StatPair label="games" value={data.season.games} />
+        <StatPair label={data.season.points === 1 ? "pt" : "pts"} value={data.season.points} />
+      </div>
+    </div>
+  );
+}
+
 function ProfileButton() {
   const { loaded, user, error } = useClerkAuth();
   const [open, setOpen] = useState(false);
+  const [pane, setPane] = useState<"profile" | "stats">("profile");
   const [nick, setNick] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
@@ -2954,6 +3043,10 @@ function ProfileButton() {
   useEffect(() => {
     if (user) setNick(clerkNickname(user));
   }, [user]);
+
+  useEffect(() => {
+    if (!open) setPane("profile");
+  }, [open]);
 
   async function run(fn: () => Promise<void>) {
     setBusy(true);
@@ -3023,9 +3116,20 @@ function ProfileButton() {
             style={PROFILE_PANEL}
           >
             <div style={{ fontFamily: 'Georgia, "Times New Roman", serif', fontSize: 18, fontWeight: 700, marginBottom: 8 }}>
-              Profile
+              {pane === "stats" ? "Stats" : "Profile"}
             </div>
-            {user ? (
+            {user && pane === "stats" ? (
+              <>
+                <PlayerStatsBody userId={String(user.id || "")} />
+                <button
+                  type="button"
+                  onClick={() => setPane("profile")}
+                  style={{ ...PROFILE_GHOST, marginTop: 8, height: 32, fontSize: 13 }}
+                >
+                  Back
+                </button>
+              </>
+            ) : user ? (
               <>
                 <div style={{ display: "flex", justifyContent: "center", marginBottom: 8 }}>
                   <AvatarBubble src={user.imageUrl} name={nickName} size={56} />
@@ -3086,6 +3190,13 @@ function ProfileButton() {
                     });
                   }}
                 />
+                <button
+                  type="button"
+                  onClick={() => setPane("stats")}
+                  style={{ ...PROFILE_GHOST, marginTop: 8 }}
+                >
+                  Stats
+                </button>
                 <button
                   type="button"
                   disabled={busy}
