@@ -4,6 +4,10 @@ import { useHostTheme, Text, Row, Spacer } from "cursor/canvas";
 const JOIN_KEY = "citrons-join";
 const INVITE_PROMPT_KEY = "citrons-invite-prompt-dismissed";
 const IOS_INSTALL_KEY = "citrons-ios-install-seen";
+const HOME_ICON_VER_KEY = "citrons-home-icon-ver";
+const HOME_ICON_LATER_KEY = "citrons-home-icon-later";
+/** Bump when apple-touch-icon.png or the Home Screen name changes. Keep at 1 until that happens so existing installs are not nagged. Also bump ?v= on the apple-touch-icon link in scripts/build-site.pl. */
+const HOME_ICON_VERSION = 1;
 
 function rememberJoinFromUrl() {
   if (typeof window === "undefined") return;
@@ -2955,6 +2959,7 @@ function ProfileButton() {
   const [pane, setPane] = useState<"profile" | "stats">("profile");
   const [nick, setNick] = useState("");
   const [busy, setBusy] = useState(false);
+  const [reloading, setReloading] = useState(false);
   const [msg, setMsg] = useState("");
   const fileRef = useRef<HTMLInputElement | null>(null);
 
@@ -3160,8 +3165,19 @@ function ProfileButton() {
             )}
             <button
               type="button"
-              onClick={() => setOpen(false)}
+              disabled={reloading}
+              onClick={() => {
+                setReloading(true);
+                void reloadCitronsApp();
+              }}
               style={{ ...PROFILE_GHOST, marginTop: 8, height: 32, fontSize: 13 }}
+            >
+              {reloading ? "Reloading…" : "Reload game"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              style={{ ...PROFILE_GHOST, marginTop: 6, height: 32, fontSize: 13 }}
             >
               Close
             </button>
@@ -4959,6 +4975,67 @@ function IosInstallTutorial({ onDone }: { onDone: () => void }) {
   );
 }
 
+function HomeIconUpdateNotice({
+  onGotIt,
+  onLater,
+}: {
+  onGotIt: () => void;
+  onLater: () => void;
+}) {
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 125,
+        background: "rgba(8, 18, 10, 0.62)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "16px 12px",
+        boxSizing: "border-box",
+      }}
+    >
+      <div
+        role="dialog"
+        aria-labelledby="home-icon-title"
+        style={{
+          ...PROFILE_PANEL,
+          width: "min(340px, 100%)",
+          padding: "18px 16px 14px",
+        }}
+      >
+        <div
+          id="home-icon-title"
+          style={{
+            fontFamily: 'Georgia, "Times New Roman", serif',
+            fontSize: 20,
+            fontWeight: 700,
+            marginBottom: 8,
+          }}
+        >
+          Update your Home Screen icon
+        </div>
+        <div style={{ fontSize: 14, lineHeight: 1.45, color: "rgba(255,255,255,0.78)", marginBottom: 14 }}>
+          This update changes the Citrons icon. iPhone does not refresh it on its own. Delete the old Citrons
+          icon, then open the site in Safari and use Share → Add to Home Screen.
+        </div>
+        <button
+          type="button"
+          className="lobby-play-btn"
+          onClick={onGotIt}
+          style={{ ...LOBBY_GOLD_BTN, maxWidth: "100%", height: 44, marginBottom: 8 }}
+        >
+          Got it
+        </button>
+        <button type="button" onClick={onLater} style={{ ...PROFILE_GHOST, height: 40 }}>
+          Remind me later
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function Lobby({
   onStart,
   onRules,
@@ -4973,6 +5050,9 @@ function Lobby({
   const [popKey, setPopKey] = useState(0);
   const [iosInstall, setIosInstall] = useState(
     () => shouldShowIosInstallTutorial()
+  );
+  const [homeIconUpdate, setHomeIconUpdate] = useState(
+    () => shouldShowHomeIconUpdate()
   );
 
   function pickCount(n: number) {
@@ -5259,6 +5339,17 @@ function Lobby({
         onDone={() => {
           markIosInstallSeen();
           setIosInstall(false);
+        }}
+      />
+    ) : homeIconUpdate ? (
+      <HomeIconUpdateNotice
+        onGotIt={() => {
+          markHomeIconCurrent();
+          setHomeIconUpdate(false);
+        }}
+        onLater={() => {
+          dismissHomeIconUpdate();
+          setHomeIconUpdate(false);
         }}
       />
     ) : null}
@@ -6998,6 +7089,57 @@ function isStandaloneApp(): boolean {
   return window.matchMedia("(display-mode: standalone)").matches;
 }
 
+function isIosPhoneStandalone(): boolean {
+  if (typeof navigator === "undefined") return false;
+  if (!/iphone|ipod/i.test(navigator.userAgent || "")) return false;
+  return isStandaloneApp();
+}
+
+function storedHomeIconVersion(): number {
+  try {
+    const n = parseInt(localStorage.getItem(HOME_ICON_VER_KEY) || "0", 10);
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+  } catch {
+    return HOME_ICON_VERSION;
+  }
+}
+
+function homeIconUpdateLater(): boolean {
+  try {
+    return sessionStorage.getItem(HOME_ICON_LATER_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function shouldShowHomeIconUpdate(): boolean {
+  if (typeof window === "undefined") return false;
+  if (!isIosPhoneStandalone()) return false;
+  if (homeIconUpdateLater()) return false;
+  const stored = storedHomeIconVersion();
+  if (HOME_ICON_VERSION <= 1) {
+    if (stored === 0) markHomeIconCurrent();
+    return false;
+  }
+  return HOME_ICON_VERSION > stored;
+}
+
+function markHomeIconCurrent() {
+  try {
+    localStorage.setItem(HOME_ICON_VER_KEY, String(HOME_ICON_VERSION));
+  } catch {
+    /* ignore */
+  }
+}
+
+function dismissHomeIconUpdate() {
+  try {
+    sessionStorage.setItem(HOME_ICON_LATER_KEY, "1");
+  } catch {
+    /* ignore */
+  }
+}
+
 function isIosSafariPhone(): boolean {
   if (typeof navigator === "undefined") return false;
   const ua = navigator.userAgent || "";
@@ -7077,6 +7219,25 @@ function registerCitronsSW(): Promise<ServiceWorkerRegistration | null> {
     swRegisterPromise = navigator.serviceWorker.register(src).catch(() => null);
   }
   return swRegisterPromise;
+}
+
+async function reloadCitronsApp() {
+  try {
+    if ("serviceWorker" in navigator) {
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (reg) {
+        await Promise.race([
+          reg.update(),
+          new Promise((resolve) => {
+            window.setTimeout(resolve, 1500);
+          }),
+        ]);
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  window.location.reload();
 }
 
 async function fetchVapidKey(wsUrl: string): Promise<string> {
@@ -7316,6 +7477,9 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   const [invitePromptOpen, setInvitePromptOpen] = useState(false);
   const [iosInstall, setIosInstall] = useState(
     () => shouldShowIosInstallTutorial()
+  );
+  const [homeIconUpdate, setHomeIconUpdate] = useState(
+    () => shouldShowHomeIconUpdate()
   );
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -8086,7 +8250,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       return;
     }
     if (screen !== "pick" && screen !== "waiting") return;
-    if (inviteOpen || createOpen || iosInstall) return;
+    if (inviteOpen || createOpen || iosInstall || homeIconUpdate) return;
     if (invitePromptDismissed() || !needsInviteSetup()) {
       setInvitePromptOpen(false);
       return;
@@ -8094,7 +8258,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     setInviteNeedInstall(isIosDevice() && !isStandaloneApp());
     setInviteNeedPermission(pushSupported() && Notification.permission !== "granted");
     setInvitePromptOpen(true);
-  }, [screen, auth.loaded, auth.user, inviteOpen, createOpen, iosInstall]);
+  }, [screen, auth.loaded, auth.user, inviteOpen, createOpen, iosInstall, homeIconUpdate]);
 
   useEffect(() => {
     if (screen !== "pick") setCreateOpen(false);
@@ -8402,6 +8566,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     !inviteOpen &&
     !createOpen &&
     !iosInstall &&
+    !homeIconUpdate &&
     (screen === "pick" || screen === "waiting") ? (
       <InviteEnablePrompt
         busy={inviteBusy}
@@ -8423,6 +8588,20 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         onDone={() => {
           markIosInstallSeen();
           setIosInstall(false);
+        }}
+      />
+    ) : null;
+
+  const homeIconUi =
+    homeIconUpdate && !iosInstall && !dropped && (screen === "pick" || screen === "waiting") ? (
+      <HomeIconUpdateNotice
+        onGotIt={() => {
+          markHomeIconCurrent();
+          setHomeIconUpdate(false);
+        }}
+        onLater={() => {
+          dismissHomeIconUpdate();
+          setHomeIconUpdate(false);
         }}
       />
     ) : null;
@@ -8631,6 +8810,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         ) : null}
         {invitePrompt}
         {iosInstallUi}
+        {homeIconUi}
       </>
     );
   }
@@ -9021,7 +9201,9 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       </FeltShell>
       {invitePrompt}
       {iosInstallUi}
+      {homeIconUi}
     </>
+    );
   }
 
   if (screen === "table" && view) {
