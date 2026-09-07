@@ -28,7 +28,7 @@ function roomNameForCode(code) {
     .replace(/[^A-Z0-9]/g, "")
     .slice(0, 12);
   if (!clean) return "";
-  return `citrons-${clean.toLowerCase()}`;
+  return `cv2-${clean.toLowerCase()}`;
 }
 
 function roomUrl(name) {
@@ -81,9 +81,8 @@ async function ensureRoom(code) {
         start_audio_off: true,
         start_video_off: true,
         max_participants: 24,
-        permissions: {
-          canSend: ["audio"],
-        },
+        // Always prefer SFU (custom call-object audio is unreliable in 1:1 P2P).
+        sfu_switchover: 1,
       },
     });
   } catch (err) {

@@ -7677,23 +7677,35 @@ function voiceDeviceId(): string {
   }
 }
 
-/** iOS Safari / Android Chrome need a gesture-tied audio unlock before remote tracks play. */
+/** Keep one AudioContext alive for the tab — closing it kills mobile remote playback. */
+let voiceAudioCtx: AudioContext | null = null;
+
 async function unlockMobileAudio() {
   try {
     const AC = window.AudioContext || (window as any).webkitAudioContext;
     if (!AC) return;
-    const ctx = new AC();
-    if (ctx.state === "suspended") await ctx.resume();
-    const buf = ctx.createBuffer(1, 1, 22050);
-    const src = ctx.createBufferSource();
+    if (!voiceAudioCtx || voiceAudioCtx.state === "closed") {
+      voiceAudioCtx = new AC();
+    }
+    if (voiceAudioCtx.state === "suspended") await voiceAudioCtx.resume();
+    const buf = voiceAudioCtx.createBuffer(1, 1, 22050);
+    const src = voiceAudioCtx.createBufferSource();
     src.buffer = buf;
-    src.connect(ctx.destination);
+    src.connect(voiceAudioCtx.destination);
     src.start(0);
-    window.setTimeout(() => {
-      void ctx.close().catch(() => {});
-    }, 400);
   } catch {
     /* ignore */
+  }
+}
+
+function replayVoiceElements(els: Map<string, HTMLAudioElement>) {
+  for (const el of els.values()) {
+    try {
+      const play = el.play();
+      if (play && typeof play.catch === "function") play.catch(() => {});
+    } catch {
+      /* ignore */
+    }
   }
 }
 
@@ -7715,6 +7727,13 @@ function VoiceDock({
             ? "Retry voice"
             : "Join voice";
   const hot = voice.phase === "live";
+  const hint =
+    voice.message ||
+    (voice.phase === "muted" || voice.phase === "live"
+      ? voice.peers < 2
+        ? "Only you in voice — other device must Join voice too"
+        : "Both must tap Mic on to talk"
+      : undefined);
   return (
     <div
       style={{
@@ -7751,19 +7770,19 @@ function VoiceDock({
           </span>
         ) : null}
       </button>
-      {voice.message ? (
+      {hint ? (
         <div
           style={{
-            maxWidth: 160,
+            maxWidth: 200,
             padding: "4px 8px",
             borderRadius: 8,
             background: "rgba(0,0,0,0.55)",
-            color: "#f5b7b1",
+            color: voice.message ? "#f5b7b1" : "rgba(245,240,230,0.85)",
             fontSize: 11,
             lineHeight: 1.3,
           }}
         >
-          {voice.message}
+          {hint}
         </div>
       ) : null}
     </div>
@@ -7861,24 +7880,53 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     voiceAudioElsRef.current.clear();
   }
 
-  function playRemoteVoiceTrack(evt: any) {
-    try {
-      if (!evt || !evt.track || evt.track.kind !== "audio") return;
-      if (evt.participant && evt.participant.local) return;
-      const id = String(evt.track.id || `${evt.participant?.session_id || "p"}-audio`);
-      let el = voiceAudioElsRef.current.get(id);
-      if (!el) {
-        el = document.createElement("audio");
-        el.autoplay = true;
-        el.setAttribute("playsinline", "true");
-        el.setAttribute("webkit-playsinline", "true");
-        el.style.display = "none";
-        document.body.appendChild(el);
-        voiceAudioElsRef.current.set(id, el);
-      }
-      el.srcObject = new MediaStream([evt.track]);
+  function ensureRemoteAudioEl(sessionId: string): HTMLAudioElement {
+    let el = voiceAudioElsRef.current.get(sessionId);
+    if (el) return el;
+    el = document.createElement("audio");
+    el.autoplay = true;
+    el.setAttribute("playsinline", "true");
+    el.setAttribute("webkit-playsinline", "true");
+    el.dataset.participantId = sessionId;
+    el.style.display = "none";
+    document.body.appendChild(el);
+    voiceAudioElsRef.current.set(sessionId, el);
+    return el;
+  }
+
+  function attachRemoteAudioTrack(sessionId: string, track: MediaStreamTrack | null | undefined) {
+    if (!sessionId || !track || track.kind !== "audio") return;
+    const el = ensureRemoteAudioEl(sessionId);
+    const existing = el.srcObject instanceof MediaStream ? el.srcObject.getAudioTracks()[0] : null;
+    if (existing === track) {
       const play = el.play();
       if (play && typeof play.catch === "function") play.catch(() => {});
+      return;
+    }
+    el.srcObject = new MediaStream([track]);
+    const play = el.play();
+    if (play && typeof play.catch === "function") {
+      play.catch(() => {
+        setVoiceUi((prev) => ({
+          ...prev,
+          message: prev.phase === "off" ? prev.message : "Tap Mic on/off once to unlock speakers",
+        }));
+      });
+    }
+  }
+
+  function playRemoteVoiceTrack(evt: any) {
+    try {
+      if (!evt || !evt.participant || evt.participant.local) return;
+      if (evt.type && evt.type !== "audio") return;
+      const sessionId = String(evt.participant.session_id || "");
+      const track =
+        evt.track ||
+        (evt.participant.tracks &&
+          evt.participant.tracks.audio &&
+          (evt.participant.tracks.audio.persistentTrack || evt.participant.tracks.audio.track));
+      if (!sessionId || !track || track.kind !== "audio") return;
+      attachRemoteAudioTrack(sessionId, track);
     } catch {
       /* ignore */
     }
@@ -7886,25 +7934,66 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
 
   function stopRemoteVoiceTrack(evt: any) {
     try {
-      if (!evt || !evt.track) return;
-      const id = String(evt.track.id || `${evt.participant?.session_id || "p"}-audio`);
-      const el = voiceAudioElsRef.current.get(id);
+      const sessionId = String((evt && evt.participant && evt.participant.session_id) || "");
+      if (!sessionId) return;
+      // Only remove if this participant left; track-stopped can be transient.
+      if (evt && evt.participant && !evt.participant.local) {
+        const call = voiceCallRef.current;
+        const stillThere = call && call.participants && call.participants()[sessionId];
+        if (stillThere) return;
+      }
+      const el = voiceAudioElsRef.current.get(sessionId);
       if (!el) return;
       el.pause();
       el.srcObject = null;
       el.remove();
-      voiceAudioElsRef.current.delete(id);
+      voiceAudioElsRef.current.delete(sessionId);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function subscribeRemoteAudio(call: any, participant: any) {
+    if (!call || !participant || participant.local || !participant.session_id) return;
+    try {
+      call.updateParticipant(participant.session_id, {
+        setSubscribedTracks: { audio: true, video: false, screenVideo: false, screenAudio: false },
+      });
+    } catch {
+      /* ignore */
+    }
+    try {
+      const audio = participant.tracks && participant.tracks.audio;
+      const track = audio && (audio.persistentTrack || audio.track);
+      if (track) attachRemoteAudioTrack(participant.session_id, track);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function syncAllRemoteAudio(call: any) {
+    try {
+      const parts = call.participants() || {};
+      for (const p of Object.values(parts) as any[]) {
+        if (!p || p.local) continue;
+        subscribeRemoteAudio(call, p);
+      }
     } catch {
       /* ignore */
     }
   }
 
   function syncVoicePeers(call: any) {
-    setVoiceUi((prev) => ({ ...prev, peers: countVoicePeers(call) }));
+    setVoiceUi((prev) => ({
+      ...prev,
+      peers: countVoicePeers(call),
+      message: undefined,
+    }));
   }
 
   function localMicOn(call: any): boolean {
     try {
+      if (typeof call.localAudio === "function") return !!call.localAudio();
       const local = call.participants().local;
       if (!local) return false;
       const trackState = local.tracks && local.tracks.audio && local.tracks.audio.state;
@@ -7960,22 +8049,33 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
 
     call.on("joined-meeting", () => {
       onState();
-      // Attach any tracks that already started before our listeners.
-      try {
-        const parts = call.participants();
-        for (const p of Object.values(parts || {}) as any[]) {
-          if (!p || p.local) continue;
-          const track = p.tracks && p.tracks.audio && p.tracks.audio.persistentTrack;
-          if (track) playRemoteVoiceTrack({ track, participant: p });
-          else if (p.audioTrack) playRemoteVoiceTrack({ track: p.audioTrack, participant: p });
+      syncAllRemoteAudio(call);
+    });
+    call.on("participant-joined", (ev: any) => {
+      syncVoicePeers(call);
+      if (ev && ev.participant) subscribeRemoteAudio(call, ev.participant);
+    });
+    call.on("participant-left", (ev: any) => {
+      syncVoicePeers(call);
+      const sessionId = ev && ev.participant && ev.participant.session_id;
+      if (sessionId) {
+        const el = voiceAudioElsRef.current.get(sessionId);
+        if (el) {
+          try {
+            el.pause();
+            el.srcObject = null;
+            el.remove();
+          } catch {
+            /* ignore */
+          }
+          voiceAudioElsRef.current.delete(sessionId);
         }
-      } catch {
-        /* ignore */
       }
     });
-    call.on("participant-joined", () => syncVoicePeers(call));
-    call.on("participant-left", () => syncVoicePeers(call));
-    call.on("participant-updated", onState);
+    call.on("participant-updated", (ev: any) => {
+      onState();
+      if (ev && ev.participant && !ev.participant.local) subscribeRemoteAudio(call, ev.participant);
+    });
     call.on("track-started", playRemoteVoiceTrack);
     call.on("track-stopped", stopRemoteVoiceTrack);
     call.on("error", (ev: any) => {
@@ -8001,6 +8101,8 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       });
       voiceJoiningRef.current = false;
       onState();
+      syncAllRemoteAudio(call);
+      replayVoiceElements(voiceAudioElsRef.current);
     } catch (err) {
       if (voiceCallRef.current === call) {
         voiceCallRef.current = null;
@@ -8035,12 +8137,15 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   }
 
   async function onVoiceToggle() {
+    await unlockMobileAudio();
+    replayVoiceElements(voiceAudioElsRef.current);
     const call = voiceCallRef.current;
     if (call) {
       try {
-        await unlockMobileAudio();
         const micOn = localMicOn(call);
         await call.setLocalAudio(!micOn);
+        syncAllRemoteAudio(call);
+        replayVoiceElements(voiceAudioElsRef.current);
         setVoiceUi({
           phase: micOn ? "muted" : "live",
           peers: countVoicePeers(call),
@@ -8055,7 +8160,6 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       return;
     }
     try {
-      await unlockMobileAudio();
       requestVoiceJoin();
     } catch (e) {
       voiceJoiningRef.current = false;
