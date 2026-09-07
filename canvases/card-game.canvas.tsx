@@ -7852,7 +7852,13 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         /* ignore */
       }
     }
-    void call.setLocalAudio(on).catch(() => {});
+    try {
+      // Safari daily-js often returns the call object, not a Promise.
+      const ret = call.setLocalAudio(on);
+      if (ret && typeof ret.then === "function") void ret.catch(() => {});
+    } catch {
+      /* ignore */
+    }
   }
 
   function clearVoiceAudioElements() {
@@ -7989,7 +7995,8 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     voiceCallRef.current = null;
     if (call) {
       try {
-        await call.setLocalAudio(false);
+        const ret = call.setLocalAudio(false);
+        if (ret && typeof ret.then === "function") await ret;
       } catch {
         /* ignore */
       }
