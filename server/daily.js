@@ -101,7 +101,7 @@ function forgetRoom(code) {
   if (name) cache.delete(name);
 }
 
-async function meetingToken({ code, userName, userId }) {
+async function meetingToken({ code, userName, userId, listenOnly }) {
   if (!ready()) throw new Error("Voice chat is not configured");
   const props = {
     user_name:
@@ -116,6 +116,10 @@ async function meetingToken({ code, userName, userId }) {
     start_audio_off: true,
     start_video_off: true,
     is_owner: false,
+    // Watchers: hear only. Seated players may unmute later.
+    permissions: listenOnly
+      ? { hasPresence: true, canSend: false }
+      : { hasPresence: true, canSend: ["audio"] },
   };
 
   async function mint(room) {
@@ -130,14 +134,14 @@ async function meetingToken({ code, userName, userId }) {
   try {
     const token = await mint(room);
     lastError = "";
-    return { url: room.url, token, room: room.name };
+    return { url: room.url, token, room: room.name, listenOnly: !!listenOnly };
   } catch (err) {
     // Stale cache after Daily expired/deleted the room — recreate once.
     forgetRoom(code);
     room = await ensureRoom(code);
     const token = await mint(room);
     lastError = "";
-    return { url: room.url, token, room: room.name };
+    return { url: room.url, token, room: room.name, listenOnly: !!listenOnly };
   }
 }
 

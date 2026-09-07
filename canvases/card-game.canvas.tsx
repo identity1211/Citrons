@@ -7629,29 +7629,45 @@ function replayVoiceElements(els: Map<string, HTMLAudioElement>) {
 
 function VoiceDock({
   voice,
+  listenOnly,
   onToggle,
 }: {
   voice: VoiceUiState;
+  listenOnly?: boolean;
   onToggle: () => void;
 }) {
-  const label =
-    voice.phase === "joining"
-      ? "Joining…"
+  const connected = voice.phase === "muted" || voice.phase === "live";
+  const label = listenOnly
+    ? voice.phase === "joining"
+      ? "Connecting…"
+      : voice.phase === "error"
+        ? "Retry listen"
+        : connected
+          ? "Listening"
+          : "Connecting…"
+    : voice.phase === "joining"
+      ? "Connecting…"
       : voice.phase === "live"
         ? "Mic on"
         : voice.phase === "muted"
           ? "Mic off"
           : voice.phase === "error"
             ? "Retry voice"
-            : "Join voice";
-  const hot = voice.phase === "live";
+            : "Mic off";
+  const hot = !listenOnly && voice.phase === "live";
   const hint =
     voice.message ||
-    (voice.phase === "muted" || voice.phase === "live"
-      ? voice.peers < 2
-        ? "Only you in voice — other device must Join voice too"
-        : "Use headphones. Both need Mic on to talk."
-      : undefined);
+    (connected
+      ? listenOnly
+        ? voice.peers < 2
+          ? "Watching — you can hear the table (chat only)"
+          : "Watching — you can hear players (mic off for watchers)"
+        : voice.peers < 2
+          ? "Voice on — waiting for others"
+          : "Use headphones. Tap Mic on to talk."
+      : voice.phase === "joining"
+        ? "Connecting voice…"
+        : undefined);
   return (
     <div
       style={{
@@ -7674,7 +7690,11 @@ function VoiceDock({
           ...LOBBY_CORNER_BTN,
           position: "static",
           minWidth: 96,
-          background: hot ? "rgba(46, 204, 113, 0.92)" : "rgba(0,0,0,0.42)",
+          background: hot
+            ? "rgba(46, 204, 113, 0.92)"
+            : listenOnly && connected
+              ? "rgba(0,0,0,0.5)"
+              : "rgba(0,0,0,0.42)",
           color: hot ? "#0b1f12" : "#f5f0e6",
           border: hot ? "none" : "1px solid rgba(255,255,255,0.28)",
           opacity: voice.phase === "joining" ? 0.7 : 1,
@@ -7682,7 +7702,7 @@ function VoiceDock({
         }}
       >
         {label}
-        {voice.phase === "muted" || voice.phase === "live" ? (
+        {connected ? (
           <span style={{ marginLeft: 6, opacity: 0.75, fontWeight: 700 }}>
             {voice.peers < 2 ? "solo" : `${voice.peers}`}
           </span>
@@ -7775,6 +7795,8 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   const voiceMicTrackRef = useRef<MediaStreamTrack | null>(null);
   /** UI + mute source of truth — Daily localAudio() lags / lies after mute on some browsers. */
   const voiceMicOnRef = useRef(false);
+  const voiceListenOnlyRef = useRef(false);
+  const voiceAutoCodeRef = useRef("");
   viewRef.current = view;
   screenRef.current = screen;
   inviteOpenRef.current = inviteOpen;
@@ -8014,34 +8036,31 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   }
 
   function stopVoice(message?: string) {
+    voiceAutoCodeRef.current = "";
     void destroyVoiceCall();
     setVoiceUi({ phase: "off", peers: 0, message });
   }
 
-  async function attachDailyCall(url: string, token: string) {
+  async function attachDailyCall(url: string, token: string, opts?: { listenOnly?: boolean }) {
     const Daily = await ensureDailyApi();
+    const listenOnly = !!(opts && opts.listenOnly) || voiceListenOnlyRef.current;
+    voiceListenOnlyRef.current = listenOnly;
     await destroyVoiceCall({ keepMic: true });
 
-    let audioSource: any = true;
-    let micTrack = voiceMicTrackRef.current;
-    if (!micTrack || micTrack.readyState !== "live") {
-      micTrack = await armVoiceMicFromGesture();
-    }
-    if (micTrack && micTrack.readyState === "live") {
-      try {
-        micTrack.enabled = false;
-      } catch {
-        /* ignore */
+    // Auto-join is listen-first (no mic prompt). Players unmute later with a tap.
+    let audioSource: any = false;
+    if (!listenOnly) {
+      let micTrack = voiceMicTrackRef.current;
+      if (micTrack && micTrack.readyState === "live") {
+        try {
+          micTrack.enabled = false;
+        } catch {
+          /* ignore */
+        }
+        audioSource = micTrack;
       }
-      voiceMicTrackRef.current = micTrack;
-      audioSource = micTrack;
     } else {
-      const perm = await queryMicPermission();
-      if (perm === "denied") {
-        voiceJoiningRef.current = false;
-        setVoiceUi({ phase: "error", peers: 0, message: micPermissionDeniedMessage() });
-        return;
-      }
+      releaseVoiceMicTrack();
     }
 
     voiceJoiningRef.current = true;
@@ -8134,8 +8153,15 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     }
   }
 
-  function requestVoiceJoin() {
+  function requestVoiceJoin(opts?: { listenOnly?: boolean }) {
     if (voiceJoiningRef.current) return;
+    if (voiceCallRef.current && voiceRoomRef.current && voiceRoomRef.current === (viewRef.current?.code || "")) {
+      return;
+    }
+    // Allow manual retry after an error.
+    if (voiceUi.phase === "error") {
+      voiceAutoCodeRef.current = "";
+    }
     const ws = wsRef.current;
     if (!ws || ws.readyState !== 1) {
       setVoiceUi({ phase: "error", peers: 0, message: "No connection to the server" });
@@ -8146,22 +8172,36 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       setVoiceUi({ phase: "error", peers: 0, message: "Join a lobby first" });
       return;
     }
+    const listenOnly = opts?.listenOnly ?? !!viewRef.current?.spectator;
+    voiceListenOnlyRef.current = listenOnly;
     voiceJoiningRef.current = true;
     voiceRoomRef.current = code;
+    voiceAutoCodeRef.current = code;
     setVoiceUi({ phase: "joining", peers: 0 });
     const voiceId = `${voiceDeviceId()}-${Date.now().toString(36)}`;
-    send({ type: "voiceJoin", deviceId: voiceDeviceId(), voiceId });
+    send({ type: "voiceJoin", deviceId: voiceDeviceId(), voiceId, listenOnly });
   }
 
   async function onVoiceToggle() {
     await unlockMobileAudio();
     replayVoiceElements(voiceAudioElsRef.current);
+    const listenOnly = voiceListenOnlyRef.current || !!viewRef.current?.spectator;
     const call = voiceCallRef.current;
+
+    // Watchers: tap only unlocks speakers / retries connect — never unmute.
+    if (listenOnly) {
+      if (!call) {
+        requestVoiceJoin({ listenOnly: true });
+        return;
+      }
+      paintVoiceUi(call);
+      return;
+    }
+
     if (call) {
       try {
         const next = !voiceMicOnRef.current;
         if (next) {
-          // Re-ask / refresh mic track on unmute (Safari often revokes quietly).
           const armed = await armVoiceMicFromGesture();
           if (!armed) {
             applyLocalMic(call, false);
@@ -8186,27 +8226,9 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       }
       return;
     }
-    try {
-      const perm = await queryMicPermission();
-      if (perm === "denied") {
-        setVoiceUi({ phase: "error", peers: 0, message: micPermissionDeniedMessage() });
-        return;
-      }
-      const armed = await armVoiceMicFromGesture();
-      if (!armed) {
-        setVoiceUi({ phase: "error", peers: 0, message: micPermissionDeniedMessage() });
-        return;
-      }
-      requestVoiceJoin();
-    } catch (e) {
-      voiceJoiningRef.current = false;
-      releaseVoiceMicTrack();
-      setVoiceUi({
-        phase: "error",
-        peers: 0,
-        message: clerkErrorText(e).slice(0, 80) || micPermissionDeniedMessage(),
-      });
-    }
+
+    // Not connected yet — retry auto voice (no mic required to hear).
+    requestVoiceJoin({ listenOnly: false });
   }
 
   function persistName(n: string) {
@@ -8539,8 +8561,10 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     if (msg.type === "voiceReady" && msg.url && msg.token) {
       void (async () => {
         try {
+          const listenOnly = !!msg.listenOnly || voiceListenOnlyRef.current;
+          voiceListenOnlyRef.current = listenOnly;
           await unlockMobileAudio();
-          await attachDailyCall(String(msg.url), String(msg.token));
+          await attachDailyCall(String(msg.url), String(msg.token), { listenOnly });
         } catch (e) {
           voiceJoiningRef.current = false;
           setVoiceUi({
@@ -8956,6 +8980,24 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       void destroyVoiceCall();
     };
   }, []);
+
+  // Auto-connect voice when entering lobby or table (players + watchers).
+  useEffect(() => {
+    const inMatch = screen === "waiting" || screen === "table";
+    if (!inMatch || !view?.code) return;
+    const listenOnly = !!view.spectator;
+    voiceListenOnlyRef.current = listenOnly;
+    if (voiceCallRef.current && voiceRoomRef.current === view.code) return;
+    if (voiceJoiningRef.current && voiceRoomRef.current === view.code) return;
+    if (voiceAutoCodeRef.current === view.code && voiceUi.phase === "error") return;
+    const t = window.setTimeout(() => {
+      if (screenRef.current !== "waiting" && screenRef.current !== "table") return;
+      if (!viewRef.current || viewRef.current.code !== view.code) return;
+      if (voiceCallRef.current || voiceJoiningRef.current) return;
+      requestVoiceJoin({ listenOnly });
+    }, 250);
+    return () => window.clearTimeout(t);
+  }, [screen, view?.code, view?.spectator]);
 
   useEffect(() => {
     if (screen !== "pick") return;
@@ -9605,7 +9647,11 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         overlay={
           <>
             <WindowButton />
-            <VoiceDock voice={voiceUi} onToggle={() => void onVoiceToggle()} />
+            <VoiceDock
+              voice={voiceUi}
+              listenOnly={!!view.spectator || voiceListenOnlyRef.current}
+              onToggle={() => void onVoiceToggle()}
+            />
             <WaitingMenu onMainMenu={exitWaitingToMenu} onLeaveLobby={leaveWaitingLobby} />
             <div
               style={{
@@ -9984,7 +10030,11 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   if (screen === "table" && view) {
     return (
       <>
-        <VoiceDock voice={voiceUi} onToggle={() => void onVoiceToggle()} />
+        <VoiceDock
+          voice={voiceUi}
+          listenOnly={!!view.spectator || voiceListenOnlyRef.current}
+          onToggle={() => void onVoiceToggle()}
+        />
         {droppedOverlay}
         {error ? (
           <div

@@ -1226,11 +1226,12 @@ async function handleInvite(ws, room, player, userIds) {
   send(ws, { type: "inviteSent", sent: result.sent, failed: result.failed });
 }
 
-async function handleVoiceJoin(ws, room, person, msg) {
+async function handleVoiceJoin(ws, room, person, msg, opts) {
   if (!daily.ready()) return error(ws, "Voice chat is not available yet");
   if (!room || !person) return error(ws, "Join a lobby first");
+  const listenOnly = !!(opts && opts.listenOnly);
   try {
-    // Unique per Join tap so phone + laptop (even same Clerk user) never share one Daily participant.
+    // Unique per Join so phone + laptop (even same Clerk user) never share one Daily participant.
     const voiceId = String((msg && (msg.voiceId || msg.deviceId)) || "")
       .replace(/[^\w-]/g, "")
       .slice(0, 64);
@@ -1238,8 +1239,15 @@ async function handleVoiceJoin(ws, room, person, msg) {
       code: room.code,
       userName: person.name,
       userId: voiceId || `${person.id}-${Date.now()}`,
+      listenOnly,
     });
-    send(ws, { type: "voiceReady", url: creds.url, token: creds.token, room: creds.room });
+    send(ws, {
+      type: "voiceReady",
+      url: creds.url,
+      token: creds.token,
+      room: creds.room,
+      listenOnly,
+    });
   } catch (err) {
     daily.noteError(err);
     error(ws, "Couldn't start voice chat");
@@ -1292,7 +1300,7 @@ function onMessage(ws, data) {
     if (type === "chat") return handleChat(room, spectator, msg.text);
     if (type === "react") return handleReact(room, spectator, msg.emoji);
     if (type === "voiceJoin") {
-      void handleVoiceJoin(ws, room, spectator, msg);
+      void handleVoiceJoin(ws, room, spectator, msg, { listenOnly: true });
       return;
     }
     if (type === "leave") {
@@ -1356,7 +1364,7 @@ function onMessage(ws, data) {
     return;
   }
   if (type === "voiceJoin") {
-    void handleVoiceJoin(ws, room, player, msg);
+    void handleVoiceJoin(ws, room, player, msg, { listenOnly: false });
     return;
   }
   error(ws, "Unknown command");
