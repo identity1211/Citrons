@@ -1386,7 +1386,19 @@ const server = http.createServer((req, res) => {
         waiting: [...rooms.values()].filter((r) => r.phase === "waiting").length,
         live: [...rooms.values()].filter((r) => roomLive(r)).length,
         clerk: clerk.clerkConfigured(),
-        push: push.ready(),
+        push: (() => {
+          const p = push.info();
+          return {
+            ready: p.ready,
+            volume: p.volume,
+            clerk: p.clerk,
+            vapidSource: p.vapidSource,
+            users: p.users,
+            reachable: p.reachable,
+            pending: p.pending,
+            lastError: p.lastError,
+          };
+        })(),
         leaderboard: (() => {
           const board = leaderboard.info();
           return {
@@ -1417,17 +1429,33 @@ wss.on("connection", (ws) => {
 
 Promise.resolve(leaderboard.hydrateFromClerk())
   .catch((err) => console.error("leaderboard hydrate failed", err))
+  .then(() =>
+    push.hydrateFromClerk().catch((err) => {
+      console.error("push hydrate failed", err);
+      return { found: 0 };
+    })
+  )
   .finally(() => {
     leaderboard.startSyncLoop();
+    push.startSyncLoop();
     server.listen(PORT, "0.0.0.0", () => {
       const board = leaderboard.info();
+      const invites = push.info();
       console.log(`Citrons multiplayer on :${PORT}`);
       console.log(
         `leaderboard file=${board.file} clerk=${board.clerkKind} expected=${board.expectedKind} players=${board.players} pending=${board.pending}`
       );
+      console.log(
+        `push file=${invites.file} vapid=${invites.vapidSource} volume=${invites.volume} clerk=${invites.clerk} users=${invites.users} reachable=${invites.reachable} pending=${invites.pending}`
+      );
       if (board.mismatch || board.clerkKind === "off") {
         console.error(
           "leaderboard will not survive deploys until Railway CLERK_SECRET_KEY is the matching live Clerk secret"
+        );
+      }
+      if (!invites.volume && invites.vapidSource !== "env") {
+        console.error(
+          "push invites may reset on redeploy — mount a Railway volume or set VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY"
         );
       }
     });

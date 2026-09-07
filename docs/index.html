@@ -111,6 +111,7 @@ const INVITE_PROMPT_KEY = "citrons-invite-prompt-dismissed";
 const IOS_INSTALL_KEY = "citrons-ios-install-seen";
 const HOME_ICON_VER_KEY = "citrons-home-icon-ver";
 const HOME_ICON_LATER_KEY = "citrons-home-icon-later";
+const VAPID_KEY = "citrons-vapid-pub";
 /** Bump when apple-touch-icon.png or the Home Screen name changes. Keep at 1 until that happens so existing installs are not nagged. Also bump ?v= on the apple-touch-icon link in scripts/build-site.pl. */
 const HOME_ICON_VERSION = 1;
 
@@ -7420,14 +7421,34 @@ async function ensurePushSubscription(wsUrl: string): Promise<PushSubscriptionJS
   const reg = await registerCitronsSW();
   if (!reg) return null;
   const ready = await navigator.serviceWorker.ready;
+  const key = await fetchVapidKey(wsUrl);
+  if (!key) return null;
+  let remembered = "";
+  try {
+    remembered = String(localStorage.getItem(VAPID_KEY) || "");
+  } catch {
+    /* ignore */
+  }
   let sub = await ready.pushManager.getSubscription();
+  // Resubscribe when VAPID rotated, or first sync after we started remembering the key.
+  if (sub && remembered !== key) {
+    try {
+      await sub.unsubscribe();
+    } catch {
+      /* ignore */
+    }
+    sub = null;
+  }
   if (!sub) {
-    const key = await fetchVapidKey(wsUrl);
-    if (!key) return null;
     sub = await ready.pushManager.subscribe({
       userVisibleOnly: true,
       applicationServerKey: urlBase64ToUint8Array(key) as BufferSource,
     });
+  }
+  try {
+    localStorage.setItem(VAPID_KEY, key);
+  } catch {
+    /* ignore */
   }
   return sub.toJSON();
 }
@@ -7439,10 +7460,15 @@ async function pushSyncToSocket(
   opts?: { welcome?: boolean }
 ) {
   if (ws.readyState !== 1 || !pushSupported() || Notification.permission !== "granted") return;
-  const subscription = await ensurePushSubscription(wsUrl);
-  if (!subscription || ws.readyState !== 1) return;
-  const payload = await clerkFn();
-  ws.send(JSON.stringify({ type: "pushSubscribe", ...payload, subscription, welcome: !!opts?.welcome }));
+  try {
+    const subscription = await ensurePushSubscription(wsUrl);
+    if (!subscription || ws.readyState !== 1) return;
+    const payload = await clerkFn();
+    if (ws.readyState !== 1) return;
+    ws.send(JSON.stringify({ type: "pushSubscribe", ...payload, subscription, welcome: !!opts?.welcome }));
+  } catch {
+    /* not signed in, or browser push unavailable — invite list sync is best-effort */
+  }
 }
 
 function invitePromptDismissed(): boolean {
