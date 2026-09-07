@@ -7527,6 +7527,127 @@ function fullDealProgress(n: number) {
   };
 }
 
+const DAILY_JS_SRC = "https://cdn.jsdelivr.net/npm/@daily-co/daily-js@0.80.0/dist/daily-iframe.min.js";
+
+type VoicePhase = "off" | "joining" | "muted" | "live" | "error";
+
+type VoiceUiState = {
+  phase: VoicePhase;
+  peers: number;
+  message?: string;
+};
+
+let dailyApiPromise: Promise<any> | null = null;
+
+async function ensureDailyApi(): Promise<any> {
+  if (!dailyApiPromise) {
+    dailyApiPromise = loadScriptOnce(DAILY_JS_SRC)
+      .then(() => {
+        const api = (window as any).DailyIframe || (window as any).Daily;
+        if (!api || typeof api.createCallObject !== "function") {
+          throw new Error("Daily failed to load");
+        }
+        return api;
+      })
+      .catch((err) => {
+        dailyApiPromise = null;
+        throw err;
+      });
+  }
+  return dailyApiPromise;
+}
+
+/** iOS Safari / Android Chrome need a gesture-tied audio unlock before remote tracks play. */
+async function unlockMobileAudio() {
+  try {
+    const AC = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AC) return;
+    const ctx = new AC();
+    if (ctx.state === "suspended") await ctx.resume();
+    const buf = ctx.createBuffer(1, 1, 22050);
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx.destination);
+    src.start(0);
+    window.setTimeout(() => {
+      void ctx.close().catch(() => {});
+    }, 400);
+  } catch {
+    /* ignore */
+  }
+}
+
+function VoiceDock({
+  voice,
+  onToggle,
+}: {
+  voice: VoiceUiState;
+  onToggle: () => void;
+}) {
+  const label =
+    voice.phase === "joining"
+      ? "Joining…"
+      : voice.phase === "live"
+        ? "Mic on"
+        : voice.phase === "muted"
+          ? "Mic off"
+          : voice.phase === "error"
+            ? "Retry voice"
+            : "Join voice";
+  const hot = voice.phase === "live";
+  return (
+    <div
+      style={{
+        position: "fixed",
+        top: FELT_INSET_TOP,
+        left: `calc(${FELT_INSET_LEFT} + 52px)`,
+        zIndex: 97,
+        pointerEvents: "auto",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "flex-start",
+        gap: 4,
+      }}
+    >
+      <button
+        type="button"
+        onClick={onToggle}
+        disabled={voice.phase === "joining"}
+        style={{
+          ...LOBBY_CORNER_BTN,
+          position: "static",
+          minWidth: 96,
+          background: hot ? "rgba(46, 204, 113, 0.92)" : "rgba(0,0,0,0.42)",
+          color: hot ? "#0b1f12" : "#f5f0e6",
+          border: hot ? "none" : "1px solid rgba(255,255,255,0.28)",
+          opacity: voice.phase === "joining" ? 0.7 : 1,
+          cursor: voice.phase === "joining" ? "default" : "pointer",
+        }}
+      >
+        {label}
+        {voice.phase === "muted" || voice.phase === "live" ? (
+          <span style={{ marginLeft: 6, opacity: 0.75, fontWeight: 700 }}>{Math.max(1, voice.peers)}</span>
+        ) : null}
+      </button>
+      {voice.message ? (
+        <div
+          style={{
+            maxWidth: 160,
+            padding: "4px 8px",
+            borderRadius: 8,
+            background: "rgba(0,0,0,0.55)",
+            color: "#f5b7b1",
+            fontSize: 11,
+            lineHeight: 1.3,
+          }}
+        >
+          {voice.message}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function OnlineGame({ onLeave }: { onLeave: () => void }) {
   const auth = useClerkAuth();
   const inset = useVisualInset();
@@ -7571,6 +7692,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   const [homeIconUpdate, setHomeIconUpdate] = useState(
     () => shouldShowHomeIconUpdate()
   );
+  const [voiceUi, setVoiceUi] = useState<VoiceUiState>({ phase: "off", peers: 0 });
 
   const wsRef = useRef<WebSocket | null>(null);
   const pingRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -7587,9 +7709,165 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   const joinOpenLobbyRef = useRef<(code: string) => void>(() => {});
   const animIdRef = useRef(0);
   const animTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const voiceCallRef = useRef<any>(null);
+  const voiceJoiningRef = useRef(false);
+  const voiceRoomRef = useRef("");
   viewRef.current = view;
   screenRef.current = screen;
   inviteOpenRef.current = inviteOpen;
+
+  function countVoicePeers(call: any): number {
+    try {
+      const parts = call.participants ? call.participants() : {};
+      return Math.max(1, Object.keys(parts || {}).length);
+    } catch {
+      return 1;
+    }
+  }
+
+  function syncVoicePeers(call: any) {
+    setVoiceUi((prev) => ({ ...prev, peers: countVoicePeers(call) }));
+  }
+
+  async function destroyVoiceCall() {
+    voiceJoiningRef.current = false;
+    voiceRoomRef.current = "";
+    const call = voiceCallRef.current;
+    voiceCallRef.current = null;
+    if (!call) return;
+    try {
+      await call.leave();
+    } catch {
+      /* ignore */
+    }
+    try {
+      call.destroy();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function stopVoice(message?: string) {
+    void destroyVoiceCall();
+    setVoiceUi({ phase: "off", peers: 0, message });
+  }
+
+  async function attachDailyCall(url: string, token: string) {
+    const Daily = await ensureDailyApi();
+    await destroyVoiceCall();
+    voiceJoiningRef.current = true;
+    const call = Daily.createCallObject({
+      audioSource: true,
+      videoSource: false,
+      subscribeToTracksAutomatically: true,
+    });
+    voiceCallRef.current = call;
+
+    const onState = () => {
+      if (voiceCallRef.current !== call) return;
+      try {
+        const local = call.participants().local;
+        const micOn = !!(local && local.audio);
+        setVoiceUi({
+          phase: micOn ? "live" : "muted",
+          peers: countVoicePeers(call),
+        });
+      } catch {
+        /* ignore */
+      }
+    };
+
+    call.on("joined-meeting", onState);
+    call.on("participant-joined", () => syncVoicePeers(call));
+    call.on("participant-left", () => syncVoicePeers(call));
+    call.on("participant-updated", onState);
+    call.on("error", (ev: any) => {
+      const msg = String((ev && (ev.errorMsg || ev.error?.message)) || "Voice error").slice(0, 80);
+      stopVoice(msg);
+    });
+    call.on("left-meeting", () => {
+      if (voiceCallRef.current === call) {
+        voiceCallRef.current = null;
+        voiceJoiningRef.current = false;
+        setVoiceUi({ phase: "off", peers: 0 });
+      }
+    });
+
+    try {
+      await call.join({
+        url,
+        token,
+        startAudioOff: true,
+        startVideoOff: true,
+        userName: name || "Player",
+      });
+      voiceJoiningRef.current = false;
+      onState();
+    } catch (err) {
+      if (voiceCallRef.current === call) {
+        voiceCallRef.current = null;
+        try {
+          call.destroy();
+        } catch {
+          /* ignore */
+        }
+      }
+      voiceJoiningRef.current = false;
+      throw err;
+    }
+  }
+
+  function requestVoiceJoin() {
+    if (voiceJoiningRef.current) return;
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== 1) {
+      setVoiceUi({ phase: "error", peers: 0, message: "No connection to the server" });
+      return;
+    }
+    const code = viewRef.current?.code || sessionRef.current?.code || "";
+    if (!code) {
+      setVoiceUi({ phase: "error", peers: 0, message: "Join a lobby first" });
+      return;
+    }
+    voiceJoiningRef.current = true;
+    voiceRoomRef.current = code;
+    setVoiceUi({ phase: "joining", peers: 0 });
+    send({ type: "voiceJoin" });
+  }
+
+  async function onVoiceToggle() {
+    const call = voiceCallRef.current;
+    if (call) {
+      try {
+        await unlockMobileAudio();
+        const local = call.participants().local;
+        const micOn = !!(local && local.audio);
+        await call.setLocalAudio(!micOn);
+        setVoiceUi({
+          phase: micOn ? "muted" : "live",
+          peers: countVoicePeers(call),
+        });
+      } catch (e) {
+        setVoiceUi({
+          phase: "error",
+          peers: countVoicePeers(call),
+          message: clerkErrorText(e).slice(0, 80) || "Microphone blocked",
+        });
+      }
+      return;
+    }
+    try {
+      await unlockMobileAudio();
+      requestVoiceJoin();
+    } catch (e) {
+      voiceJoiningRef.current = false;
+      setVoiceUi({
+        phase: "error",
+        peers: 0,
+        message: clerkErrorText(e).slice(0, 80) || "Couldn't start voice",
+      });
+    }
+  }
 
   function persistName(n: string) {
     setName(n);
@@ -7790,6 +8068,14 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       setInviteLoading(false);
       setError(msg.message || "Server error");
       if (inviteOpenRef.current) setInviteMsg(msg.message || "Server error");
+      if (voiceJoiningRef.current) {
+        voiceJoiningRef.current = false;
+        setVoiceUi({
+          phase: "error",
+          peers: 0,
+          message: String(msg.message || "Voice unavailable").slice(0, 80),
+        });
+      }
       if (/lobby not found/i.test(msg.message || "")) {
         const inMatch = screenRef.current === "waiting" || screenRef.current === "table";
         if (!inMatch) forgetSession();
@@ -7900,6 +8186,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     }
     if (msg.type === "kicked") {
       if (!msg.code || (sessionRef.current && sessionRef.current.code === msg.code)) forgetSession();
+      stopVoice();
       setBusy(false);
       setDropped(false);
       setView(null);
@@ -7907,6 +8194,22 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       setReacts([]);
       setError(msg.message || "The table voted you out");
       setScreen("pick");
+      return;
+    }
+    if (msg.type === "voiceReady" && msg.url && msg.token) {
+      void (async () => {
+        try {
+          await unlockMobileAudio();
+          await attachDailyCall(String(msg.url), String(msg.token));
+        } catch (e) {
+          voiceJoiningRef.current = false;
+          setVoiceUi({
+            phase: "error",
+            peers: 0,
+            message: clerkErrorText(e).slice(0, 80) || "Couldn't join voice",
+          });
+        }
+      })();
       return;
     }
     if (msg.type === "pushReady") {
@@ -7948,6 +8251,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     }
     if (msg.type === "left") {
       if (!msg.code || (sessionRef.current && sessionRef.current.code === msg.code)) forgetSession();
+      stopVoice();
       setDropped(false);
       setView(null);
       setChat([]);
@@ -7987,6 +8291,10 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     ws.onclose = () => {
       stopPing();
       if (wsRef.current === ws) wsRef.current = null;
+      if (voiceJoiningRef.current && !voiceCallRef.current) {
+        voiceJoiningRef.current = false;
+        setVoiceUi({ phase: "error", peers: 0, message: "Connection lost" });
+      }
       const sess = sessionRef.current;
       const inMatch = screenRef.current === "waiting" || screenRef.current === "table";
       if (sess && inMatch) {
@@ -8224,6 +8532,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   }
 
   function exitToMenu() {
+    stopVoice();
     closeSocket();
     if (dealTimerRef.current) clearTimeout(dealTimerRef.current);
     setChat([]);
@@ -8234,6 +8543,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   function exitWaitingToMenu() {
     send({ type: "leave" });
     forgetSession();
+    stopVoice();
     closeSocket();
     if (dealTimerRef.current) clearTimeout(dealTimerRef.current);
     setChat([]);
@@ -8244,6 +8554,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   function leaveWaitingLobby() {
     send({ type: "leave" });
     forgetSession();
+    stopVoice();
     closeSocket();
     if (dealTimerRef.current) clearTimeout(dealTimerRef.current);
     clearTableAnims();
@@ -8258,6 +8569,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   }
 
   function parkAtLobby() {
+    stopVoice();
     screenRef.current = "pick";
     setScreen("pick");
     setView(null);
@@ -8271,6 +8583,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
 
   function leaveSpectate() {
     send({ type: "leave" });
+    stopVoice();
     closeSocket();
     if (dealTimerRef.current) clearTimeout(dealTimerRef.current);
     clearTableAnims();
@@ -8290,12 +8603,19 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     const code = view?.code;
     send({ type: "leave" });
     if (!watching || !sess || !code || sess.code === code) forgetSession();
+    stopVoice();
     closeSocket();
     if (dealTimerRef.current) clearTimeout(dealTimerRef.current);
     setChat([]);
     setReacts([]);
     onLeave();
   }
+
+  useEffect(() => {
+    return () => {
+      void destroyVoiceCall();
+    };
+  }, []);
 
   useEffect(() => {
     if (screen !== "pick") return;
@@ -8945,6 +9265,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         overlay={
           <>
             <WindowButton />
+            <VoiceDock voice={voiceUi} onToggle={() => void onVoiceToggle()} />
             <WaitingMenu onMainMenu={exitWaitingToMenu} onLeaveLobby={leaveWaitingLobby} />
             <div
               style={{
@@ -9323,6 +9644,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   if (screen === "table" && view) {
     return (
       <>
+        <VoiceDock voice={voiceUi} onToggle={() => void onVoiceToggle()} />
         {droppedOverlay}
         {error ? (
           <div

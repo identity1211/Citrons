@@ -7,6 +7,7 @@ const engine = require("./engine");
 const clerk = require("./clerk");
 const leaderboard = require("./leaderboard");
 const push = require("./push");
+const daily = require("./daily");
 
 push.init();
 
@@ -1225,6 +1226,22 @@ async function handleInvite(ws, room, player, userIds) {
   send(ws, { type: "inviteSent", sent: result.sent, failed: result.failed });
 }
 
+async function handleVoiceJoin(ws, room, person) {
+  if (!daily.ready()) return error(ws, "Voice chat is not available yet");
+  if (!room || !person) return error(ws, "Join a lobby first");
+  try {
+    const creds = await daily.meetingToken({
+      code: room.code,
+      userName: person.name,
+      userId: person.clerkUserId || person.id,
+    });
+    send(ws, { type: "voiceReady", url: creds.url, token: creds.token, room: creds.room });
+  } catch (err) {
+    daily.noteError(err);
+    error(ws, "Couldn't start voice chat");
+  }
+}
+
 function onMessage(ws, data) {
   let msg;
   try {
@@ -1270,6 +1287,10 @@ function onMessage(ws, data) {
   if (spectator && !player) {
     if (type === "chat") return handleChat(room, spectator, msg.text);
     if (type === "react") return handleReact(room, spectator, msg.emoji);
+    if (type === "voiceJoin") {
+      void handleVoiceJoin(ws, room, spectator);
+      return;
+    }
     if (type === "leave") {
       leave(ws, true);
       send(ws, { type: "left", code: room.code });
@@ -1328,6 +1349,10 @@ function onMessage(ws, data) {
   }
   if (type === "invite") {
     void handleInvite(ws, room, player, msg.userIds);
+    return;
+  }
+  if (type === "voiceJoin") {
+    void handleVoiceJoin(ws, room, player);
     return;
   }
   error(ws, "Unknown command");
@@ -1411,6 +1436,15 @@ const server = http.createServer((req, res) => {
             lastError: board.lastError || undefined,
           };
         })(),
+        voice: (() => {
+          const v = daily.info();
+          return {
+            ready: v.ready,
+            domain: v.domain,
+            roomsCached: v.roomsCached,
+            lastError: v.lastError,
+          };
+        })(),
       })
     );
     return;
@@ -1448,6 +1482,11 @@ Promise.resolve(leaderboard.hydrateFromClerk())
       console.log(
         `push file=${invites.file} vapid=${invites.vapidSource} volume=${invites.volume} clerk=${invites.clerk} users=${invites.users} reachable=${invites.reachable} pending=${invites.pending}`
       );
+      const voice = daily.info();
+      console.log(`voice daily ready=${voice.ready} domain=${voice.domain || "off"}`);
+      if (!voice.ready) {
+        console.error("voice chat off until DAILY_API_KEY and DAILY_DOMAIN are set on Railway");
+      }
       if (board.mismatch || board.clerkKind === "off") {
         console.error(
           "leaderboard will not survive deploys until Railway CLERK_SECRET_KEY is the matching live Clerk secret"
