@@ -2969,13 +2969,23 @@ const PROFILE_GHOST: CSSProperties = {
   flexShrink: 0,
 };
 
-function StatPair({ label, value }: { label: string; value: number }) {
+function StatPair({ label, value }: { label: string; value: number | string }) {
   return (
     <div style={{ flex: 1, textAlign: "center" }}>
       <div style={{ color: "#f1c40f", fontWeight: 800, fontSize: 22, lineHeight: 1 }}>{value}</div>
       <div style={{ marginTop: 4, color: "rgba(255,255,255,0.55)", fontSize: 11, fontWeight: 600 }}>{label}</div>
     </div>
   );
+}
+
+function avgPts(points: number, games: number): string {
+  if (games <= 0) return "—";
+  return (points / games).toFixed(1);
+}
+
+function winShare(wins: number, games: number): string {
+  if (games <= 0) return "—";
+  return `${Math.round((100 * wins) / games)}%`;
 }
 
 function PlayerStatsBody({ userId }: { userId: string }) {
@@ -3037,6 +3047,7 @@ function PlayerStatsBody({ userId }: { userId: string }) {
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
         <StatPair label="games" value={data.season1.games} />
         <StatPair label={data.season1.wins === 1 ? "win" : "wins"} value={data.season1.wins} />
+        <StatPair label="win%" value={winShare(data.season1.wins, data.season1.games)} />
       </div>
       <div
         style={{
@@ -3053,6 +3064,7 @@ function PlayerStatsBody({ userId }: { userId: string }) {
       <div style={{ display: "flex", gap: 8 }}>
         <StatPair label="games" value={data.season.games} />
         <StatPair label={data.season.points === 1 ? "pt" : "pts"} value={data.season.points} />
+        <StatPair label="avg" value={avgPts(data.season.points, data.season.games)} />
       </div>
     </div>
   );
@@ -5168,7 +5180,7 @@ function Lobby({
   return (
     <>
     <FeltShell
-      center
+      center={view !== "board"}
       overlay={
         <>
           <ProfileButton />
@@ -5212,47 +5224,55 @@ function Lobby({
           </div>
         </>
       }
-      style={{ padding: "max(40px, calc(env(safe-area-inset-top) + 22px)) 16px max(56px, calc(env(safe-area-inset-bottom) + 40px))" }}
+      style={{
+        padding:
+          view === "board"
+            ? "max(52px, calc(env(safe-area-inset-top) + 40px)) 12px max(48px, calc(env(safe-area-inset-bottom) + 28px)) max(8px, env(safe-area-inset-left))"
+            : "max(40px, calc(env(safe-area-inset-top) + 22px)) 16px max(56px, calc(env(safe-area-inset-bottom) + 40px))",
+      }}
     >
       <div
         style={{
           width: "100%",
-          maxWidth: 440,
+          maxWidth: view === "board" ? 420 : 440,
           flex: 1,
           minHeight: 0,
           display: "flex",
           flexDirection: "column",
-          alignItems: "center",
-          textAlign: "center",
-          padding: "0 8px",
+          alignItems: view === "board" ? "stretch" : "center",
+          textAlign: view === "board" ? "left" : "center",
+          padding: view === "board" ? 0 : "0 8px",
+          alignSelf: view === "board" ? "flex-start" : undefined,
         }}
       >
-        <div
-          className="lobby-brand-in"
-          style={{
-            animationDelay: "0.05s",
-            flexShrink: 0,
-            paddingTop: 12,
-            position: "relative",
-            zIndex: 1,
-          }}
-        >
+        {view !== "board" ? (
           <div
-            className="lobby-title"
+            className="lobby-brand-in"
             style={{
-              fontFamily: 'Georgia, "Times New Roman", serif',
-              fontSize: "clamp(34px, 7.5vh, 64px)",
-              fontWeight: 700,
-              color: "#f5f0e6",
-              letterSpacing: 1,
-              lineHeight: 1,
-              textShadow: "0 2px 0 rgba(0,0,0,0.25), 0 12px 28px rgba(0,0,0,0.35)",
+              animationDelay: "0.05s",
+              flexShrink: 0,
+              paddingTop: 12,
+              position: "relative",
+              zIndex: 1,
             }}
           >
-            Citrons
+            <div
+              className="lobby-title"
+              style={{
+                fontFamily: 'Georgia, "Times New Roman", serif',
+                fontSize: "clamp(34px, 7.5vh, 64px)",
+                fontWeight: 700,
+                color: "#f5f0e6",
+                letterSpacing: 1,
+                lineHeight: 1,
+                textShadow: "0 2px 0 rgba(0,0,0,0.25), 0 12px 28px rgba(0,0,0,0.35)",
+              }}
+            >
+              Citrons
+            </div>
+            {view === "main" ? <GamesPlayedLine /> : null}
           </div>
-          {view === "main" ? <GamesPlayedLine /> : null}
-        </div>
+        ) : null}
 
         {view !== "board" && <LobbyCardFan />}
 
@@ -5266,14 +5286,14 @@ function Lobby({
             width: "100%",
             display: "flex",
             flexDirection: "column",
-            alignItems: "center",
-            gap: 12,
+            alignItems: view === "board" ? "stretch" : "center",
+            gap: view === "board" ? 0 : 12,
             flexShrink: view === "board" ? 1 : 0,
             flex: view === "board" ? 1 : undefined,
             minHeight: view === "board" ? 0 : undefined,
             position: "relative",
             zIndex: 3,
-            marginTop: view === "board" ? 16 : "auto",
+            marginTop: view === "board" ? 0 : "auto",
             paddingBottom: 4,
           }}
         >
@@ -5306,21 +5326,7 @@ function Lobby({
             </>
           )}
 
-          {view === "board" && (
-            <>
-              <div
-                style={{
-                  fontSize: 22,
-                  fontWeight: 700,
-                  color: "#f5f0e6",
-                  fontFamily: 'Georgia, "Times New Roman", serif',
-                }}
-              >
-                Leaderboard
-              </div>
-              <LeaderboardPanel />
-            </>
-          )}
+          {view === "board" && <LeaderboardPanel />}
 
           {view === "solo" && (
             <>
@@ -7005,32 +7011,49 @@ function LeaderboardPanel() {
   }, []);
 
   const me = auth.user && auth.user.id ? String(auth.user.id) : "";
+  const col = {
+    rank: 22,
+    games: 28,
+    pts: 32,
+    avg: 34,
+  } as const;
+  const head: CSSProperties = {
+    color: "rgba(255,255,255,0.38)",
+    fontSize: 10,
+    fontWeight: 700,
+    letterSpacing: 0.4,
+    textTransform: "uppercase",
+    textAlign: "right",
+    flexShrink: 0,
+  };
 
   return (
-    <div style={{ width: "100%", maxWidth: 340, textAlign: "left" }}>
-      <div
-        style={{
-          fontSize: 11,
-          fontWeight: 600,
-          letterSpacing: 0.3,
-          color: "rgba(255,255,255,0.55)",
-          marginBottom: 8,
-          textAlign: "center",
-          lineHeight: 1.4,
-        }}
-      >
-        Finish above others to score. Last place is 0.
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: "52vh", overflowY: "auto" }}>
+    <div style={{ width: "100%", minHeight: 0, flex: 1, display: "flex", flexDirection: "column" }}>
+      {rows && rows.length > 0 ? (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "0 4px 4px",
+            flexShrink: 0,
+          }}
+        >
+          <div style={{ ...head, width: col.rank, textAlign: "center" }}>#</div>
+          <div style={{ width: 18, flexShrink: 0 }} />
+          <div style={{ ...head, flex: 1, textAlign: "left" }}>name</div>
+          <div style={{ ...head, width: col.games }}>g</div>
+          <div style={{ ...head, width: col.pts }}>pts</div>
+          <div style={{ ...head, width: col.avg }}>avg</div>
+        </div>
+      ) : null}
+      <div style={{ display: "flex", flexDirection: "column", gap: 0, minHeight: 0, flex: 1, overflowY: "auto" }}>
         {rows === null ? (
           <div
             style={{
-              padding: "16px 12px",
-              borderRadius: 10,
-              background: "rgba(0,0,0,0.28)",
+              padding: "10px 6px",
               color: "rgba(255,255,255,0.62)",
               fontSize: 13,
-              textAlign: "center",
             }}
           >
             Loading…
@@ -7038,12 +7061,9 @@ function LeaderboardPanel() {
         ) : fail ? (
           <div
             style={{
-              padding: "16px 12px",
-              borderRadius: 10,
-              background: "rgba(0,0,0,0.28)",
+              padding: "10px 6px",
               color: "#f5b7b1",
               fontSize: 13,
-              textAlign: "center",
               lineHeight: 1.4,
             }}
           >
@@ -7052,12 +7072,9 @@ function LeaderboardPanel() {
         ) : rows.length === 0 ? (
           <div
             style={{
-              padding: "16px 12px",
-              borderRadius: 10,
-              background: "rgba(0,0,0,0.28)",
+              padding: "10px 6px",
               color: "rgba(255,255,255,0.62)",
               fontSize: 13,
-              textAlign: "center",
               lineHeight: 1.4,
             }}
           >
@@ -7072,56 +7089,78 @@ function LeaderboardPanel() {
                 style={{
                   display: "flex",
                   alignItems: "center",
-                  gap: 10,
-                  padding: "8px 10px",
-                  borderRadius: 10,
-                  background: mine ? "rgba(241,196,15,0.16)" : "rgba(0,0,0,0.32)",
-                  border: mine ? "1px solid rgba(241,196,15,0.55)" : "1px solid rgba(255,255,255,0.12)",
+                  gap: 6,
+                  padding: "3px 4px",
+                  borderRadius: 4,
+                  background: mine ? "rgba(241,196,15,0.14)" : "transparent",
                 }}
               >
                 <div
                   style={{
-                    width: 28,
+                    width: col.rank,
                     flexShrink: 0,
-                    fontWeight: 800,
-                    fontSize: 14,
+                    fontWeight: 700,
+                    fontSize: 11,
                     textAlign: "center",
                     color: medalColor(row.rank),
                   }}
                 >
                   {row.rank}
                 </div>
-                <AvatarBubble src={row.avatar} name={row.name} size={32} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div
-                    style={{
-                      color: "#f5f0e6",
-                      fontWeight: 700,
-                      fontSize: 14,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {row.name}
-                    {mine ? " (you)" : ""}
-                  </div>
+                <AvatarBubble src={row.avatar} name={row.name} size={18} />
+                <div
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    color: "#f5f0e6",
+                    fontWeight: mine ? 700 : 600,
+                    fontSize: 12,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {row.name}
+                  {mine ? " (you)" : ""}
                 </div>
-                <div style={{ flexShrink: 0, textAlign: "right", minWidth: 44 }}>
-                  <div style={{ color: "#f5f0e6", fontWeight: 800, fontSize: 16, lineHeight: 1 }}>
-                    {row.games}
-                  </div>
-                  <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 10, fontWeight: 600 }}>
-                    {row.games === 1 ? "game" : "games"}
-                  </div>
+                <div
+                  style={{
+                    width: col.games,
+                    flexShrink: 0,
+                    textAlign: "right",
+                    color: "rgba(255,255,255,0.72)",
+                    fontWeight: 600,
+                    fontSize: 11,
+                    fontVariantNumeric: "tabular-nums",
+                  }}
+                >
+                  {row.games}
                 </div>
-                <div style={{ flexShrink: 0, textAlign: "right", minWidth: 44 }}>
-                  <div style={{ color: "#f1c40f", fontWeight: 800, fontSize: 16, lineHeight: 1 }}>
-                    {row.points}
-                  </div>
-                  <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 10, fontWeight: 600 }}>
-                    {row.points === 1 ? "pt" : "pts"}
-                  </div>
+                <div
+                  style={{
+                    width: col.pts,
+                    flexShrink: 0,
+                    textAlign: "right",
+                    color: "#f1c40f",
+                    fontWeight: 700,
+                    fontSize: 11,
+                    fontVariantNumeric: "tabular-nums",
+                  }}
+                >
+                  {row.points}
+                </div>
+                <div
+                  style={{
+                    width: col.avg,
+                    flexShrink: 0,
+                    textAlign: "right",
+                    color: "rgba(255,255,255,0.72)",
+                    fontWeight: 600,
+                    fontSize: 11,
+                    fontVariantNumeric: "tabular-nums",
+                  }}
+                >
+                  {avgPts(row.points, row.games)}
                 </div>
               </div>
             );
