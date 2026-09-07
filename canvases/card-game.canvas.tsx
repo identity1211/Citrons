@@ -7853,9 +7853,9 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       }
     }
     try {
-      // Safari daily-js often returns the call object, not a Promise.
-      const ret = call.setLocalAudio(on);
-      if (ret && typeof ret.then === "function") void ret.catch(() => {});
+      // Do not chain .then/.catch — in Safari daily-js returns a thenable call
+      // object without .catch, which throws "catch is not a function".
+      call.setLocalAudio(on);
     } catch {
       /* ignore */
     }
@@ -7995,8 +7995,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     voiceCallRef.current = null;
     if (call) {
       try {
-        const ret = call.setLocalAudio(false);
-        if (ret && typeof ret.then === "function") await ret;
+        call.setLocalAudio(false);
       } catch {
         /* ignore */
       }
