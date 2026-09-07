@@ -3832,18 +3832,155 @@ function LobbyStylePickers({
 type ChatLine = { id: string; fromId: string; name: string; text: string; at: number };
 type ChatToast = { id: string; name: string; text: string; until: number };
 
+type VoiceChatControls = {
+  voice: {
+    phase: "off" | "joining" | "muted" | "live" | "error";
+    peers: number;
+    message?: string;
+  };
+  listenOnly?: boolean;
+  onToggle: () => void;
+};
+
+function MicChatButton({
+  voice,
+  listenOnly,
+  onToggle,
+  size = 40,
+  compact,
+}: {
+  voice: VoiceChatControls["voice"];
+  listenOnly?: boolean;
+  onToggle: () => void;
+  size?: number;
+  compact?: boolean;
+}) {
+  const connected = voice.phase === "muted" || voice.phase === "live";
+  const live = !listenOnly && voice.phase === "live";
+  const busy = voice.phase === "joining";
+  const errored = voice.phase === "error";
+  const title = listenOnly
+    ? busy
+      ? "Connecting voice…"
+      : errored
+        ? "Retry listening"
+        : connected
+          ? "Listening (watchers can’t talk)"
+          : "Connect voice"
+    : busy
+      ? "Connecting voice…"
+      : live
+        ? "Mute microphone"
+        : errored
+          ? "Retry voice"
+          : connected
+            ? "Unmute microphone"
+            : "Connect voice";
+  const stroke = live ? "#0b1f12" : errored ? "#f5b7b1" : "#f1c40f";
+  const fill = live ? "rgba(46, 204, 113, 0.95)" : compact ? "transparent" : "rgba(0,0,0,0.28)";
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      aria-pressed={live}
+      disabled={busy}
+      onClick={(e) => {
+        e.preventDefault();
+        onToggle();
+      }}
+      style={{
+        width: size,
+        height: size,
+        flexShrink: 0,
+        borderRadius: compact ? 6 : 8,
+        border: live ? "none" : compact ? "none" : `1.5px solid ${errored ? "rgba(245,183,177,0.55)" : "rgba(241,196,15,0.45)"}`,
+        background: fill,
+        color: stroke,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        cursor: busy ? "default" : "pointer",
+        opacity: busy ? 0.55 : 1,
+        padding: 0,
+        position: "relative",
+        touchAction: "manipulation",
+      }}
+    >
+      <svg width={Math.round(size * 0.48)} height={Math.round(size * 0.48)} viewBox="0 0 24 24" fill="none" aria-hidden>
+        {listenOnly ? (
+          <>
+            <path
+              d="M4 12c0-2.2 1.2-4.1 3-5.1v2.2A3.1 3.1 0 0 0 5.8 12c0 1.1.6 2.1 1.5 2.7v2.1A5 5 0 0 1 4 12Zm16 0a5 5 0 0 1-3.3 4.7v-2.1c.9-.6 1.5-1.6 1.5-2.7 0-1.1-.5-2-1.2-2.7V6.9c1.8 1 3 2.9 3 5.1Z"
+              fill={stroke}
+              opacity="0.9"
+            />
+            <path
+              d="M12 4a3 3 0 0 0-3 3v5a3 3 0 1 0 6 0V7a3 3 0 0 0-3-3Z"
+              fill={stroke}
+              opacity="0.35"
+            />
+            <path d="M8.2 8.2 15.8 15.8" stroke={stroke} strokeWidth="2" strokeLinecap="round" />
+          </>
+        ) : (
+          <>
+            <path
+              d="M12 2a3.2 3.2 0 0 0-3.2 3.2v6.1a3.2 3.2 0 1 0 6.4 0V5.2A3.2 3.2 0 0 0 12 2Z"
+              fill={stroke}
+            />
+            <path
+              d="M6.4 11.2a5.6 5.6 0 0 0 11.2 0"
+              stroke={stroke}
+              strokeWidth="2"
+              strokeLinecap="round"
+              fill="none"
+            />
+            <path d="M12 16.8v3.4M9 20.2h6" stroke={stroke} strokeWidth="2" strokeLinecap="round" />
+            {!live && connected ? (
+              <path d="M5 5.5 19 19.5" stroke={stroke} strokeWidth="2.2" strokeLinecap="round" />
+            ) : null}
+          </>
+        )}
+      </svg>
+      {connected && voice.peers > 1 ? (
+        <span
+          style={{
+            position: "absolute",
+            right: 2,
+            bottom: 2,
+            minWidth: 12,
+            height: 12,
+            borderRadius: 6,
+            background: live ? "#0b1f12" : "rgba(241,196,15,0.95)",
+            color: live ? "#8ef0b0" : "#1a2e1a",
+            fontSize: 8,
+            fontWeight: 800,
+            lineHeight: "12px",
+            textAlign: "center",
+            padding: "0 2px",
+          }}
+        >
+          {Math.min(voice.peers, 9)}
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
 function RoomChat({
   lines,
   youId,
   onSend,
   variant,
   fill,
+  voice,
 }: {
   lines: ChatLine[];
   youId?: string;
   onSend: (text: string) => void;
   variant: "lobby" | "table";
   fill?: boolean;
+  voice?: VoiceChatControls;
 }) {
   const [draft, setDraft] = useState("");
   const [open, setOpen] = useState(variant === "lobby");
@@ -4016,6 +4153,15 @@ function RoomChat({
       >
         Send
       </button>
+      {voice ? (
+        <MicChatButton
+          voice={voice.voice}
+          listenOnly={voice.listenOnly}
+          onToggle={voice.onToggle}
+          size={lobbyDocked ? LOBBY_CORNER_H : 40}
+          compact={lobbyDocked}
+        />
+      ) : null}
     </form>
   );
 
@@ -4112,30 +4258,46 @@ function RoomChat({
             ))}
           </div>
         ) : null}
-        <button
-          type="button"
-          onClick={() => {
-            setOpen((v) => !v);
-            pinChat();
-          }}
+        <div
           style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
             pointerEvents: "auto",
             flexShrink: 0,
-            padding: "7px 10px",
-            borderRadius: open ? "10px 10px 0 0" : 10,
-            border: "1px solid rgba(241,196,15,0.4)",
-            borderBottom: open ? "1px solid rgba(255,255,255,0.12)" : "1px solid rgba(241,196,15,0.4)",
-            background: "rgba(8, 18, 10, 0.88)",
-            color: "#f1c40f",
-            fontSize: 10,
-            fontWeight: 800,
-            letterSpacing: 1.2,
-            textTransform: "uppercase",
-            cursor: "pointer",
           }}
         >
-          {open ? "Chat ▾" : unread > 0 ? `Chat · ${unread}` : "Chat"}
-        </button>
+          <button
+            type="button"
+            onClick={() => {
+              setOpen((v) => !v);
+              pinChat();
+            }}
+            style={{
+              padding: "7px 10px",
+              borderRadius: open ? "10px 10px 0 0" : 10,
+              border: "1px solid rgba(241,196,15,0.4)",
+              borderBottom: open ? "1px solid rgba(255,255,255,0.12)" : "1px solid rgba(241,196,15,0.4)",
+              background: "rgba(8, 18, 10, 0.88)",
+              color: "#f1c40f",
+              fontSize: 10,
+              fontWeight: 800,
+              letterSpacing: 1.2,
+              textTransform: "uppercase",
+              cursor: "pointer",
+            }}
+          >
+            {open ? "Chat ▾" : unread > 0 ? `Chat · ${unread}` : "Chat"}
+          </button>
+          {!open && voice ? (
+            <MicChatButton
+              voice={voice.voice}
+              listenOnly={voice.listenOnly}
+              onToggle={voice.onToggle}
+              size={34}
+            />
+          ) : null}
+        </div>
         {open ? (
           <div
             style={{
@@ -5725,6 +5887,7 @@ function Table({
   onSendChat,
   reacts,
   onSendReact,
+  voice,
   showSpecials = true,
   watching = false,
   kickVote = null,
@@ -5772,6 +5935,7 @@ function Table({
   onSendChat?: (text: string) => void;
   reacts?: ReactBurst[];
   onSendReact?: (emoji: string) => void;
+  voice?: VoiceChatControls;
   showSpecials?: boolean;
   watching?: boolean;
   kickVote?: KickVoteInfo | null;
@@ -6561,7 +6725,7 @@ function Table({
       {phase === "playing" || phase === "swap" || phase === "finished" ? <EmojiDock onPick={pickReact} /> : null}
       <EmojiFlyLayer flies={emojiFlies} />
       {onSendChat ? (
-        <RoomChat variant="table" lines={chat ?? []} youId={youId} onSend={onSendChat} />
+        <RoomChat variant="table" lines={chat ?? []} youId={youId} onSend={onSendChat} voice={voice} />
       ) : null}
       {tutorial ? (
         <TutorialBar
@@ -7625,106 +7789,6 @@ function replayVoiceElements(els: Map<string, HTMLAudioElement>) {
       /* ignore */
     }
   }
-}
-
-function VoiceDock({
-  voice,
-  listenOnly,
-  onToggle,
-}: {
-  voice: VoiceUiState;
-  listenOnly?: boolean;
-  onToggle: () => void;
-}) {
-  const connected = voice.phase === "muted" || voice.phase === "live";
-  const label = listenOnly
-    ? voice.phase === "joining"
-      ? "Connecting…"
-      : voice.phase === "error"
-        ? "Retry listen"
-        : connected
-          ? "Listening"
-          : "Connecting…"
-    : voice.phase === "joining"
-      ? "Connecting…"
-      : voice.phase === "live"
-        ? "Mic on"
-        : voice.phase === "muted"
-          ? "Mic off"
-          : voice.phase === "error"
-            ? "Retry voice"
-            : "Mic off";
-  const hot = !listenOnly && voice.phase === "live";
-  const hint =
-    voice.message ||
-    (connected
-      ? listenOnly
-        ? voice.peers < 2
-          ? "Watching — you can hear the table (chat only)"
-          : "Watching — you can hear players (mic off for watchers)"
-        : voice.peers < 2
-          ? "Voice on — waiting for others"
-          : "Use headphones. Tap Mic on to talk."
-      : voice.phase === "joining"
-        ? "Connecting voice…"
-        : undefined);
-  return (
-    <div
-      style={{
-        position: "fixed",
-        top: FELT_INSET_TOP,
-        left: `calc(${FELT_INSET_LEFT} + 52px)`,
-        zIndex: 97,
-        pointerEvents: "auto",
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "flex-start",
-        gap: 4,
-      }}
-    >
-      <button
-        type="button"
-        onClick={onToggle}
-        disabled={voice.phase === "joining"}
-        style={{
-          ...LOBBY_CORNER_BTN,
-          position: "static",
-          minWidth: 96,
-          background: hot
-            ? "rgba(46, 204, 113, 0.92)"
-            : listenOnly && connected
-              ? "rgba(0,0,0,0.5)"
-              : "rgba(0,0,0,0.42)",
-          color: hot ? "#0b1f12" : "#f5f0e6",
-          border: hot ? "none" : "1px solid rgba(255,255,255,0.28)",
-          opacity: voice.phase === "joining" ? 0.7 : 1,
-          cursor: voice.phase === "joining" ? "default" : "pointer",
-        }}
-      >
-        {label}
-        {connected ? (
-          <span style={{ marginLeft: 6, opacity: 0.75, fontWeight: 700 }}>
-            {voice.peers < 2 ? "solo" : `${voice.peers}`}
-          </span>
-        ) : null}
-      </button>
-      {hint ? (
-        <div
-          style={{
-            maxWidth: 200,
-            padding: "4px 8px",
-            borderRadius: 8,
-            background: "rgba(0,0,0,0.55)",
-            color: voice.message ? "#f5b7b1" : "rgba(245,240,230,0.85)",
-            fontSize: 11,
-            lineHeight: 1.3,
-          }}
-        >
-          {hint}
-        </div>
-      ) : null}
-    </div>
-  );
 }
 
 function OnlineGame({ onLeave }: { onLeave: () => void }) {
@@ -9647,11 +9711,6 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         overlay={
           <>
             <WindowButton />
-            <VoiceDock
-              voice={voiceUi}
-              listenOnly={!!view.spectator || voiceListenOnlyRef.current}
-              onToggle={() => void onVoiceToggle()}
-            />
             <WaitingMenu onMainMenu={exitWaitingToMenu} onLeaveLobby={leaveWaitingLobby} />
             <div
               style={{
@@ -10013,6 +10072,11 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
                 lines={chat}
                 youId={view.youId}
                 onSend={(text) => send({ type: "chat", text })}
+                voice={{
+                  voice: voiceUi,
+                  listenOnly: !!view.spectator || voiceListenOnlyRef.current,
+                  onToggle: () => void onVoiceToggle(),
+                }}
               />
             </div>
           </div>
@@ -10030,11 +10094,6 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   if (screen === "table" && view) {
     return (
       <>
-        <VoiceDock
-          voice={voiceUi}
-          listenOnly={!!view.spectator || voiceListenOnlyRef.current}
-          onToggle={() => void onVoiceToggle()}
-        />
         {droppedOverlay}
         {error ? (
           <div
@@ -10106,6 +10165,11 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         onSendChat={(text) => send({ type: "chat", text })}
         reacts={reacts}
         onSendReact={(emoji) => send({ type: "react", emoji })}
+        voice={{
+          voice: voiceUi,
+          listenOnly: !!view.spectator || voiceListenOnlyRef.current,
+          onToggle: () => void onVoiceToggle(),
+        }}
         showSpecials={false}
         watching={!!view.spectator}
         kickVote={view.kickVote || null}
