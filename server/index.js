@@ -836,10 +836,21 @@ function resetRoomToLobby(room) {
   notifyLobbies();
 }
 
+function shuffleSeats(room) {
+  const seats = room.seats;
+  for (let i = seats.length - 1; i > 0; i--) {
+    const j = crypto.randomInt(i + 1);
+    const swap = seats[i];
+    seats[i] = seats[j];
+    seats[j] = swap;
+  }
+}
+
 function startGame(room) {
   if (room.phase !== "waiting") return;
   if (room.seats.length < MIN_PLAYERS) return;
   clearRoomTimers(room);
+  shuffleSeats(room);
   const dealt = engine.dealPlayers(room.seats.map((p) => p.name));
   for (let i = 0; i < room.seats.length; i++) {
     const p = room.seats[i];
