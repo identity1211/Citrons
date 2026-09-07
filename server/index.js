@@ -1226,14 +1226,18 @@ async function handleInvite(ws, room, player, userIds) {
   send(ws, { type: "inviteSent", sent: result.sent, failed: result.failed });
 }
 
-async function handleVoiceJoin(ws, room, person) {
+async function handleVoiceJoin(ws, room, person, msg) {
   if (!daily.ready()) return error(ws, "Voice chat is not available yet");
   if (!room || !person) return error(ws, "Join a lobby first");
   try {
+    // Per-device id so the same Clerk account on phone + laptop can both stay in voice.
+    const deviceId = String((msg && msg.deviceId) || "")
+      .replace(/[^\w-]/g, "")
+      .slice(0, 48);
     const creds = await daily.meetingToken({
       code: room.code,
       userName: person.name,
-      userId: person.clerkUserId || person.id,
+      userId: deviceId || person.id,
     });
     send(ws, { type: "voiceReady", url: creds.url, token: creds.token, room: creds.room });
   } catch (err) {
@@ -1288,7 +1292,7 @@ function onMessage(ws, data) {
     if (type === "chat") return handleChat(room, spectator, msg.text);
     if (type === "react") return handleReact(room, spectator, msg.emoji);
     if (type === "voiceJoin") {
-      void handleVoiceJoin(ws, room, spectator);
+      void handleVoiceJoin(ws, room, spectator, msg);
       return;
     }
     if (type === "leave") {
@@ -1352,7 +1356,7 @@ function onMessage(ws, data) {
     return;
   }
   if (type === "voiceJoin") {
-    void handleVoiceJoin(ws, room, player);
+    void handleVoiceJoin(ws, room, player, msg);
     return;
   }
   error(ws, "Unknown command");

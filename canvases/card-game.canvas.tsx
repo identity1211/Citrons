@@ -7557,6 +7557,21 @@ async function ensureDailyApi(): Promise<any> {
   return dailyApiPromise;
 }
 
+const VOICE_DEVICE_KEY = "citrons-voice-device";
+
+function voiceDeviceId(): string {
+  try {
+    let id = String(sessionStorage.getItem(VOICE_DEVICE_KEY) || "");
+    if (!id) {
+      id = `d${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
+      sessionStorage.setItem(VOICE_DEVICE_KEY, id);
+    }
+    return id.slice(0, 48);
+  } catch {
+    return `d${Date.now().toString(36)}`;
+  }
+}
+
 /** iOS Safari / Android Chrome need a gesture-tied audio unlock before remote tracks play. */
 async function unlockMobileAudio() {
   try {
@@ -7626,7 +7641,9 @@ function VoiceDock({
       >
         {label}
         {voice.phase === "muted" || voice.phase === "live" ? (
-          <span style={{ marginLeft: 6, opacity: 0.75, fontWeight: 700 }}>{Math.max(1, voice.peers)}</span>
+          <span style={{ marginLeft: 6, opacity: 0.75, fontWeight: 700 }}>
+            {voice.peers < 2 ? "solo" : `${voice.peers}`}
+          </span>
         ) : null}
       </button>
       {voice.message ? (
@@ -7712,6 +7729,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   const voiceCallRef = useRef<any>(null);
   const voiceJoiningRef = useRef(false);
   const voiceRoomRef = useRef("");
+  const voiceAudioElsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
   viewRef.current = view;
   screenRef.current = screen;
   inviteOpenRef.current = inviteOpen;
@@ -7725,13 +7743,77 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     }
   }
 
+  function clearVoiceAudioElements() {
+    for (const el of voiceAudioElsRef.current.values()) {
+      try {
+        el.pause();
+        el.srcObject = null;
+        el.remove();
+      } catch {
+        /* ignore */
+      }
+    }
+    voiceAudioElsRef.current.clear();
+  }
+
+  function playRemoteVoiceTrack(evt: any) {
+    try {
+      if (!evt || !evt.track || evt.track.kind !== "audio") return;
+      if (evt.participant && evt.participant.local) return;
+      const id = String(evt.track.id || `${evt.participant?.session_id || "p"}-audio`);
+      let el = voiceAudioElsRef.current.get(id);
+      if (!el) {
+        el = document.createElement("audio");
+        el.autoplay = true;
+        el.setAttribute("playsinline", "true");
+        el.setAttribute("webkit-playsinline", "true");
+        el.style.display = "none";
+        document.body.appendChild(el);
+        voiceAudioElsRef.current.set(id, el);
+      }
+      el.srcObject = new MediaStream([evt.track]);
+      const play = el.play();
+      if (play && typeof play.catch === "function") play.catch(() => {});
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function stopRemoteVoiceTrack(evt: any) {
+    try {
+      if (!evt || !evt.track) return;
+      const id = String(evt.track.id || `${evt.participant?.session_id || "p"}-audio`);
+      const el = voiceAudioElsRef.current.get(id);
+      if (!el) return;
+      el.pause();
+      el.srcObject = null;
+      el.remove();
+      voiceAudioElsRef.current.delete(id);
+    } catch {
+      /* ignore */
+    }
+  }
+
   function syncVoicePeers(call: any) {
     setVoiceUi((prev) => ({ ...prev, peers: countVoicePeers(call) }));
+  }
+
+  function localMicOn(call: any): boolean {
+    try {
+      const local = call.participants().local;
+      if (!local) return false;
+      const trackState = local.tracks && local.tracks.audio && local.tracks.audio.state;
+      if (trackState) return trackState === "playable" || trackState === "loading" || trackState === "sendable";
+      return !!local.audio;
+    } catch {
+      return false;
+    }
   }
 
   async function destroyVoiceCall() {
     voiceJoiningRef.current = false;
     voiceRoomRef.current = "";
+    clearVoiceAudioElements();
     const call = voiceCallRef.current;
     voiceCallRef.current = null;
     if (!call) return;
@@ -7765,28 +7847,39 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
 
     const onState = () => {
       if (voiceCallRef.current !== call) return;
+      setVoiceUi({
+        phase: localMicOn(call) ? "live" : "muted",
+        peers: countVoicePeers(call),
+      });
+    };
+
+    call.on("joined-meeting", () => {
+      onState();
+      // Attach any tracks that already started before our listeners.
       try {
-        const local = call.participants().local;
-        const micOn = !!(local && local.audio);
-        setVoiceUi({
-          phase: micOn ? "live" : "muted",
-          peers: countVoicePeers(call),
-        });
+        const parts = call.participants();
+        for (const p of Object.values(parts || {}) as any[]) {
+          if (!p || p.local) continue;
+          const track = p.tracks && p.tracks.audio && p.tracks.audio.persistentTrack;
+          if (track) playRemoteVoiceTrack({ track, participant: p });
+          else if (p.audioTrack) playRemoteVoiceTrack({ track: p.audioTrack, participant: p });
+        }
       } catch {
         /* ignore */
       }
-    };
-
-    call.on("joined-meeting", onState);
+    });
     call.on("participant-joined", () => syncVoicePeers(call));
     call.on("participant-left", () => syncVoicePeers(call));
     call.on("participant-updated", onState);
+    call.on("track-started", playRemoteVoiceTrack);
+    call.on("track-stopped", stopRemoteVoiceTrack);
     call.on("error", (ev: any) => {
       const msg = String((ev && (ev.errorMsg || ev.error?.message)) || "Voice error").slice(0, 80);
       stopVoice(msg);
     });
     call.on("left-meeting", () => {
       if (voiceCallRef.current === call) {
+        clearVoiceAudioElements();
         voiceCallRef.current = null;
         voiceJoiningRef.current = false;
         setVoiceUi({ phase: "off", peers: 0 });
@@ -7806,6 +7899,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     } catch (err) {
       if (voiceCallRef.current === call) {
         voiceCallRef.current = null;
+        clearVoiceAudioElements();
         try {
           call.destroy();
         } catch {
@@ -7832,7 +7926,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     voiceJoiningRef.current = true;
     voiceRoomRef.current = code;
     setVoiceUi({ phase: "joining", peers: 0 });
-    send({ type: "voiceJoin" });
+    send({ type: "voiceJoin", deviceId: voiceDeviceId() });
   }
 
   async function onVoiceToggle() {
@@ -7840,8 +7934,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     if (call) {
       try {
         await unlockMobileAudio();
-        const local = call.participants().local;
-        const micOn = !!(local && local.audio);
+        const micOn = localMicOn(call);
         await call.setLocalAudio(!micOn);
         setVoiceUi({
           phase: micOn ? "muted" : "live",
