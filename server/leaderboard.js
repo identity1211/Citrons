@@ -549,6 +549,31 @@ function top(limit) {
     .map(({ season1: _season1, ...row }, i) => ({ rank: i + 1, ...row }));
 }
 
+function directory(limit) {
+  const n = Math.max(1, Math.min(200, Number(limit) || 100));
+  return Object.keys(store.users)
+    .map((id) => {
+      const u = normalizeRow(store.users[id]);
+      return {
+        id,
+        name: u.name,
+        avatar: u.avatar,
+        points: u.points,
+        games: u.games,
+        updatedAt: num(u.updatedAt),
+      };
+    })
+    .filter((row) => row.id && row.name && row.name !== "Player")
+    .sort(
+      (a, b) =>
+        b.updatedAt - a.updatedAt ||
+        b.points - a.points ||
+        a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
+    )
+    .slice(0, n)
+    .map(({ id, name, avatar }) => ({ id, name, avatar }));
+}
+
 function matches() {
   return num(store.matches);
 }
@@ -604,4 +629,4 @@ function startSyncLoop() {
 
 load();
 
-module.exports = { recordGame, top, matches, stats, hydrateFromClerk, info, startSyncLoop };
+module.exports = { recordGame, top, matches, stats, directory, hydrateFromClerk, info, startSyncLoop };

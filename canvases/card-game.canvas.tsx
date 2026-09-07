@@ -5122,22 +5122,21 @@ function Lobby({
       style={{
         padding:
           view === "board"
-            ? "max(52px, calc(env(safe-area-inset-top) + 40px)) 12px max(48px, calc(env(safe-area-inset-bottom) + 28px)) max(8px, env(safe-area-inset-left))"
+            ? "max(52px, calc(env(safe-area-inset-top) + 40px)) 16px max(48px, calc(env(safe-area-inset-bottom) + 28px))"
             : "max(40px, calc(env(safe-area-inset-top) + 22px)) 16px max(56px, calc(env(safe-area-inset-bottom) + 40px))",
       }}
     >
       <div
         style={{
           width: "100%",
-          maxWidth: view === "board" ? 420 : 440,
+          maxWidth: view === "board" ? 460 : 440,
           flex: 1,
           minHeight: 0,
           display: "flex",
           flexDirection: "column",
-          alignItems: view === "board" ? "stretch" : "center",
-          textAlign: view === "board" ? "left" : "center",
+          alignItems: "center",
+          textAlign: "center",
           padding: view === "board" ? 0 : "0 8px",
-          alignSelf: view === "board" ? "flex-start" : undefined,
         }}
       >
         {view !== "board" ? (
@@ -5181,8 +5180,8 @@ function Lobby({
             width: "100%",
             display: "flex",
             flexDirection: "column",
-            alignItems: view === "board" ? "stretch" : "center",
-            gap: view === "board" ? 0 : 12,
+            alignItems: "center",
+            gap: view === "board" ? 10 : 12,
             flexShrink: view === "board" ? 1 : 0,
             flex: view === "board" ? 1 : undefined,
             minHeight: view === "board" ? 0 : undefined,
@@ -5221,7 +5220,22 @@ function Lobby({
             </>
           )}
 
-          {view === "board" && <LeaderboardPanel />}
+          {view === "board" && (
+            <>
+              <div
+                style={{
+                  fontSize: 26,
+                  fontWeight: 700,
+                  color: "#f5f0e6",
+                  fontFamily: 'Georgia, "Times New Roman", serif',
+                  flexShrink: 0,
+                }}
+              >
+                Leaderboard
+              </div>
+              <LeaderboardPanel />
+            </>
+          )}
 
           {view === "solo" && (
             <>
@@ -6907,48 +6921,57 @@ function LeaderboardPanel() {
 
   const me = auth.user && auth.user.id ? String(auth.user.id) : "";
   const col = {
-    rank: 22,
-    games: 28,
-    pts: 32,
-    avg: 34,
+    rank: 28,
+    games: 52,
+    pts: 58,
+    avg: 64,
   } as const;
   const head: CSSProperties = {
-    color: "rgba(255,255,255,0.38)",
-    fontSize: 10,
+    color: "rgba(255,255,255,0.42)",
+    fontSize: 11,
     fontWeight: 700,
-    letterSpacing: 0.4,
-    textTransform: "uppercase",
+    letterSpacing: 0.3,
     textAlign: "right",
     flexShrink: 0,
   };
 
   return (
-    <div style={{ width: "100%", minHeight: 0, flex: 1, display: "flex", flexDirection: "column" }}>
+    <div
+      style={{
+        width: "100%",
+        minHeight: 0,
+        flex: 1,
+        display: "flex",
+        flexDirection: "column",
+        textAlign: "left",
+      }}
+    >
       {rows && rows.length > 0 ? (
         <div
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 6,
-            padding: "0 4px 4px",
+            gap: 8,
+            padding: "0 6px 6px",
             flexShrink: 0,
           }}
         >
           <div style={{ ...head, width: col.rank, textAlign: "center" }}>#</div>
-          <div style={{ width: 18, flexShrink: 0 }} />
-          <div style={{ ...head, flex: 1, textAlign: "left" }}>name</div>
-          <div style={{ ...head, width: col.games }}>g</div>
-          <div style={{ ...head, width: col.pts }}>pts</div>
-          <div style={{ ...head, width: col.avg }}>avg</div>
+          <div style={{ width: 22, flexShrink: 0 }} />
+          <div style={{ ...head, flex: 1, textAlign: "left" }}>Name</div>
+          <div style={{ ...head, width: col.games }}>Games</div>
+          <div style={{ ...head, width: col.pts }}>Points</div>
+          <div style={{ ...head, width: col.avg }}>Average</div>
         </div>
       ) : null}
-      <div style={{ display: "flex", flexDirection: "column", gap: 0, minHeight: 0, flex: 1, overflowY: "auto" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 1, minHeight: 0, flex: 1, overflowY: "auto" }}>
         {rows === null ? (
           <div
             style={{
-              padding: "10px 6px",
+              padding: "12px 6px",
               color: "rgba(255,255,255,0.62)",
-              fontSize: 13,
+              fontSize: 14,
+              textAlign: "center",
             }}
           >
             Loading…
@@ -6956,10 +6979,11 @@ function LeaderboardPanel() {
         ) : fail ? (
           <div
             style={{
-              padding: "10px 6px",
+              padding: "12px 6px",
               color: "#f5b7b1",
-              fontSize: 13,
+              fontSize: 14,
               lineHeight: 1.4,
+              textAlign: "center",
             }}
           >
             {fail}
@@ -6967,10 +6991,11 @@ function LeaderboardPanel() {
         ) : rows.length === 0 ? (
           <div
             style={{
-              padding: "10px 6px",
+              padding: "12px 6px",
               color: "rgba(255,255,255,0.62)",
-              fontSize: 13,
+              fontSize: 14,
               lineHeight: 1.4,
+              textAlign: "center",
             }}
           >
             Finish a signed-in multiplayer game to appear here.
@@ -6984,9 +7009,9 @@ function LeaderboardPanel() {
                 style={{
                   display: "flex",
                   alignItems: "center",
-                  gap: 6,
-                  padding: "3px 4px",
-                  borderRadius: 4,
+                  gap: 8,
+                  padding: "4px 6px",
+                  borderRadius: 5,
                   background: mine ? "rgba(241,196,15,0.14)" : "transparent",
                 }}
               >
@@ -6995,21 +7020,21 @@ function LeaderboardPanel() {
                     width: col.rank,
                     flexShrink: 0,
                     fontWeight: 700,
-                    fontSize: 11,
+                    fontSize: 13,
                     textAlign: "center",
                     color: medalColor(row.rank),
                   }}
                 >
                   {row.rank}
                 </div>
-                <AvatarBubble src={row.avatar} name={row.name} size={18} />
+                <AvatarBubble src={row.avatar} name={row.name} size={22} />
                 <div
                   style={{
                     flex: 1,
                     minWidth: 0,
                     color: "#f5f0e6",
                     fontWeight: mine ? 700 : 600,
-                    fontSize: 12,
+                    fontSize: 14,
                     overflow: "hidden",
                     textOverflow: "ellipsis",
                     whiteSpace: "nowrap",
@@ -7025,7 +7050,7 @@ function LeaderboardPanel() {
                     textAlign: "right",
                     color: "rgba(255,255,255,0.72)",
                     fontWeight: 600,
-                    fontSize: 11,
+                    fontSize: 13,
                     fontVariantNumeric: "tabular-nums",
                   }}
                 >
@@ -7038,7 +7063,7 @@ function LeaderboardPanel() {
                     textAlign: "right",
                     color: "#f1c40f",
                     fontWeight: 700,
-                    fontSize: 11,
+                    fontSize: 13,
                     fontVariantNumeric: "tabular-nums",
                   }}
                 >
@@ -7051,7 +7076,7 @@ function LeaderboardPanel() {
                     textAlign: "right",
                     color: "rgba(255,255,255,0.72)",
                     fontWeight: 600,
-                    fontSize: 11,
+                    fontSize: 13,
                     fontVariantNumeric: "tabular-nums",
                   }}
                 >
@@ -7112,7 +7137,7 @@ function httpUrlFromWs(wsUrl: string, path: string): string {
   return u.replace(/\/$/, "") + (path.startsWith("/") ? path : `/${path}`);
 }
 
-type InviteUser = { id: string; name: string; avatar: string };
+type InviteUser = { id: string; name: string; avatar: string; reachable?: boolean };
 
 function isIosDevice(): boolean {
   if (typeof navigator === "undefined") return false;
@@ -7874,7 +7899,12 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       setInviteUsers(
         msg.users
           .filter((u) => u && u.id && u.name)
-          .map((u) => ({ id: String(u.id), name: String(u.name), avatar: String(u.avatar || "") }))
+          .map((u) => ({
+            id: String(u.id),
+            name: String(u.name),
+            avatar: String(u.avatar || ""),
+            reachable: u.reachable !== false,
+          }))
       );
       setInviteBusy(false);
       setInviteLoading(false);
@@ -8017,6 +8047,11 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   }
 
   function toggleInviteUser(id: string) {
+    const row = inviteUsers.find((u) => u.id === id);
+    if (row && row.reachable === false) {
+      setInviteMsg("They need to turn on invites first");
+      return;
+    }
     setInvitePicked((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : prev.length >= 8 ? prev : [...prev, id]));
   }
 
@@ -8092,10 +8127,17 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   }
 
   function sendInvites() {
-    if (invitePicked.length === 0) return;
+    const ids = invitePicked.filter((id) => {
+      const row = inviteUsers.find((u) => u.id === id);
+      return !row || row.reachable !== false;
+    });
+    if (ids.length === 0) {
+      setInviteMsg("They need to turn on invites first");
+      return;
+    }
     setInviteBusy(true);
     setInviteMsg("");
-    send({ type: "invite", userIds: invitePicked });
+    send({ type: "invite", userIds: ids });
   }
 
   function startBrowse() {
@@ -8999,11 +9041,12 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
                       <div style={{ fontSize: 13, lineHeight: 1.45, color: "rgba(255,255,255,0.62)", textAlign: "center", padding: 12 }}>
                         {inviteSearch.trim()
                           ? "No matching players"
-                          : "Nobody has turned on invites yet. Ask them to tap Invite and enable notifications."}
+                          : "No other players yet. Finish a signed-in game to show up here."}
                       </div>
                     ) : (
                       inviteFiltered.map((u) => {
                         const on = invitePicked.includes(u.id);
+                        const canPing = u.reachable !== false;
                         return (
                           <button
                             key={u.id}
@@ -9020,14 +9063,20 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
                               gap: 8,
                               fontSize: 14,
                               fontWeight: 600,
-                              cursor: "pointer",
+                              cursor: canPing ? "pointer" : "default",
                               textAlign: "left",
+                              opacity: canPing ? 1 : 0.55,
                             }}
                           >
                             <AvatarBubble src={u.avatar} name={u.name} size={28} />
                             <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
                               {u.name}
                             </span>
+                            {!canPing ? (
+                              <span style={{ flexShrink: 0, fontSize: 11, fontWeight: 600, color: "rgba(255,255,255,0.45)" }}>
+                                no alerts
+                              </span>
+                            ) : null}
                           </button>
                         );
                       })

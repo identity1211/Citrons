@@ -1166,7 +1166,32 @@ function handleInviteList(ws, room, player) {
   if (room.phase !== "waiting") return error(ws, "Invite from the waiting room");
   if (!player.clerkUserId) return error(ws, "Sign in to invite");
   const seated = new Set(room.seats.map((p) => p.clerkUserId).filter(Boolean));
-  const users = push.listUsers(player.clerkUserId).filter((u) => !seated.has(u.id));
+  const pushUsers = push.listUsers(player.clerkUserId);
+  const reachable = new Map(pushUsers.map((u) => [u.id, u]));
+  const byId = new Map();
+  for (const u of leaderboard.directory(120)) {
+    if (!u.id || u.id === player.clerkUserId || seated.has(u.id)) continue;
+    byId.set(u.id, {
+      id: u.id,
+      name: u.name,
+      avatar: u.avatar || "",
+      reachable: reachable.has(u.id),
+    });
+  }
+  for (const u of pushUsers) {
+    if (!u.id || seated.has(u.id)) continue;
+    const prev = byId.get(u.id);
+    byId.set(u.id, {
+      id: u.id,
+      name: u.name || (prev && prev.name) || "Player",
+      avatar: u.avatar || (prev && prev.avatar) || "",
+      reachable: true,
+    });
+  }
+  const users = [...byId.values()].sort((a, b) => {
+    if (a.reachable !== b.reachable) return a.reachable ? -1 : 1;
+    return String(a.name).localeCompare(String(b.name), undefined, { sensitivity: "base" });
+  });
   send(ws, { type: "inviteList", users });
 }
 
