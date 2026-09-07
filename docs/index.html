@@ -7732,7 +7732,7 @@ function VoiceDock({
     (voice.phase === "muted" || voice.phase === "live"
       ? voice.peers < 2
         ? "Only you in voice — other device must Join voice too"
-        : "Both must tap Mic on to talk"
+        : "Use headphones. Both need Mic on to talk."
       : undefined);
   return (
     <div
@@ -7854,6 +7854,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   const voiceJoiningRef = useRef(false);
   const voiceRoomRef = useRef("");
   const voiceAudioElsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
+  const voiceMicTrackRef = useRef<MediaStreamTrack | null>(null);
   viewRef.current = view;
   screenRef.current = screen;
   inviteOpenRef.current = inviteOpen;
@@ -7864,6 +7865,52 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       return Math.max(1, Object.keys(parts || {}).length);
     } catch {
       return 1;
+    }
+  }
+
+  function releaseVoiceMicTrack() {
+    const track = voiceMicTrackRef.current;
+    voiceMicTrackRef.current = null;
+    if (!track) return;
+    try {
+      track.stop();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function armVoiceMicFromGesture(): Promise<MediaStreamTrack | null> {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+        video: false,
+      });
+      const track = stream.getAudioTracks()[0] || null;
+      if (!track) return null;
+      // Keep this track for Daily; stop any extras.
+      for (const t of stream.getTracks()) {
+        if (t !== track) t.stop();
+      }
+      if (voiceMicTrackRef.current && voiceMicTrackRef.current !== track) {
+        try {
+          voiceMicTrackRef.current.stop();
+        } catch {
+          /* ignore */
+        }
+      }
+      voiceMicTrackRef.current = track;
+      try {
+        track.enabled = false;
+      } catch {
+        /* ignore */
+      }
+      return track;
+    } catch {
+      return null;
     }
   }
 
@@ -7885,6 +7932,8 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     if (el) return el;
     el = document.createElement("audio");
     el.autoplay = true;
+    el.muted = false;
+    el.volume = 1;
     el.setAttribute("playsinline", "true");
     el.setAttribute("webkit-playsinline", "true");
     el.dataset.participantId = sessionId;
@@ -7936,7 +7985,6 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     try {
       const sessionId = String((evt && evt.participant && evt.participant.session_id) || "");
       if (!sessionId) return;
-      // Only remove if this participant left; track-stopped can be transient.
       if (evt && evt.participant && !evt.participant.local) {
         const call = voiceCallRef.current;
         const stillThere = call && call.participants && call.participants()[sessionId];
@@ -7991,36 +8039,43 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     }));
   }
 
+  /** Only trust Daily's localAudio() — "sendable" is NOT unmuted. */
   function localMicOn(call: any): boolean {
     try {
       if (typeof call.localAudio === "function") return !!call.localAudio();
       const local = call.participants().local;
       if (!local) return false;
-      const trackState = local.tracks && local.tracks.audio && local.tracks.audio.state;
-      if (trackState) return trackState === "playable" || trackState === "loading" || trackState === "sendable";
-      return !!local.audio;
+      const st = local.tracks && local.tracks.audio && local.tracks.audio.state;
+      return st === "playable";
     } catch {
       return false;
     }
   }
 
-  async function destroyVoiceCall() {
+  async function destroyVoiceCall(opts?: { keepMic?: boolean }) {
     voiceJoiningRef.current = false;
     voiceRoomRef.current = "";
     clearVoiceAudioElements();
     const call = voiceCallRef.current;
     voiceCallRef.current = null;
-    if (!call) return;
-    try {
-      await call.leave();
-    } catch {
-      /* ignore */
+    if (call) {
+      try {
+        await call.setLocalAudio(false);
+      } catch {
+        /* ignore */
+      }
+      try {
+        await call.leave();
+      } catch {
+        /* ignore */
+      }
+      try {
+        call.destroy();
+      } catch {
+        /* ignore */
+      }
     }
-    try {
-      call.destroy();
-    } catch {
-      /* ignore */
-    }
+    if (!opts?.keepMic) releaseVoiceMicTrack();
   }
 
   function stopVoice(message?: string) {
@@ -8030,10 +8085,26 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
 
   async function attachDailyCall(url: string, token: string) {
     const Daily = await ensureDailyApi();
-    await destroyVoiceCall();
+    await destroyVoiceCall({ keepMic: true });
+
+    let audioSource: any = true;
+    let micTrack = voiceMicTrackRef.current;
+    if (!micTrack || micTrack.readyState !== "live") {
+      micTrack = await armVoiceMicFromGesture();
+    }
+    if (micTrack && micTrack.readyState === "live") {
+      try {
+        micTrack.enabled = false;
+      } catch {
+        /* ignore */
+      }
+      voiceMicTrackRef.current = micTrack;
+      audioSource = micTrack;
+    }
+
     voiceJoiningRef.current = true;
     const call = Daily.createCallObject({
-      audioSource: true,
+      audioSource,
       videoSource: false,
       subscribeToTracksAutomatically: true,
     });
@@ -8087,6 +8158,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         clearVoiceAudioElements();
         voiceCallRef.current = null;
         voiceJoiningRef.current = false;
+        releaseVoiceMicTrack();
         setVoiceUi({ phase: "off", peers: 0 });
       }
     });
@@ -8099,6 +8171,19 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         startVideoOff: true,
         userName: name || "Player",
       });
+      // Ensure we start muted even if the browser handed us a live track.
+      try {
+        await call.setLocalAudio(false);
+      } catch {
+        /* ignore */
+      }
+      if (voiceMicTrackRef.current) {
+        try {
+          voiceMicTrackRef.current.enabled = false;
+        } catch {
+          /* ignore */
+        }
+      }
       voiceJoiningRef.current = false;
       onState();
       syncAllRemoteAudio(call);
@@ -8113,6 +8198,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
           /* ignore */
         }
       }
+      releaseVoiceMicTrack();
       voiceJoiningRef.current = false;
       throw err;
     }
@@ -8133,7 +8219,8 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     voiceJoiningRef.current = true;
     voiceRoomRef.current = code;
     setVoiceUi({ phase: "joining", peers: 0 });
-    send({ type: "voiceJoin", deviceId: voiceDeviceId() });
+    const voiceId = `${voiceDeviceId()}-${Date.now().toString(36)}`;
+    send({ type: "voiceJoin", deviceId: voiceDeviceId(), voiceId });
   }
 
   async function onVoiceToggle() {
@@ -8143,11 +8230,34 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     if (call) {
       try {
         const micOn = localMicOn(call);
-        await call.setLocalAudio(!micOn);
+        const next = !micOn;
+        await call.setLocalAudio(next);
+        if (voiceMicTrackRef.current) {
+          try {
+            voiceMicTrackRef.current.enabled = next;
+          } catch {
+            /* ignore */
+          }
+        }
+        // Verify — Android sometimes no-ops setLocalAudio without throwing.
+        let confirmed = localMicOn(call);
+        if (confirmed !== next) {
+          await call.setLocalAudio(next);
+          if (voiceMicTrackRef.current) voiceMicTrackRef.current.enabled = next;
+          confirmed = localMicOn(call);
+        }
+        if (confirmed !== next) {
+          setVoiceUi({
+            phase: confirmed ? "live" : "muted",
+            peers: countVoicePeers(call),
+            message: "Mic blocked — check Chrome site permissions",
+          });
+          return;
+        }
         syncAllRemoteAudio(call);
         replayVoiceElements(voiceAudioElsRef.current);
         setVoiceUi({
-          phase: micOn ? "muted" : "live",
+          phase: next ? "live" : "muted",
           peers: countVoicePeers(call),
         });
       } catch (e) {
@@ -8160,9 +8270,23 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       return;
     }
     try {
+      const armed = await armVoiceMicFromGesture();
+      if (!armed && !navigator.mediaDevices) {
+        setVoiceUi({ phase: "error", peers: 0, message: "Microphone API unavailable" });
+        return;
+      }
+      if (!armed) {
+        setVoiceUi({
+          phase: "error",
+          peers: 0,
+          message: "Allow microphone for citrons.lat in Chrome",
+        });
+        return;
+      }
       requestVoiceJoin();
     } catch (e) {
       voiceJoiningRef.current = false;
+      releaseVoiceMicTrack();
       setVoiceUi({
         phase: "error",
         peers: 0,

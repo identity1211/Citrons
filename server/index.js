@@ -1230,14 +1230,14 @@ async function handleVoiceJoin(ws, room, person, msg) {
   if (!daily.ready()) return error(ws, "Voice chat is not available yet");
   if (!room || !person) return error(ws, "Join a lobby first");
   try {
-    // Per-device id so the same Clerk account on phone + laptop can both stay in voice.
-    const deviceId = String((msg && msg.deviceId) || "")
+    // Unique per Join tap so phone + laptop (even same Clerk user) never share one Daily participant.
+    const voiceId = String((msg && (msg.voiceId || msg.deviceId)) || "")
       .replace(/[^\w-]/g, "")
-      .slice(0, 48);
+      .slice(0, 64);
     const creds = await daily.meetingToken({
       code: room.code,
       userName: person.name,
-      userId: deviceId || person.id,
+      userId: voiceId || `${person.id}-${Date.now()}`,
     });
     send(ws, { type: "voiceReady", url: creds.url, token: creds.token, room: creds.room });
   } catch (err) {
