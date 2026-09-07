@@ -7593,6 +7593,29 @@ async function unlockMobileAudio() {
   }
 }
 
+function micPermissionDeniedMessage(): string {
+  const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
+  if (/iPhone|iPad|Mac/.test(ua) && /Safari/.test(ua) && !/Chrome|CriOS|Edg/.test(ua)) {
+    return "Microphone blocked — click the mic icon in Safari’s address bar and allow citrons.lat";
+  }
+  if (/Android/i.test(ua) || /Chrome|CriOS|Edg/i.test(ua)) {
+    return "Microphone blocked — tap the lock/tune icon in the address bar → Site settings → Microphone → Allow";
+  }
+  return "Microphone blocked — allow the mic for citrons.lat in your browser site settings";
+}
+
+async function queryMicPermission(): Promise<"granted" | "denied" | "prompt" | "unknown"> {
+  try {
+    if (!navigator.permissions || !navigator.permissions.query) return "unknown";
+    const status = await navigator.permissions.query({ name: "microphone" as PermissionName });
+    const s = String(status.state || "");
+    if (s === "granted" || s === "denied" || s === "prompt") return s;
+    return "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
 function replayVoiceElements(els: Map<string, HTMLAudioElement>) {
   for (const el of els.values()) {
     try {
@@ -7750,6 +7773,8 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   const voiceRoomRef = useRef("");
   const voiceAudioElsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
   const voiceMicTrackRef = useRef<MediaStreamTrack | null>(null);
+  /** UI + mute source of truth — Daily localAudio() lags / lies after mute on some browsers. */
+  const voiceMicOnRef = useRef(false);
   viewRef.current = view;
   screenRef.current = screen;
   inviteOpenRef.current = inviteOpen;
@@ -7775,6 +7800,8 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   }
 
   async function armVoiceMicFromGesture(): Promise<MediaStreamTrack | null> {
+    const perm = await queryMicPermission();
+    if (perm === "denied") return null;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -7786,7 +7813,6 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       });
       const track = stream.getAudioTracks()[0] || null;
       if (!track) return null;
-      // Keep this track for Daily; stop any extras.
       for (const t of stream.getTracks()) {
         if (t !== track) t.stop();
       }
@@ -7807,6 +7833,26 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     } catch {
       return null;
     }
+  }
+
+  function paintVoiceUi(call: any, message?: string) {
+    setVoiceUi({
+      phase: voiceMicOnRef.current ? "live" : "muted",
+      peers: countVoicePeers(call),
+      message,
+    });
+  }
+
+  function applyLocalMic(call: any, on: boolean) {
+    voiceMicOnRef.current = on;
+    if (voiceMicTrackRef.current) {
+      try {
+        voiceMicTrackRef.current.enabled = on;
+      } catch {
+        /* ignore */
+      }
+    }
+    void call.setLocalAudio(on).catch(() => {});
   }
 
   function clearVoiceAudioElements() {
@@ -7930,26 +7976,14 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     setVoiceUi((prev) => ({
       ...prev,
       peers: countVoicePeers(call),
-      message: undefined,
+      message: prev.message,
     }));
-  }
-
-  /** Only trust Daily's localAudio() — "sendable" is NOT unmuted. */
-  function localMicOn(call: any): boolean {
-    try {
-      if (typeof call.localAudio === "function") return !!call.localAudio();
-      const local = call.participants().local;
-      if (!local) return false;
-      const st = local.tracks && local.tracks.audio && local.tracks.audio.state;
-      return st === "playable";
-    } catch {
-      return false;
-    }
   }
 
   async function destroyVoiceCall(opts?: { keepMic?: boolean }) {
     voiceJoiningRef.current = false;
     voiceRoomRef.current = "";
+    voiceMicOnRef.current = false;
     clearVoiceAudioElements();
     const call = voiceCallRef.current;
     voiceCallRef.current = null;
@@ -7995,9 +8029,17 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       }
       voiceMicTrackRef.current = micTrack;
       audioSource = micTrack;
+    } else {
+      const perm = await queryMicPermission();
+      if (perm === "denied") {
+        voiceJoiningRef.current = false;
+        setVoiceUi({ phase: "error", peers: 0, message: micPermissionDeniedMessage() });
+        return;
+      }
     }
 
     voiceJoiningRef.current = true;
+    voiceMicOnRef.current = false;
     const call = Daily.createCallObject({
       audioSource,
       videoSource: false,
@@ -8007,10 +8049,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
 
     const onState = () => {
       if (voiceCallRef.current !== call) return;
-      setVoiceUi({
-        phase: localMicOn(call) ? "live" : "muted",
-        peers: countVoicePeers(call),
-      });
+      paintVoiceUi(call);
     };
 
     call.on("joined-meeting", () => {
@@ -8053,6 +8092,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         clearVoiceAudioElements();
         voiceCallRef.current = null;
         voiceJoiningRef.current = false;
+        voiceMicOnRef.current = false;
         releaseVoiceMicTrack();
         setVoiceUi({ phase: "off", peers: 0 });
       }
@@ -8066,21 +8106,9 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         startVideoOff: true,
         userName: name || "Player",
       });
-      // Ensure we start muted even if the browser handed us a live track.
-      try {
-        await call.setLocalAudio(false);
-      } catch {
-        /* ignore */
-      }
-      if (voiceMicTrackRef.current) {
-        try {
-          voiceMicTrackRef.current.enabled = false;
-        } catch {
-          /* ignore */
-        }
-      }
+      applyLocalMic(call, false);
       voiceJoiningRef.current = false;
-      onState();
+      paintVoiceUi(call);
       syncAllRemoteAudio(call);
       replayVoiceElements(voiceAudioElsRef.current);
     } catch (err) {
@@ -8095,6 +8123,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       }
       releaseVoiceMicTrack();
       voiceJoiningRef.current = false;
+      voiceMicOnRef.current = false;
       throw err;
     }
   }
@@ -8124,58 +8153,42 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     const call = voiceCallRef.current;
     if (call) {
       try {
-        const micOn = localMicOn(call);
-        const next = !micOn;
-        await call.setLocalAudio(next);
-        if (voiceMicTrackRef.current) {
+        const next = !voiceMicOnRef.current;
+        if (next) {
+          // Re-ask / refresh mic track on unmute (Safari often revokes quietly).
+          const armed = await armVoiceMicFromGesture();
+          if (!armed) {
+            applyLocalMic(call, false);
+            paintVoiceUi(call, micPermissionDeniedMessage());
+            return;
+          }
           try {
-            voiceMicTrackRef.current.enabled = next;
+            if (typeof call.setInputDevicesAsync === "function") {
+              await call.setInputDevicesAsync({ audioSource: armed });
+            }
           } catch {
-            /* ignore */
+            /* older daily-js */
           }
         }
-        // Verify — Android sometimes no-ops setLocalAudio without throwing.
-        let confirmed = localMicOn(call);
-        if (confirmed !== next) {
-          await call.setLocalAudio(next);
-          if (voiceMicTrackRef.current) voiceMicTrackRef.current.enabled = next;
-          confirmed = localMicOn(call);
-        }
-        if (confirmed !== next) {
-          setVoiceUi({
-            phase: confirmed ? "live" : "muted",
-            peers: countVoicePeers(call),
-            message: "Mic blocked — check Chrome site permissions",
-          });
-          return;
-        }
+        applyLocalMic(call, next);
         syncAllRemoteAudio(call);
         replayVoiceElements(voiceAudioElsRef.current);
-        setVoiceUi({
-          phase: next ? "live" : "muted",
-          peers: countVoicePeers(call),
-        });
+        paintVoiceUi(call);
       } catch (e) {
-        setVoiceUi({
-          phase: "error",
-          peers: countVoicePeers(call),
-          message: clerkErrorText(e).slice(0, 80) || "Microphone blocked",
-        });
+        applyLocalMic(call, false);
+        paintVoiceUi(call, clerkErrorText(e).slice(0, 100) || micPermissionDeniedMessage());
       }
       return;
     }
     try {
-      const armed = await armVoiceMicFromGesture();
-      if (!armed && !navigator.mediaDevices) {
-        setVoiceUi({ phase: "error", peers: 0, message: "Microphone API unavailable" });
+      const perm = await queryMicPermission();
+      if (perm === "denied") {
+        setVoiceUi({ phase: "error", peers: 0, message: micPermissionDeniedMessage() });
         return;
       }
+      const armed = await armVoiceMicFromGesture();
       if (!armed) {
-        setVoiceUi({
-          phase: "error",
-          peers: 0,
-          message: "Allow microphone for citrons.lat in Chrome",
-        });
+        setVoiceUi({ phase: "error", peers: 0, message: micPermissionDeniedMessage() });
         return;
       }
       requestVoiceJoin();
@@ -8185,7 +8198,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       setVoiceUi({
         phase: "error",
         peers: 0,
-        message: clerkErrorText(e).slice(0, 80) || "Couldn't start voice",
+        message: clerkErrorText(e).slice(0, 80) || micPermissionDeniedMessage(),
       });
     }
   }
