@@ -7546,6 +7546,48 @@ function pendingJoinCode(): string {
   }
 }
 
+function lobbyInviteUrl(code: string): string {
+  const clean = String(code || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .slice(0, 12);
+  let origin = "https://citrons.lat";
+  if (typeof window !== "undefined") {
+    const host = window.location.hostname;
+    if (host === "citrons.lat" || host === "www.citrons.lat") origin = "https://citrons.lat";
+    else if (host === "localhost" || host === "127.0.0.1" || host.endsWith(".local")) origin = window.location.origin;
+    else if (host) origin = window.location.origin;
+  }
+  if (!clean) return `${origin}/`;
+  return `${origin}/?join=${encodeURIComponent(clean)}`;
+}
+
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    /* fall through */
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.left = "-9999px";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 function registerCitronsSW(): Promise<ServiceWorkerRegistration | null> {
   if (typeof window === "undefined" || !("serviceWorker" in navigator)) return Promise.resolve(null);
   if (!swRegisterPromise) {
@@ -8948,6 +8990,41 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     requestInviteList();
   }
 
+  async function copyInviteLink() {
+    const code = viewRef.current?.code || "";
+    if (!code) {
+      setInviteMsg("No lobby code yet");
+      return;
+    }
+    const url = lobbyInviteUrl(code);
+    const ok = await copyTextToClipboard(url);
+    setInviteMsg(ok ? "Link copied" : "Couldn't copy — long-press the link");
+  }
+
+  async function shareInviteLink() {
+    const code = viewRef.current?.code || "";
+    if (!code) {
+      setInviteMsg("No lobby code yet");
+      return;
+    }
+    const url = lobbyInviteUrl(code);
+    const title = viewRef.current?.title || "Citrons";
+    try {
+      if (typeof navigator.share === "function") {
+        await navigator.share({
+          title: "Citrons",
+          text: `Join ${title} on Citrons`,
+          url,
+        });
+        setInviteMsg("Invite shared");
+        return;
+      }
+    } catch (e: any) {
+      if (e && (e.name === "AbortError" || e.name === "NotAllowedError")) return;
+    }
+    await copyInviteLink();
+  }
+
   async function enableInvites() {
     setInviteBusy(true);
     setInviteMsg("");
@@ -9892,6 +9969,94 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
                   >
                     Invite
                   </div>
+                  <div
+                    style={{
+                      marginBottom: 12,
+                      padding: "10px 12px",
+                      borderRadius: 10,
+                      background: "rgba(0,0,0,0.28)",
+                      border: "1px solid rgba(255,255,255,0.14)",
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: 11,
+                        fontWeight: 800,
+                        letterSpacing: 1.1,
+                        textTransform: "uppercase",
+                        color: "rgba(255,255,255,0.55)",
+                        marginBottom: 6,
+                      }}
+                    >
+                      Invite link
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 12,
+                        lineHeight: 1.35,
+                        color: "rgba(245,240,230,0.88)",
+                        wordBreak: "break-all",
+                        marginBottom: 8,
+                        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                      }}
+                    >
+                      {lobbyInviteUrl(view.code)}
+                    </div>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button
+                        type="button"
+                        onClick={() => void copyInviteLink()}
+                        style={{
+                          ...LOBBY_GOLD_BTN,
+                          flex: 1,
+                          maxWidth: "none",
+                          height: 36,
+                          fontSize: 13,
+                        }}
+                      >
+                        Copy link
+                      </button>
+                      {typeof navigator !== "undefined" && typeof navigator.share === "function" ? (
+                        <button
+                          type="button"
+                          onClick={() => void shareInviteLink()}
+                          style={{
+                            ...LOBBY_GHOST_BTN,
+                            flex: 1,
+                            maxWidth: "none",
+                            height: 36,
+                            fontSize: 13,
+                          }}
+                        >
+                          Share
+                        </button>
+                      ) : null}
+                    </div>
+                    <div
+                      style={{
+                        marginTop: 8,
+                        fontSize: 12,
+                        color: "rgba(255,255,255,0.62)",
+                        textAlign: "center",
+                      }}
+                    >
+                      Code{" "}
+                      <span style={{ color: "#f1c40f", fontWeight: 800, letterSpacing: 1.4 }}>{view.code}</span>
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 11,
+                      fontWeight: 800,
+                      letterSpacing: 1.1,
+                      textTransform: "uppercase",
+                      color: "rgba(255,255,255,0.55)",
+                      marginBottom: 6,
+                      textAlign: "center",
+                    }}
+                  >
+                    Or notify a player
+                  </div>
                   {inviteNeedInstall ? (
                     <div style={{ fontSize: 13, lineHeight: 1.45, color: "rgba(255,255,255,0.78)", textAlign: "center", marginBottom: 10 }}>
                       On iPhone, add Citrons to your Home Screen, then open it from there to get invites.
@@ -10015,7 +10180,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
                         marginTop: 8,
                         fontSize: 12,
                         lineHeight: 1.35,
-                        color: /sent/i.test(inviteMsg) ? "#d5f5e3" : "#f5b7b1",
+                        color: /sent|copied|shared/i.test(inviteMsg) ? "#d5f5e3" : "#f5b7b1",
                         textAlign: "center",
                       }}
                     >
@@ -10069,6 +10234,20 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
           >
             {view.title || "Waiting room"}
           </div>
+          {view.code ? (
+            <div
+              style={{
+                flexShrink: 0,
+                fontSize: 12,
+                color: "rgba(245,240,230,0.62)",
+                marginTop: -4,
+                letterSpacing: 0.6,
+                textAlign: "center",
+              }}
+            >
+              Code <span style={{ color: "#f1c40f", fontWeight: 800 }}>{view.code}</span>
+            </div>
+          ) : null}
           <div
             style={{
               flex: 1,
