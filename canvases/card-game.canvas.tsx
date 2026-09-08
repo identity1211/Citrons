@@ -8687,8 +8687,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       if (msg.ok) {
         setInviteNeedPermission(false);
         setInvitePromptOpen(false);
-        if (inviteOpenRef.current && msg.test) setInviteMsg("Test ping sent — check your notifications");
-        else if (inviteOpenRef.current && msg.welcome) setInviteMsg("Invites are on — check your notifications");
+        if (inviteOpenRef.current && msg.welcome) setInviteMsg("Invites are on — check your notifications");
       } else {
         setInviteMsg("Couldn't save this device for invites");
       }
@@ -8893,7 +8892,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     }
     const url = lobbyInviteUrl(code);
     const ok = await copyTextToClipboard(url);
-    setInviteMsg(ok ? "Link copied" : "Couldn't copy — long-press the link");
+    setInviteMsg(ok ? "Link copied" : "Couldn't copy the link");
   }
 
   async function shareInviteLink() {
@@ -8947,22 +8946,6 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       setInviteBusy(false);
       setInviteMsg(clerkErrorText(e));
     }
-  }
-
-  function sendTestPush() {
-    setInviteBusy(true);
-    setInviteMsg("");
-    void (async () => {
-      try {
-        const payload = await clerkPayload();
-        const ws = wsRef.current;
-        if (!ws || ws.readyState !== 1) throw new Error("No connection to the server");
-        ws.send(JSON.stringify({ type: "pushTest", clerkToken: payload.clerkToken }));
-      } catch (e) {
-        setInviteBusy(false);
-        setInviteMsg(clerkErrorText(e));
-      }
-    })();
   }
 
   function sendInvites() {
@@ -9864,80 +9847,35 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
                   >
                     Invite
                   </div>
-                  <div
-                    style={{
-                      marginBottom: 12,
-                      padding: "10px 12px",
-                      borderRadius: 10,
-                      background: "rgba(0,0,0,0.28)",
-                      border: "1px solid rgba(255,255,255,0.14)",
-                    }}
-                  >
-                    <div
+                  <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                    <button
+                      type="button"
+                      onClick={() => void copyInviteLink()}
                       style={{
-                        fontSize: 11,
-                        fontWeight: 800,
-                        letterSpacing: 1.1,
-                        textTransform: "uppercase",
-                        color: "rgba(255,255,255,0.55)",
-                        marginBottom: 6,
+                        ...LOBBY_GOLD_BTN,
+                        flex: 1,
+                        maxWidth: "none",
+                        height: 36,
+                        fontSize: 13,
                       }}
                     >
-                      Invite link
-                    </div>
-                    <div
-                      style={{
-                        fontSize: 12,
-                        lineHeight: 1.35,
-                        color: "rgba(245,240,230,0.88)",
-                        wordBreak: "break-all",
-                        marginBottom: 8,
-                        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-                      }}
-                    >
-                      {lobbyInviteUrl(view.code)}
-                    </div>
-                    <div style={{ display: "flex", gap: 8 }}>
+                      Copy link
+                    </button>
+                    {typeof navigator !== "undefined" && typeof navigator.share === "function" ? (
                       <button
                         type="button"
-                        onClick={() => void copyInviteLink()}
+                        onClick={() => void shareInviteLink()}
                         style={{
-                          ...LOBBY_GOLD_BTN,
+                          ...LOBBY_GHOST_BTN,
                           flex: 1,
                           maxWidth: "none",
                           height: 36,
                           fontSize: 13,
                         }}
                       >
-                        Copy link
+                        Share
                       </button>
-                      {typeof navigator !== "undefined" && typeof navigator.share === "function" ? (
-                        <button
-                          type="button"
-                          onClick={() => void shareInviteLink()}
-                          style={{
-                            ...LOBBY_GHOST_BTN,
-                            flex: 1,
-                            maxWidth: "none",
-                            height: 36,
-                            fontSize: 13,
-                          }}
-                        >
-                          Share
-                        </button>
-                      ) : null}
-                    </div>
-                    <div
-                      style={{
-                        marginTop: 8,
-                        fontSize: 12,
-                        color: "rgba(255,255,255,0.62)",
-                        textAlign: "center",
-                      }}
-                    >
-                      Code{" "}
-                      <span style={{ color: "#f1c40f", fontWeight: 800, letterSpacing: 1.4 }}>{view.code}</span>
-                    </div>
+                    ) : null}
                   </div>
                   <div
                     style={{
@@ -10059,16 +9997,6 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
                             ? `Send invites (${invitePicked.length})`
                             : "Send invite"}
                       </button>
-                      {!inviteNeedPermission && !inviteNeedInstall ? (
-                        <button
-                          type="button"
-                          disabled={inviteBusy}
-                          onClick={sendTestPush}
-                          style={{ ...PROFILE_GHOST, marginTop: 8, height: 32, fontSize: 13 }}
-                        >
-                          Send me a test
-                        </button>
-                      ) : null}
                   {inviteMsg ? (
                     <div
                       style={{
