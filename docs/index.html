@@ -10162,20 +10162,6 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
           >
             {view.title || "Waiting room"}
           </div>
-          {view.code ? (
-            <div
-              style={{
-                flexShrink: 0,
-                fontSize: 12,
-                color: "rgba(245,240,230,0.62)",
-                marginTop: -4,
-                letterSpacing: 0.6,
-                textAlign: "center",
-              }}
-            >
-              Code <span style={{ color: "#f1c40f", fontWeight: 800 }}>{view.code}</span>
-            </div>
-          ) : null}
           <div
             style={{
               flex: 1,
