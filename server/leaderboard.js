@@ -675,10 +675,10 @@ function recordGame(room) {
   const order = room && Array.isArray(room.finishOrder) ? room.finishOrder : [];
   const seats = room && Array.isArray(room.seats) ? room.seats : [];
   const field = order.length;
-  if (field < 2 || field > 5) return {};
+  if (field < 2 || field > 5) return [];
   const seen = new Set();
   const changed = [];
-  const unlocksBySeatId = {};
+  const feed = [];
   for (let i = 0; i < order.length; i++) {
     const player = seats[order[i]];
     if (!player || !player.clerkUserId) continue;
@@ -689,15 +689,22 @@ function recordGame(room) {
     if (!id) continue;
     pending.add(id);
     changed.push(id);
-    if (player.id && unlocked.length) unlocksBySeatId[String(player.id)] = unlocked;
+    if (unlocked.length) {
+      feed.push({
+        seatId: String(player.id || ""),
+        name: sanitizeName(player.name),
+        avatar: sanitizeAvatar(player.avatar),
+        achievements: unlocked.slice(),
+      });
+    }
   }
   store.matches = num(store.matches) + 1;
   saveSafe();
-  if (changed.length === 0) return unlocksBySeatId;
+  if (changed.length === 0) return feed;
   Promise.all(changed.map((id) => pushUserToClerkWithRetry(id, store.users[id]))).catch((err) => {
     console.error("leaderboard clerk sync failed", err);
   });
-  return unlocksBySeatId;
+  return feed;
 }
 
 function onBoard(u) {
@@ -709,6 +716,7 @@ function top(limit) {
   return Object.keys(store.users)
     .map((id) => {
       const u = normalizeRow(store.users[id]);
+      const achievements = ACHIEVEMENTS.map((a) => a.id).filter((aid) => num(u.achievements[aid]));
       return {
         id,
         name: u.name,
@@ -718,6 +726,7 @@ function top(limit) {
         wins: u.wins,
         lasts: u.lasts,
         season1: u.season1,
+        achievements,
       };
     })
     .filter((row) => onBoard(row))

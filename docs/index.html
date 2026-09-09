@@ -2398,16 +2398,79 @@ function DrawOverlay({ anim }: { anim: DrawAnim }) {
   );
 }
 
-const ACHIEVEMENT_META: { id: string; title: string; desc: string }[] = [
-  { id: "streak_3", title: "Hot Streak", desc: "Win 3 ranked games in a row" },
-  { id: "streak_5", title: "On Fire", desc: "Win 5 ranked games in a row" },
-  { id: "pts_100", title: "Century", desc: "Reach 100 season points" },
-  { id: "pts_100_first", title: "First Century", desc: "Be the first player to reach 100 season points" },
-  { id: "games_100", title: "Hundred Games", desc: "Play 100 ranked games" },
+const ACHIEVEMENT_META: { id: string; title: string; desc: string; icon: string }[] = [
+  { id: "streak_3", title: "Hot Streak", desc: "Win 3 ranked games in a row", icon: "achievements/streak_3.jpg" },
+  { id: "streak_5", title: "On Fire", desc: "Win 5 ranked games in a row", icon: "achievements/streak_5.jpg" },
+  { id: "pts_100", title: "Century", desc: "Reach 100 season points", icon: "achievements/pts_100.jpg" },
+  {
+    id: "pts_100_first",
+    title: "First Century",
+    desc: "Be the first player to reach 100 season points",
+    icon: "achievements/pts_100_first.jpg",
+  },
+  { id: "games_100", title: "Hundred Games", desc: "Play 100 ranked games", icon: "achievements/games_100.jpg" },
 ];
 
 function achievementMeta(id: string) {
-  return ACHIEVEMENT_META.find((a) => a.id === id) || { id, title: id, desc: "" };
+  return (
+    ACHIEVEMENT_META.find((a) => a.id === id) || {
+      id,
+      title: id,
+      desc: "",
+      icon: "achievements/pts_100.jpg",
+    }
+  );
+}
+
+function AchievementIcon({
+  id,
+  size = 44,
+  selected = false,
+  onClick,
+  title,
+}: {
+  id: string;
+  size?: number;
+  selected?: boolean;
+  onClick?: () => void;
+  title?: string;
+}) {
+  const meta = achievementMeta(id);
+  const style: CSSProperties = {
+    width: size,
+    height: size,
+    borderRadius: Math.round(size * 0.28),
+    border: selected ? "2px solid #f1c40f" : "1.5px solid rgba(241,196,15,0.5)",
+    background: "rgba(0,0,0,0.35)",
+    padding: 0,
+    overflow: "hidden",
+    flexShrink: 0,
+    cursor: onClick ? "pointer" : "default",
+    boxShadow: selected
+      ? "0 0 0 1px rgba(241,196,15,0.4), 0 4px 14px rgba(0,0,0,0.35)"
+      : "0 2px 8px rgba(0,0,0,0.3)",
+    display: "block",
+  };
+  const img = (
+    <img
+      src={meta.icon}
+      alt=""
+      draggable={false}
+      style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+    />
+  );
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} aria-label={title || meta.title} aria-pressed={selected} style={style}>
+        {img}
+      </button>
+    );
+  }
+  return (
+    <div style={style} aria-hidden={title ? undefined : true} title={title || meta.title}>
+      {img}
+    </div>
+  );
 }
 
 function MatchResultsOverlay({
@@ -2415,14 +2478,15 @@ function MatchResultsOverlay({
   finishOrder,
   youSeat,
   onLobby,
-  unlockedAchievements = [],
+  achievementFeed = [],
 }: {
   players: PlayerState[];
   finishOrder: number[];
   youSeat: number | null;
   onLobby: () => void;
-  unlockedAchievements?: string[];
+  achievementFeed?: { seatId: string; name: string; avatar: string; achievements: string[] }[];
 }) {
+  const feed = (achievementFeed || []).filter((row) => row && Array.isArray(row.achievements) && row.achievements.length);
   const order = finishOrder.length > 0 ? finishOrder : players.map((_, i) => i);
   const field = order.length;
   const rows = order.map((pIdx, i) => {
@@ -2435,7 +2499,6 @@ function MatchResultsOverlay({
       you: youSeat != null && pIdx === youSeat,
     };
   });
-  const unlocks = (unlockedAchievements || []).map(achievementMeta).filter((a) => a.title);
   const colors = ["#f1c40f", "#fdebd0", "#ffffff", "#2ecc71", "#e67e22", "#f8e6a0"];
   const bits = Array.from({ length: 18 }, (_, i) => ({
     left: `${(i * 17 + 9) % 94}%`,
@@ -2448,6 +2511,7 @@ function MatchResultsOverlay({
     h: i % 4 === 0 ? 16 : 8,
     round: i % 2 === 0,
   }));
+  const showAchievements = feed.length > 0;
   return (
     <div
       style={{
@@ -2512,86 +2576,119 @@ function MatchResultsOverlay({
             textAlign: "center",
           }}
         >
-          Results
+          {showAchievements ? "Achievement unlocked" : "Results"}
         </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: "min(42vh, 300px)", overflowY: "auto" }}>
-          {rows.map((row) => (
-            <div
-              key={row.pIdx}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                padding: "7px 8px",
-                borderRadius: 10,
-                background: row.you ? "rgba(241,196,15,0.16)" : "rgba(0,0,0,0.28)",
-                border: row.you ? "1px solid rgba(241,196,15,0.55)" : "1px solid rgba(255,255,255,0.1)",
-              }}
-            >
-              <div
-                style={{
-                  width: 36,
-                  flexShrink: 0,
-                  fontWeight: 800,
-                  fontSize: 12,
-                  textAlign: "center",
-                  color: row.place === 1 ? "#f1c40f" : "rgba(255,255,255,0.7)",
-                }}
-              >
-                {placeLabel(row.place, field)}
-              </div>
-              <AvatarBubble src={row.avatar} name={row.name} size={28} />
-              <div
-                style={{
-                  flex: 1,
-                  minWidth: 0,
-                  fontWeight: 700,
-                  fontSize: 14,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {row.name}
-                {row.you ? " (you)" : ""}
-              </div>
-            </div>
-          ))}
-        </div>
-        {unlocks.length > 0 ? (
+        {showAchievements ? (
           <div
             style={{
-              padding: "10px 10px 8px",
-              borderRadius: 10,
-              background: "rgba(241,196,15,0.12)",
-              border: "1px solid rgba(241,196,15,0.4)",
+              display: "flex",
+              flexDirection: "column",
+              gap: 10,
+              maxHeight: "min(52vh, 360px)",
+              overflowY: "auto",
             }}
           >
-            <div
-              style={{
-                fontSize: 10,
-                fontWeight: 800,
-                letterSpacing: 1.4,
-                textTransform: "uppercase",
-                color: "#f1c40f",
-                marginBottom: 6,
-                textAlign: "center",
-              }}
-            >
-              Achievement unlocked
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              {unlocks.map((a) => (
-                <div key={a.id} style={{ textAlign: "center" }}>
-                  <div style={{ fontWeight: 800, fontSize: 14, color: "#f5f0e6" }}>{a.title}</div>
-                  {a.desc ? (
-                    <div style={{ fontSize: 11, color: "rgba(255,255,255,0.62)", marginTop: 1 }}>{a.desc}</div>
-                  ) : null}
+            {feed.map((row, idx) => (
+              <div
+                key={`${row.seatId || row.name}-${idx}`}
+                style={{
+                  padding: "10px 10px",
+                  borderRadius: 12,
+                  background: "rgba(241,196,15,0.12)",
+                  border: "1px solid rgba(241,196,15,0.35)",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                  <AvatarBubble src={row.avatar} name={row.name} size={28} />
+                  <div
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      fontWeight: 800,
+                      fontSize: 14,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {row.name}
+                  </div>
                 </div>
-              ))}
-            </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {row.achievements.map((id) => {
+                    const meta = achievementMeta(id);
+                    return (
+                      <div key={id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <AchievementIcon id={id} size={40} />
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <div style={{ fontWeight: 800, fontSize: 13, color: "#f5f0e6" }}>{meta.title}</div>
+                          {meta.desc ? (
+                            <div style={{ fontSize: 11, lineHeight: 1.35, color: "rgba(255,255,255,0.62)", marginTop: 1 }}>
+                              {meta.desc}
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </div>
-        ) : null}
+        ) : (
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 6,
+              maxHeight: "min(52vh, 360px)",
+              overflowY: "auto",
+            }}
+          >
+            {rows.map((row) => (
+              <div
+                key={row.pIdx}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "7px 8px",
+                  borderRadius: 10,
+                  background: row.you ? "rgba(241,196,15,0.16)" : "rgba(0,0,0,0.28)",
+                  border: row.you ? "1px solid rgba(241,196,15,0.55)" : "1px solid rgba(255,255,255,0.1)",
+                }}
+              >
+                <div
+                  style={{
+                    width: 36,
+                    flexShrink: 0,
+                    fontWeight: 800,
+                    fontSize: 12,
+                    textAlign: "center",
+                    color: row.place === 1 ? "#f1c40f" : "rgba(255,255,255,0.7)",
+                  }}
+                >
+                  {placeLabel(row.place, field)}
+                </div>
+                <AvatarBubble src={row.avatar} name={row.name} size={28} />
+                <div
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    fontWeight: 700,
+                    fontSize: 14,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {row.name}
+                  {row.you ? " (you)" : ""}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
         <button
           type="button"
           className="lobby-play-btn"
@@ -3045,6 +3142,7 @@ function PlayerStatsBody({ userId }: { userId: string }) {
     achievements: { id: string; title: string; desc: string; unlockedAt: number }[];
   } | null>(null);
   const [fail, setFail] = useState("");
+  const [openAchId, setOpenAchId] = useState<string | null>(null);
 
   useEffect(() => {
     let stop = false;
@@ -3071,9 +3169,10 @@ function PlayerStatsBody({ userId }: { userId: string }) {
               desc: String(hit?.desc || def.desc),
               unlockedAt: Number(hit?.unlockedAt) || 0,
             };
-          }),
+          }).filter((a) => a.unlockedAt > 0),
         });
         setFail("");
+        setOpenAchId(null);
       } catch {
         if (!stop) setFail("Couldn't load stats");
       }
@@ -3091,6 +3190,7 @@ function PlayerStatsBody({ userId }: { userId: string }) {
       <div style={{ fontSize: 13, color: "rgba(255,255,255,0.62)", marginBottom: 8, padding: 12 }}>Loading…</div>
     );
   }
+  const openAch = openAchId ? data.achievements.find((a) => a.id === openAchId) : null;
   return (
     <div style={{ textAlign: "left", marginBottom: 4 }}>
       <div
@@ -3122,69 +3222,52 @@ function PlayerStatsBody({ userId }: { userId: string }) {
       >
         Now
       </div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: data.achievements.length ? 16 : 0 }}>
         <StatPair label="games" value={data.season.games} />
         <StatPair label={data.season.points === 1 ? "pt" : "pts"} value={data.season.points} />
         <StatPair label="avg" value={avgPts(data.season.points, data.season.games)} />
       </div>
-      <div
-        style={{
-          fontSize: 11,
-          fontWeight: 800,
-          letterSpacing: 1.1,
-          textTransform: "uppercase",
-          color: "rgba(255,255,255,0.5)",
-          marginBottom: 8,
-        }}
-      >
-        Achievements
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {data.achievements.map((a) => {
-          const on = a.unlockedAt > 0;
-          return (
+      {data.achievements.length > 0 ? (
+        <>
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 800,
+              letterSpacing: 1.1,
+              textTransform: "uppercase",
+              color: "rgba(255,255,255,0.5)",
+              marginBottom: 8,
+            }}
+          >
+            Achievements
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: openAch ? 8 : 0 }}>
+            {data.achievements.map((a) => (
+              <AchievementIcon
+                key={a.id}
+                id={a.id}
+                size={48}
+                title={a.title}
+                selected={openAchId === a.id}
+                onClick={() => setOpenAchId((prev) => (prev === a.id ? null : a.id))}
+              />
+            ))}
+          </div>
+          {openAch ? (
             <div
-              key={a.id}
               style={{
-                display: "flex",
-                alignItems: "flex-start",
-                gap: 8,
-                padding: "8px 10px",
-                borderRadius: 8,
-                border: on ? "1px solid rgba(241,196,15,0.45)" : "1px solid rgba(255,255,255,0.1)",
-                background: on ? "rgba(241,196,15,0.12)" : "rgba(0,0,0,0.22)",
-                opacity: on ? 1 : 0.55,
+                padding: "10px 12px",
+                borderRadius: 10,
+                border: "1px solid rgba(241,196,15,0.4)",
+                background: "rgba(241,196,15,0.1)",
               }}
             >
-              <div
-                style={{
-                  width: 28,
-                  height: 28,
-                  borderRadius: 8,
-                  flexShrink: 0,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  background: on ? "rgba(241,196,15,0.28)" : "rgba(255,255,255,0.08)",
-                  color: on ? "#f1c40f" : "rgba(255,255,255,0.45)",
-                  fontWeight: 800,
-                  fontSize: 14,
-                }}
-              >
-                {on ? "✓" : "·"}
-              </div>
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontWeight: 700, fontSize: 13, color: on ? "#f5f0e6" : "rgba(245,240,230,0.7)" }}>
-                  {a.title}
-                </div>
-                <div style={{ fontSize: 11, lineHeight: 1.35, color: "rgba(255,255,255,0.55)", marginTop: 2 }}>
-                  {a.desc}
-                </div>
-              </div>
+              <div style={{ fontWeight: 800, fontSize: 14, color: "#f5f0e6", marginBottom: 4 }}>{openAch.title}</div>
+              <div style={{ fontSize: 12, lineHeight: 1.4, color: "rgba(245,240,230,0.78)" }}>{openAch.desc}</div>
             </div>
-          );
-        })}
-      </div>
+          ) : null}
+        </>
+      ) : null}
     </div>
   );
 }
@@ -6117,7 +6200,7 @@ function Table({
   onKickPlayer,
   onKickVote,
   matchMenu,
-  unlockedAchievements,
+  achievementFeed,
 }: {
   players: PlayerState[];
   drawDeck: string[];
@@ -6166,7 +6249,7 @@ function Table({
   onKickPlayer?: (playerId: string) => void;
   onKickVote?: (yes: boolean) => void;
   matchMenu?: { onToLobby: () => void; onLeave: () => void };
-  unlockedAchievements?: string[];
+  achievementFeed?: { seatId: string; name: string; avatar: string; achievements: string[] }[];
   tutorial?: {
     text: string;
     showNext: boolean;
@@ -6970,7 +7053,7 @@ function Table({
           finishOrder={finishOrder}
           youSeat={watching ? null : 0}
           onLobby={toLobby}
-          unlockedAchievements={unlockedAchievements}
+          achievementFeed={achievementFeed}
         />
       ) : null}
       {kickVote ? (
@@ -7066,7 +7149,7 @@ type OnlineView = {
   chat?: ChatLine[];
   kickVote?: KickVoteInfo | null;
   lobby: { id: string; name: string; avatar?: string; ready: boolean; connected: boolean; host: boolean }[];
-  unlockedAchievements?: string[];
+  achievementFeed?: { seatId: string; name: string; avatar: string; achievements: string[] }[];
 };
 
 type LobbyInfo = {
@@ -7215,6 +7298,7 @@ type BoardRow = {
   avatar: string;
   points: number;
   games: number;
+  achievements: string[];
 };
 
 function medalColor(rank: number): string {
@@ -7286,6 +7370,7 @@ function LeaderboardPanel() {
                 avatar?: string;
                 points?: number;
                 games?: number;
+                achievements?: string[];
               },
               i: number
             ) => ({
@@ -7295,6 +7380,9 @@ function LeaderboardPanel() {
               avatar: String(p.avatar || ""),
               points: Number(p.points) || 0,
               games: Number(p.games) || 0,
+              achievements: Array.isArray(p.achievements)
+                ? p.achievements.map(String).filter((id) => ACHIEVEMENT_META.some((a) => a.id === id))
+                : [],
             })
           )
         );
@@ -7424,16 +7512,32 @@ function LeaderboardPanel() {
                   style={{
                     flex: 1,
                     minWidth: 0,
-                    color: "#f5f0e6",
-                    fontWeight: mine ? 700 : 600,
-                    fontSize: 14,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 4,
                   }}
                 >
-                  {row.name}
-                  {mine ? " (you)" : ""}
+                  <div
+                    style={{
+                      minWidth: 0,
+                      color: "#f5f0e6",
+                      fontWeight: mine ? 700 : 600,
+                      fontSize: 14,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {row.name}
+                    {mine ? " (you)" : ""}
+                  </div>
+                  {row.achievements.length > 0 ? (
+                    <div style={{ display: "flex", gap: 2, flexShrink: 0, alignItems: "center" }}>
+                      {row.achievements.map((id) => (
+                        <AchievementIcon key={id} id={id} size={18} title={achievementMeta(id).title} />
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
                 <div
                   style={{
@@ -10495,7 +10599,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         kickVote={view.kickVote || null}
         onKickPlayer={(targetId) => send({ type: "kick", targetId })}
         onKickVote={(yes) => send({ type: "kickVote", yes })}
-        unlockedAchievements={view.unlockedAchievements || []}
+        achievementFeed={Array.isArray(view.achievementFeed) ? view.achievementFeed : []}
         matchMenu={{
           onToLobby: view.spectator ? leaveSpectate : parkAtLobby,
           onLeave: view.spectator ? leaveSpectate : leaveOnline,

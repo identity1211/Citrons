@@ -216,12 +216,7 @@ function viewFor(room, playerId) {
     chat: Array.isArray(room.chat) ? room.chat : [],
     watchers: roomSpectators(room).filter((s) => isOnline(s)).length,
     kickVote: kickVoteView(room, playerId),
-    unlockedAchievements:
-      room.phase === "finished" && room.achievementUnlocks && typeof room.achievementUnlocks === "object"
-        ? Array.isArray(room.achievementUnlocks[playerId])
-          ? room.achievementUnlocks[playerId]
-          : []
-        : [],
+    achievementFeed: achievementFeedView(room),
     lobby: room.seats.map((p) => ({
       id: p.id,
       name: p.id === playerId ? `${p.name} (you)` : p.name,
@@ -231,6 +226,18 @@ function viewFor(room, playerId) {
       host: p.id === room.hostId,
     })),
   };
+}
+
+function achievementFeedView(room) {
+  if (room.phase !== "finished" || !Array.isArray(room.achievementFeed)) return [];
+  return room.achievementFeed
+    .filter((row) => row && Array.isArray(row.achievements) && row.achievements.length)
+    .map((row) => ({
+      seatId: String(row.seatId || ""),
+      name: String(row.name || "Player").slice(0, 18),
+      avatar: String(row.avatar || ""),
+      achievements: row.achievements.map(String).slice(0, 8),
+    }));
 }
 
 function viewForSpectator(room, spectatorId) {
@@ -257,6 +264,7 @@ function viewForSpectator(room, spectatorId) {
     chat: Array.isArray(room.chat) ? room.chat : [],
     watchers: roomSpectators(room).filter((s) => isOnline(s)).length,
     kickVote: kickVoteView(room, spectatorId),
+    achievementFeed: achievementFeedView(room),
     lobby: room.seats.map((p) => ({
       id: p.id,
       name: p.name,
@@ -590,7 +598,7 @@ async function createRoom(ws, name, avatar, clerkToken, title) {
     swapSeconds: SWAP_SECONDS,
     burnCount: 0,
     boardSaved: false,
-    achievementUnlocks: {},
+    achievementFeed: [],
     lastWinnerId: "",
     tableSkin: "felt",
     cardBack: "classic",
@@ -872,7 +880,7 @@ function startGame(room) {
   room.finishOrder = [];
   room.burnCount = 0;
   room.boardSaved = false;
-  room.achievementUnlocks = {};
+  room.achievementFeed = [];
   room.currentPlayer = 0;
   clearKickVote(room);
   room.phase = "dealing";
@@ -959,10 +967,10 @@ function saveFinishedGame(room) {
   if (room.boardSaved) return;
   room.boardSaved = true;
   try {
-    room.achievementUnlocks = leaderboard.recordGame(room) || {};
+    room.achievementFeed = leaderboard.recordGame(room) || [];
   } catch (err) {
     room.boardSaved = false;
-    room.achievementUnlocks = {};
+    room.achievementFeed = [];
     console.error("leaderboard save failed", err);
   }
 }
