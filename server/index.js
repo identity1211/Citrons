@@ -599,6 +599,8 @@ async function createRoom(ws, name, avatar, clerkToken, title) {
     burnCount: 0,
     boardSaved: false,
     achievementFeed: [],
+    pendingAchievementFeed: [],
+    sixForceBy: null,
     lastWinnerId: "",
     tableSkin: "felt",
     cardBack: "classic",
@@ -881,6 +883,8 @@ function startGame(room) {
   room.burnCount = 0;
   room.boardSaved = false;
   room.achievementFeed = [];
+  room.pendingAchievementFeed = [];
+  room.sixForceBy = null;
   room.currentPlayer = 0;
   clearKickVote(room);
   room.phase = "dealing";
@@ -962,20 +966,104 @@ function firstSeatIndex(room) {
   return Math.floor(Math.random() * n);
 }
 
+function mergeAchievementFeeds(...feeds) {
+  const map = new Map();
+  for (const feed of feeds) {
+    if (!Array.isArray(feed)) continue;
+    for (const row of feed) {
+      if (!row || !Array.isArray(row.achievements) || row.achievements.length === 0) continue;
+      const key = String(row.seatId || row.name || "");
+      if (!key) continue;
+      const prev = map.get(key);
+      if (prev) {
+        const set = new Set([...prev.achievements, ...row.achievements.map(String)]);
+        prev.achievements = [...set];
+        if (!prev.avatar && row.avatar) prev.avatar = String(row.avatar || "");
+        if (row.name) prev.name = String(row.name).slice(0, 18);
+      } else {
+        map.set(key, {
+          seatId: String(row.seatId || ""),
+          name: String(row.name || "Player").slice(0, 18),
+          avatar: String(row.avatar || ""),
+          achievements: row.achievements.map(String).slice(0, 8),
+        });
+      }
+    }
+  }
+  return [...map.values()];
+}
+
 function saveFinishedGame(room) {
   if (!room.lastWinnerId) noteWinner(room, Array.isArray(room.finishOrder) ? room.finishOrder[0] : -1);
   if (room.boardSaved) return;
   room.boardSaved = true;
   try {
-    room.achievementFeed = leaderboard.recordGame(room) || [];
+    const endFeed = leaderboard.recordGame(room) || [];
+    room.achievementFeed = mergeAchievementFeeds(room.pendingAchievementFeed, endFeed);
+    room.pendingAchievementFeed = [];
   } catch (err) {
     room.boardSaved = false;
-    room.achievementFeed = [];
+    room.achievementFeed = mergeAchievementFeeds(room.pendingAchievementFeed);
     console.error("leaderboard save failed", err);
   }
 }
 
+function pushPendingAchievements(room, player, unlocked) {
+  if (!player || !unlocked || !unlocked.length) return;
+  if (!Array.isArray(room.pendingAchievementFeed)) room.pendingAchievementFeed = [];
+  room.pendingAchievementFeed.push({
+    seatId: String(player.id || ""),
+    name: player.name,
+    avatar: player.avatar || "",
+    achievements: unlocked.slice(),
+  });
+}
+
+function updateSixForceAfterPlay(room, playerIndex, result) {
+  if (result.willBurn) {
+    room.sixForceBy = null;
+    return;
+  }
+  if (result.pickup) return;
+  const top = engine.getEffectiveTop(result.discard || []);
+  if (!top || engine.getRank(top) !== "6") {
+    room.sixForceBy = null;
+    return;
+  }
+  const playedSix = (result.played || []).some((c) => engine.getRank(c) === "6");
+  if (!playedSix) return;
+  const p = room.seats[playerIndex];
+  if (!p) return;
+  room.sixForceBy = {
+    seatIndex: playerIndex,
+    seatId: String(p.id || ""),
+    clerkUserId: p.clerkUserId || "",
+    name: p.name,
+    avatar: p.avatar || "",
+  };
+}
+
+function creditSixForcePickup(room, pickerIndex, pileBefore) {
+  const force = room.sixForceBy;
+  room.sixForceBy = null;
+  if (!force || !force.clerkUserId) return;
+  if (force.seatIndex === pickerIndex) return;
+  const top = engine.getEffectiveTop(pileBefore || []);
+  if (!top || engine.getRank(top) !== "6") return;
+  try {
+    const { unlocked } = leaderboard.recordSixForce(force.clerkUserId, force.name, force.avatar);
+    pushPendingAchievements(
+      room,
+      { id: force.seatId, name: force.name, avatar: force.avatar },
+      unlocked
+    );
+  } catch (err) {
+    console.error("six-force stats failed", err);
+  }
+}
+
 function afterPlay(room, playerIndex, result) {
+  const pileBeforePickup = result.pickup ? [...(room.discard || [])] : null;
   for (let i = 0; i < room.seats.length; i++) {
     const src = result.players[i];
     const dst = room.seats[i];
@@ -987,9 +1075,12 @@ function afterPlay(room, playerIndex, result) {
   room.discard = result.discard;
   if (result.willBurn) room.burnCount += result.burnCards.length;
   if (result.pickup) {
+    creditSixForcePickup(room, result.pickup.toPlayer, pileBeforePickup);
     const p = room.seats[result.pickup.toPlayer];
     p.hand = engine.sortHand([...p.hand, ...result.pickup.cards]);
     room.discard = [];
+  } else {
+    updateSixForceAfterPlay(room, playerIndex, result);
   }
   room.statusMsg = result.message;
   if (result.privateReveal) {
@@ -1056,6 +1147,14 @@ function handleMeddle(room, player, play) {
   if (!result.ok) return error(player.ws, result.message);
   if (!result.willBurn) return error(player.ws, "Meddle only if those cards burn the pile");
   result.message = `${player.name} meddles — discard burned!`;
+  if (player.clerkUserId) {
+    try {
+      const { unlocked } = leaderboard.recordMeddle(player.clerkUserId, player.name, player.avatar);
+      pushPendingAchievements(room, player, unlocked);
+    } catch (err) {
+      console.error("meddle stats failed", err);
+    }
+  }
   afterPlay(room, idx, result);
 }
 
@@ -1066,8 +1165,10 @@ function handlePickup(room, player, tableTake) {
   if (engine.mustTakeTableWithPickup(player) && (!tableTake || tableTake.zone !== "faceUp")) {
     return error(player.ws, "Tap a face-up card to take it with the discard");
   }
+  const pileBefore = [...(room.discard || [])];
   const result = engine.applyPickUp(idx, room.seats, room.discard, tableTake || null);
   if (!result.ok) return error(player.ws, result.message);
+  creditSixForcePickup(room, idx, pileBefore);
   for (let i = 0; i < room.seats.length; i++) {
     room.seats[i].hand = result.players[i].hand;
     room.seats[i].faceUp = result.players[i].faceUp;

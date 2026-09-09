@@ -2304,6 +2304,19 @@ const ACHIEVEMENT_META: { id: string; title: string; desc: string; icon: string 
     icon: "achievements/pts_100_first.jpg",
   },
   { id: "games_100", title: "Hundred Games", desc: "Play 100 ranked games", icon: "achievements/games_100.jpg" },
+  { id: "meddle_20", title: "Fast Finger", desc: "Land 20 meddles", icon: "achievements/meddle_20.jpg" },
+  {
+    id: "meddle_20_first",
+    title: "Fastest Finger",
+    desc: "Be the first player to land 20 meddles",
+    icon: "achievements/meddle_20_first.jpg",
+  },
+  {
+    id: "six_seven",
+    title: "Six Seven",
+    desc: "Force 7 pickups with a 6",
+    icon: "achievements/six_seven.jpg",
+  },
 ];
 
 function achievementMeta(id: string) {
@@ -3033,7 +3046,7 @@ function winShare(wins: number, games: number): string {
 function PlayerStatsBody({ userId }: { userId: string }) {
   const [data, setData] = useState<{
     season1: { games: number; wins: number };
-    season: { games: number; points: number; wins: number };
+    season: { games: number; points: number; wins: number; meddles: number; sixForces: number };
     achievements: { id: string; title: string; desc: string; unlockedAt: number }[];
   } | null>(null);
   const [fail, setFail] = useState("");
@@ -3055,6 +3068,8 @@ function PlayerStatsBody({ userId }: { userId: string }) {
             games: Number(p?.season?.games) || 0,
             points: Number(p?.season?.points) || 0,
             wins: Number(p?.season?.wins) || 0,
+            meddles: Number(p?.season?.meddles) || 0,
+            sixForces: Number(p?.season?.sixForces) || 0,
           },
           achievements: ACHIEVEMENT_META.map((def) => {
             const hit = rawAch.find((a: any) => a && a.id === def.id);
@@ -3117,10 +3132,14 @@ function PlayerStatsBody({ userId }: { userId: string }) {
       >
         Now
       </div>
-      <div style={{ display: "flex", gap: 8, marginBottom: data.achievements.length ? 16 : 0 }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
         <StatPair label="games" value={data.season.games} />
         <StatPair label={data.season.points === 1 ? "pt" : "pts"} value={data.season.points} />
         <StatPair label="avg" value={avgPts(data.season.points, data.season.games)} />
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: data.achievements.length ? 16 : 0 }}>
+        <StatPair label={data.season.meddles === 1 ? "meddle" : "meddles"} value={data.season.meddles} />
+        <StatPair label="6→pickup" value={data.season.sixForces} />
       </div>
       {data.achievements.length > 0 ? (
         <>

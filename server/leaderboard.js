@@ -40,11 +40,29 @@ const ACHIEVEMENTS = [
     desc: "Play 100 ranked games",
     check: (u) => num(u.games) >= 100,
   },
+  {
+    id: "meddle_20",
+    title: "Fast Finger",
+    desc: "Land 20 meddles",
+    check: (u) => num(u.meddles) >= 20,
+  },
+  {
+    id: "meddle_20_first",
+    title: "Fastest Finger",
+    desc: "Be the first player to land 20 meddles",
+    unique: "firstMeddle20",
+  },
+  {
+    id: "six_seven",
+    title: "Six Seven",
+    desc: "Force 7 pickups with a 6",
+    check: (u) => num(u.sixForces) >= 7,
+  },
 ];
 
 const ACHIEVEMENT_IDS = new Set(ACHIEVEMENTS.map((a) => a.id));
 
-let store = { users: {}, matches: 0, firstCenturyId: "" };
+let store = { users: {}, matches: 0, firstCenturyId: "", firstMeddle20Id: "" };
 const pending = new Set();
 let lastError = "";
 let flushTimer = null;
@@ -211,6 +229,27 @@ function tryClaimFirstCentury(userId) {
   return true;
 }
 
+function findFirstMeddle20Holder() {
+  const claimed = sanitizeId(store.firstMeddle20Id);
+  if (claimed && store.users[claimed]) return claimed;
+  for (const [id, row] of Object.entries(store.users)) {
+    if (row && row.achievements && num(row.achievements.meddle_20_first)) return id;
+  }
+  return "";
+}
+
+function tryClaimFirstMeddle20(userId) {
+  const id = sanitizeId(userId);
+  if (!id) return false;
+  const holder = findFirstMeddle20Holder();
+  if (holder && holder !== id) {
+    store.firstMeddle20Id = holder;
+    return false;
+  }
+  store.firstMeddle20Id = id;
+  return true;
+}
+
 function unlockNewAchievements(row, userId, at = Date.now()) {
   const achievements = { ...(row.achievements || {}) };
   const newly = [];
@@ -218,6 +257,13 @@ function unlockNewAchievements(row, userId, at = Date.now()) {
     if (achievements[a.id]) continue;
     if (a.unique === "firstCentury") {
       if (num(row.points) >= 100 && tryClaimFirstCentury(userId)) {
+        achievements[a.id] = at;
+        newly.push(a.id);
+      }
+      continue;
+    }
+    if (a.unique === "firstMeddle20") {
+      if (num(row.meddles) >= 20 && tryClaimFirstMeddle20(userId)) {
         achievements[a.id] = at;
         newly.push(a.id);
       }
@@ -232,39 +278,66 @@ function unlockNewAchievements(row, userId, at = Date.now()) {
   return newly;
 }
 
-function reconcileFirstCentury() {
-  let holder = findFirstCenturyHolder();
-  if (holder) {
-    store.firstCenturyId = holder;
-    const row = store.users[holder];
-    if (row) {
-      row.achievements = { ...(row.achievements || {}) };
-      if (!row.achievements.pts_100_first && num(row.points) >= 100) {
-        row.achievements.pts_100_first = num(row.lastPlayedAt) || num(row.updatedAt) || Date.now();
-        pending.add(holder);
-      }
-      // Ensure no one else keeps a stale unique badge
-      for (const [id, other] of Object.entries(store.users)) {
-        if (id === holder || !other || !other.achievements) continue;
-        if (other.achievements.pts_100_first) {
-          delete other.achievements.pts_100_first;
-          pending.add(id);
-        }
-      }
-    }
-    return;
-  }
-  const over = Object.keys(store.users).filter((id) => num(store.users[id] && store.users[id].points) >= 100);
-  if (over.length === 1) {
-    holder = over[0];
-    store.firstCenturyId = holder;
+function reconcileUniqueBadge(holderId, badgeId, qualifyFn) {
+  let holder = holderId;
+  if (holder && store.users[holder]) {
     const row = store.users[holder];
     row.achievements = { ...(row.achievements || {}) };
-    if (!row.achievements.pts_100_first) {
-      row.achievements.pts_100_first = num(row.lastPlayedAt) || num(row.updatedAt) || Date.now();
+    if (!row.achievements[badgeId] && qualifyFn(row)) {
+      row.achievements[badgeId] = num(row.lastPlayedAt) || num(row.updatedAt) || Date.now();
       pending.add(holder);
     }
+    for (const [id, other] of Object.entries(store.users)) {
+      if (id === holder || !other || !other.achievements) continue;
+      if (other.achievements[badgeId]) {
+        delete other.achievements[badgeId];
+        pending.add(id);
+      }
+    }
+    return holder;
   }
+  for (const [id, row] of Object.entries(store.users)) {
+    if (row && row.achievements && num(row.achievements[badgeId])) {
+      holder = id;
+      break;
+    }
+  }
+  if (holder && store.users[holder]) {
+    return reconcileUniqueBadge(holder, badgeId, qualifyFn);
+  }
+  const over = Object.keys(store.users).filter((id) => qualifyFn(store.users[id] || {}));
+  if (over.length === 1) {
+    holder = over[0];
+    const row = store.users[holder];
+    row.achievements = { ...(row.achievements || {}) };
+    if (!row.achievements[badgeId]) {
+      row.achievements[badgeId] = num(row.lastPlayedAt) || num(row.updatedAt) || Date.now();
+      pending.add(holder);
+    }
+    return holder;
+  }
+  return "";
+}
+
+function reconcileFirstCentury() {
+  store.firstCenturyId = reconcileUniqueBadge(
+    findFirstCenturyHolder(),
+    "pts_100_first",
+    (row) => num(row.points) >= 100
+  );
+}
+
+function reconcileFirstMeddle20() {
+  store.firstMeddle20Id = reconcileUniqueBadge(
+    findFirstMeddle20Holder(),
+    "meddle_20_first",
+    (row) => num(row.meddles) >= 20
+  );
+}
+
+function reconcileUniques() {
+  reconcileFirstCentury();
+  reconcileFirstMeddle20();
 }
 
 function achievementDefs() {
@@ -300,6 +373,8 @@ function normalizeRow(raw) {
       lastPlayedAt: num(prev.lastPlayedAt) || num(prev.updatedAt),
       updatedAt: num(prev.updatedAt) || Date.now(),
       recent: numRecent(prev.recent),
+      meddles: num(prev.meddles),
+      sixForces: num(prev.sixForces),
       achievements: numAchievements(prev.achievements),
     };
   } else {
@@ -327,6 +402,8 @@ function normalizeRow(raw) {
       lastPlayedAt: 0,
       updatedAt: num(prev.updatedAt) || Date.now(),
       recent: [],
+      meddles: num(prev.meddles),
+      sixForces: num(prev.sixForces),
       achievements: numAchievements(prev.achievements),
     };
   }
@@ -367,6 +444,7 @@ function load() {
         users,
         matches: num(parsed.matches),
         firstCenturyId: sanitizeId(parsed.firstCenturyId),
+        firstMeddle20Id: sanitizeId(parsed.firstMeddle20Id),
       };
     }
     if (Array.isArray(parsed && parsed.pending)) {
@@ -375,10 +453,10 @@ function load() {
       }
     }
     liftMatches();
-    reconcileFirstCentury();
+    reconcileUniques();
     saveSafe();
   } catch {
-    store = { users: {}, matches: 0, firstCenturyId: "" };
+    store = { users: {}, matches: 0, firstCenturyId: "", firstMeddle20Id: "" };
   }
 }
 
@@ -393,6 +471,7 @@ function save() {
         users: store.users,
         matches: num(store.matches),
         firstCenturyId: sanitizeId(store.firstCenturyId),
+        firstMeddle20Id: sanitizeId(store.firstMeddle20Id),
         pending: [...pending],
       },
       null,
@@ -465,10 +544,56 @@ function bump(userId, name, avatar, { place, field }) {
     lastPlayedAt: Date.now(),
     updatedAt: Date.now(),
     recent,
+    meddles: num(prev.meddles),
+    sixForces: num(prev.sixForces),
     achievements: { ...prev.achievements },
   };
   const unlocked = unlockNewAchievements(next, id);
   store.users[id] = next;
+  return { id, unlocked };
+}
+
+function recordMeddle(userId, name, avatar) {
+  const id = sanitizeId(userId);
+  if (!id) return { id: "", unlocked: [] };
+  const prev = store.users[id] ? normalizeRow(store.users[id]) : normalizeRow({});
+  const next = {
+    ...prev,
+    name: sanitizeName(name) || prev.name,
+    avatar: sanitizeAvatar(avatar) || prev.avatar,
+    meddles: num(prev.meddles) + 1,
+    updatedAt: Date.now(),
+    achievements: { ...(prev.achievements || {}) },
+  };
+  const unlocked = unlockNewAchievements(next, id);
+  store.users[id] = next;
+  pending.add(id);
+  saveSafe();
+  Promise.resolve(pushUserToClerkWithRetry(id, next)).catch((err) => {
+    console.error("leaderboard meddle clerk sync failed", err);
+  });
+  return { id, unlocked };
+}
+
+function recordSixForce(userId, name, avatar) {
+  const id = sanitizeId(userId);
+  if (!id) return { id: "", unlocked: [] };
+  const prev = store.users[id] ? normalizeRow(store.users[id]) : normalizeRow({});
+  const next = {
+    ...prev,
+    name: sanitizeName(name) || prev.name,
+    avatar: sanitizeAvatar(avatar) || prev.avatar,
+    sixForces: num(prev.sixForces) + 1,
+    updatedAt: Date.now(),
+    achievements: { ...(prev.achievements || {}) },
+  };
+  const unlocked = unlockNewAchievements(next, id);
+  store.users[id] = next;
+  pending.add(id);
+  saveSafe();
+  Promise.resolve(pushUserToClerkWithRetry(id, next)).catch((err) => {
+    console.error("leaderboard six-force clerk sync failed", err);
+  });
   return { id, unlocked };
 }
 
@@ -499,7 +624,9 @@ function rowFromClerkUser(user) {
     name: meta.name || [user.first_name, user.last_name].filter(Boolean).join(" ") || user.username,
     avatar: meta.avatar || user.image_url,
   });
-  if (row.games <= 0 && row.wins <= 0 && row.points <= 0 && !seasonHasData(row.season1)) return null;
+  if (row.games <= 0 && row.wins <= 0 && row.points <= 0 && num(row.meddles) <= 0 && num(row.sixForces) <= 0 && !seasonHasData(row.season1)) {
+    return null;
+  }
   const id = sanitizeId(user.id);
   if (!id) return null;
   return { id, row };
@@ -526,6 +653,8 @@ function citronsPayload(row) {
     lastPoints: n.lastPoints,
     lastPlayedAt: n.lastPlayedAt,
     updatedAt: n.updatedAt,
+    meddles: n.meddles,
+    sixForces: n.sixForces,
     achievements: n.achievements,
   };
 }
@@ -653,10 +782,10 @@ async function hydrateFromClerk() {
     if (list.length < 100) break;
   }
   liftMatches();
-  reconcileFirstCentury();
+  reconcileUniques();
   saveSafe();
   console.log(
-    `leaderboard hydrate clerk=${clerkKind()} scored=${found} store=${Object.keys(store.users).length} pending=${pending.size} firstCentury=${store.firstCenturyId || "-"}`
+    `leaderboard hydrate clerk=${clerkKind()} scored=${found} store=${Object.keys(store.users).length} pending=${pending.size} firstCentury=${store.firstCenturyId || "-"} firstMeddle20=${store.firstMeddle20Id || "-"}`
   );
   await flushPending();
   await healClerkFromStore();
@@ -708,7 +837,7 @@ function recordGame(room) {
 }
 
 function onBoard(u) {
-  return num(u.games) > 0 || num(u.points) > 0 || seasonHasData(u.season1);
+  return num(u.games) > 0 || num(u.points) > 0 || num(u.meddles) > 0 || seasonHasData(u.season1);
 }
 
 function top(limit) {
@@ -779,7 +908,7 @@ function stats(userId) {
       name: "Player",
       avatar: "",
       season1: { games: 0, wins: 0 },
-      season: { games: 0, points: 0, wins: 0, lasts: 0 },
+      season: { games: 0, points: 0, wins: 0, lasts: 0, meddles: 0, sixForces: 0 },
       achievements: achievementDefs().map((a) => ({ ...a, unlockedAt: 0 })),
     };
   }
@@ -789,7 +918,7 @@ function stats(userId) {
     store.users[id] = u;
     pending.add(id);
   }
-  reconcileFirstCentury();
+  reconcileUniques();
   const final = store.users[id] || u;
   if (Object.keys(final.achievements || {}).length > Object.keys(before).length) {
     pending.add(id);
@@ -805,6 +934,8 @@ function stats(userId) {
       points: final.points,
       wins: final.wins,
       lasts: final.lasts,
+      meddles: num(final.meddles),
+      sixForces: num(final.sixForces),
     },
     achievements: achievementDefs().map((a) => ({
       ...a,
@@ -823,6 +954,7 @@ function info() {
     players: Object.keys(store.users).length,
     matches: num(store.matches),
     firstCenturyId: sanitizeId(store.firstCenturyId) || "",
+    firstMeddle20Id: sanitizeId(store.firstMeddle20Id) || "",
     pending: pending.size,
     lastError,
   };
@@ -840,6 +972,8 @@ load();
 
 module.exports = {
   recordGame,
+  recordMeddle,
+  recordSixForce,
   top,
   matches,
   stats,

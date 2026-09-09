@@ -425,4 +425,6 @@ module.exports = {
   canCombineHandWithFaceUp,
   mustTakeTableWithPickup,
   sortHand,
+  getRank,
+  getEffectiveTop,
 };
