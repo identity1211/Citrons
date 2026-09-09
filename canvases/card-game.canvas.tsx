@@ -7563,6 +7563,8 @@ function LeaderboardPanel() {
     </div>
   );
 }
+
+type NetAnim = {
   kind?: string;
   fromPlayer: number;
   played?: string[];

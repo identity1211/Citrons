@@ -3173,8 +3173,6 @@ function PlayerStatsBody({ userId }: { userId: string }) {
             games: Number(p?.season?.games) || 0,
             points: Number(p?.season?.points) || 0,
             wins: Number(p?.season?.wins) || 0,
-            meddles: Number(p?.season?.meddles) || 0,
-            sixForces: Number(p?.season?.sixForces) || 0,
           },
           achievements: ACHIEVEMENT_META.map((def) => {
             const hit = rawAch.find((a: any) => a && a.id === def.id);
@@ -7670,6 +7668,8 @@ function LeaderboardPanel() {
     </div>
   );
 }
+
+type NetAnim = {
   kind?: string;
   fromPlayer: number;
   played?: string[];
