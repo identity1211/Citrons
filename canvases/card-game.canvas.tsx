@@ -2293,16 +2293,30 @@ function DrawOverlay({ anim }: { anim: DrawAnim }) {
   );
 }
 
+const ACHIEVEMENT_META: { id: string; title: string; desc: string }[] = [
+  { id: "streak_3", title: "Hot Streak", desc: "Win 3 ranked games in a row" },
+  { id: "streak_5", title: "On Fire", desc: "Win 5 ranked games in a row" },
+  { id: "pts_100", title: "Century", desc: "Reach 100 season points" },
+  { id: "pts_100_first", title: "First Century", desc: "Be the first player to reach 100 season points" },
+  { id: "games_100", title: "Hundred Games", desc: "Play 100 ranked games" },
+];
+
+function achievementMeta(id: string) {
+  return ACHIEVEMENT_META.find((a) => a.id === id) || { id, title: id, desc: "" };
+}
+
 function MatchResultsOverlay({
   players,
   finishOrder,
   youSeat,
   onLobby,
+  unlockedAchievements = [],
 }: {
   players: PlayerState[];
   finishOrder: number[];
   youSeat: number | null;
   onLobby: () => void;
+  unlockedAchievements?: string[];
 }) {
   const order = finishOrder.length > 0 ? finishOrder : players.map((_, i) => i);
   const field = order.length;
@@ -2316,6 +2330,7 @@ function MatchResultsOverlay({
       you: youSeat != null && pIdx === youSeat,
     };
   });
+  const unlocks = (unlockedAchievements || []).map(achievementMeta).filter((a) => a.title);
   const colors = ["#f1c40f", "#fdebd0", "#ffffff", "#2ecc71", "#e67e22", "#f8e6a0"];
   const bits = Array.from({ length: 18 }, (_, i) => ({
     left: `${(i * 17 + 9) % 94}%`,
@@ -2394,7 +2409,7 @@ function MatchResultsOverlay({
         >
           Results
         </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: "min(52vh, 360px)", overflowY: "auto" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: "min(42vh, 300px)", overflowY: "auto" }}>
           {rows.map((row) => (
             <div
               key={row.pIdx}
@@ -2438,6 +2453,40 @@ function MatchResultsOverlay({
             </div>
           ))}
         </div>
+        {unlocks.length > 0 ? (
+          <div
+            style={{
+              padding: "10px 10px 8px",
+              borderRadius: 10,
+              background: "rgba(241,196,15,0.12)",
+              border: "1px solid rgba(241,196,15,0.4)",
+            }}
+          >
+            <div
+              style={{
+                fontSize: 10,
+                fontWeight: 800,
+                letterSpacing: 1.4,
+                textTransform: "uppercase",
+                color: "#f1c40f",
+                marginBottom: 6,
+                textAlign: "center",
+              }}
+            >
+              Achievement unlocked
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {unlocks.map((a) => (
+                <div key={a.id} style={{ textAlign: "center" }}>
+                  <div style={{ fontWeight: 800, fontSize: 14, color: "#f5f0e6" }}>{a.title}</div>
+                  {a.desc ? (
+                    <div style={{ fontSize: 11, color: "rgba(255,255,255,0.62)", marginTop: 1 }}>{a.desc}</div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
         <button
           type="button"
           className="lobby-play-btn"
@@ -2888,6 +2937,7 @@ function PlayerStatsBody({ userId }: { userId: string }) {
   const [data, setData] = useState<{
     season1: { games: number; wins: number };
     season: { games: number; points: number; wins: number };
+    achievements: { id: string; title: string; desc: string; unlockedAt: number }[];
   } | null>(null);
   const [fail, setFail] = useState("");
 
@@ -2900,6 +2950,7 @@ function PlayerStatsBody({ userId }: { userId: string }) {
         const json = await res.json();
         if (stop) return;
         const p = json && json.player;
+        const rawAch = Array.isArray(p?.achievements) ? p.achievements : [];
         setData({
           season1: { games: Number(p?.season1?.games) || 0, wins: Number(p?.season1?.wins) || 0 },
           season: {
@@ -2907,6 +2958,15 @@ function PlayerStatsBody({ userId }: { userId: string }) {
             points: Number(p?.season?.points) || 0,
             wins: Number(p?.season?.wins) || 0,
           },
+          achievements: ACHIEVEMENT_META.map((def) => {
+            const hit = rawAch.find((a: any) => a && a.id === def.id);
+            return {
+              id: def.id,
+              title: String(hit?.title || def.title),
+              desc: String(hit?.desc || def.desc),
+              unlockedAt: Number(hit?.unlockedAt) || 0,
+            };
+          }),
         });
         setFail("");
       } catch {
@@ -2957,10 +3017,68 @@ function PlayerStatsBody({ userId }: { userId: string }) {
       >
         Now
       </div>
-      <div style={{ display: "flex", gap: 8 }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
         <StatPair label="games" value={data.season.games} />
         <StatPair label={data.season.points === 1 ? "pt" : "pts"} value={data.season.points} />
         <StatPair label="avg" value={avgPts(data.season.points, data.season.games)} />
+      </div>
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 800,
+          letterSpacing: 1.1,
+          textTransform: "uppercase",
+          color: "rgba(255,255,255,0.5)",
+          marginBottom: 8,
+        }}
+      >
+        Achievements
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {data.achievements.map((a) => {
+          const on = a.unlockedAt > 0;
+          return (
+            <div
+              key={a.id}
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 8,
+                padding: "8px 10px",
+                borderRadius: 8,
+                border: on ? "1px solid rgba(241,196,15,0.45)" : "1px solid rgba(255,255,255,0.1)",
+                background: on ? "rgba(241,196,15,0.12)" : "rgba(0,0,0,0.22)",
+                opacity: on ? 1 : 0.55,
+              }}
+            >
+              <div
+                style={{
+                  width: 28,
+                  height: 28,
+                  borderRadius: 8,
+                  flexShrink: 0,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  background: on ? "rgba(241,196,15,0.28)" : "rgba(255,255,255,0.08)",
+                  color: on ? "#f1c40f" : "rgba(255,255,255,0.45)",
+                  fontWeight: 800,
+                  fontSize: 14,
+                }}
+              >
+                {on ? "✓" : "·"}
+              </div>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontWeight: 700, fontSize: 13, color: on ? "#f5f0e6" : "rgba(245,240,230,0.7)" }}>
+                  {a.title}
+                </div>
+                <div style={{ fontSize: 11, lineHeight: 1.35, color: "rgba(255,255,255,0.55)", marginTop: 2 }}>
+                  {a.desc}
+                </div>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -5894,6 +6012,7 @@ function Table({
   onKickPlayer,
   onKickVote,
   matchMenu,
+  unlockedAchievements,
 }: {
   players: PlayerState[];
   drawDeck: string[];
@@ -5942,6 +6061,7 @@ function Table({
   onKickPlayer?: (playerId: string) => void;
   onKickVote?: (yes: boolean) => void;
   matchMenu?: { onToLobby: () => void; onLeave: () => void };
+  unlockedAchievements?: string[];
   tutorial?: {
     text: string;
     showNext: boolean;
@@ -6745,6 +6865,7 @@ function Table({
           finishOrder={finishOrder}
           youSeat={watching ? null : 0}
           onLobby={toLobby}
+          unlockedAchievements={unlockedAchievements}
         />
       ) : null}
       {kickVote ? (
@@ -6840,6 +6961,7 @@ type OnlineView = {
   chat?: ChatLine[];
   kickVote?: KickVoteInfo | null;
   lobby: { id: string; name: string; avatar?: string; ready: boolean; connected: boolean; host: boolean }[];
+  unlockedAchievements?: string[];
 };
 
 type LobbyInfo = {
@@ -10268,6 +10390,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         kickVote={view.kickVote || null}
         onKickPlayer={(targetId) => send({ type: "kick", targetId })}
         onKickVote={(yes) => send({ type: "kickVote", yes })}
+        unlockedAchievements={view.unlockedAchievements || []}
         matchMenu={{
           onToLobby: view.spectator ? leaveSpectate : parkAtLobby,
           onLeave: view.spectator ? leaveSpectate : leaveOnline,
