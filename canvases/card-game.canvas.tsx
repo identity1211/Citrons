@@ -1015,6 +1015,8 @@ function ensureKeyframes() {
     .skin-menu-fly {
       animation: matchMenuIn 0.18s ease-out both;
       transform-origin: top center;
+      overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
     }
     .ios-hint-pulse { animation: iosHintPulse 1.25s ease-in-out infinite; }
     @keyframes iosHintPulse {
@@ -3884,7 +3886,10 @@ function SkinMenu({
   onChange?: (id: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [flyMaxH, setFlyMaxH] = useState(240);
+  const [openUp, setOpenUp] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  const flyRef = useRef<HTMLDivElement | null>(null);
   const current = options.find((o) => o.id === value) || options[0];
 
   useEffect(() => {
@@ -3895,6 +3900,31 @@ function SkinMenu({
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
   }, [open]);
+
+  useLayoutEffect(() => {
+    if (!open || !wrapRef.current) return;
+    const place = () => {
+      const rect = wrapRef.current!.getBoundingClientRect();
+      const gap = 8;
+      const below = Math.max(0, window.innerHeight - rect.bottom - gap - 8);
+      const above = Math.max(0, rect.top - gap - 8);
+      const preferUp = below < 168 && above > below;
+      const room = preferUp ? above : below;
+      setOpenUp(preferUp);
+      setFlyMaxH(Math.max(120, Math.min(300, room || 240)));
+    };
+    place();
+    window.addEventListener("resize", place);
+    window.visualViewport?.addEventListener("resize", place);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.visualViewport?.removeEventListener("resize", place);
+    };
+  }, [open, options.length]);
+
+  function trapScroll(e: { stopPropagation: () => void }) {
+    e.stopPropagation();
+  }
 
   return (
     <div ref={wrapRef} style={{ position: "relative", zIndex: open ? 40 : 2, flex: 1, minWidth: 0 }}>
@@ -3956,12 +3986,24 @@ function SkinMenu({
       </button>
       {open ? (
         <div
+          ref={flyRef}
           className="skin-menu-fly"
+          onWheel={trapScroll}
+          onTouchMove={trapScroll}
+          onScroll={trapScroll}
           style={{
             position: "absolute",
             left: 0,
             right: 0,
-            top: "calc(100% + 4px)",
+            ...(openUp
+              ? { bottom: "calc(100% + 4px)", top: "auto" }
+              : { top: "calc(100% + 4px)", bottom: "auto" }),
+            maxHeight: flyMaxH,
+            overflowX: "hidden",
+            overflowY: "auto",
+            overscrollBehavior: "contain",
+            WebkitOverflowScrolling: "touch",
+            touchAction: "pan-y",
             borderRadius: 10,
             border: "1px solid rgba(241,196,15,0.45)",
             background: "rgba(8, 18, 10, 0.96)",
@@ -3970,6 +4012,7 @@ function SkinMenu({
             display: "flex",
             flexDirection: "column",
             gap: 6,
+            boxSizing: "border-box",
           }}
         >
           {options.map((opt) => {
@@ -3984,6 +4027,7 @@ function SkinMenu({
                 }}
                 style={{
                   height: 48,
+                  flex: "0 0 auto",
                   borderRadius: 8,
                   border: on ? "2px solid #f1c40f" : "1.5px solid rgba(255,255,255,0.22)",
                   padding: 0,
