@@ -1145,24 +1145,57 @@ const CARD_BACK_PATTERN =
 const CARD_BACK_INNER =
   "radial-gradient(ellipse at center, rgba(255,255,255,0.08) 0%, transparent 70%)";
 const SHADES_BACK_SRC = "skins/shades.jpg";
+const SWEATY_BACK_SRC = "skins/sweaty.jpg";
+const CAMERA_BACK_SRC = "skins/camera.jpg";
+const DEALER_BACK_SRC = "skins/dealer.jpg";
 
-type CardBackId = "classic" | "shades";
+type CardBackId = "classic" | "shades" | "sweaty" | "camera" | "dealer";
 const CARD_BACKS: { id: CardBackId; name: string }[] = [
   { id: "classic", name: "Classic" },
   { id: "shades", name: "Shades" },
+  { id: "sweaty", name: "Sweaty" },
+  { id: "camera", name: "Live" },
+  { id: "dealer", name: "Deal" },
 ];
 const CardBackContext = createContext<CardBackId>("classic");
 function useCardBack(): CardBackId {
   return useContext(CardBackContext);
 }
 function isCardBack(id: unknown): id is CardBackId {
-  return id === "classic" || id === "shades";
+  return id === "classic" || id === "shades" || id === "sweaty" || id === "camera" || id === "dealer";
 }
 function cardBackFill(id: CardBackId): CSSProperties {
   if (id === "shades") {
     return {
       backgroundColor: "#145230",
       backgroundImage: `url(${SHADES_BACK_SRC})`,
+      backgroundSize: "cover",
+      backgroundPosition: "center",
+      backgroundRepeat: "no-repeat",
+    };
+  }
+  if (id === "sweaty") {
+    return {
+      backgroundColor: "#0f3d38",
+      backgroundImage: `url(${SWEATY_BACK_SRC})`,
+      backgroundSize: "cover",
+      backgroundPosition: "center",
+      backgroundRepeat: "no-repeat",
+    };
+  }
+  if (id === "camera") {
+    return {
+      backgroundColor: "#0d2f2a",
+      backgroundImage: `url(${CAMERA_BACK_SRC})`,
+      backgroundSize: "cover",
+      backgroundPosition: "center",
+      backgroundRepeat: "no-repeat",
+    };
+  }
+  if (id === "dealer") {
+    return {
+      backgroundColor: "#12352f",
+      backgroundImage: `url(${DEALER_BACK_SRC})`,
       backgroundSize: "cover",
       backgroundPosition: "center",
       backgroundRepeat: "no-repeat",
