@@ -3046,7 +3046,7 @@ function winShare(wins: number, games: number): string {
 function PlayerStatsBody({ userId }: { userId: string }) {
   const [data, setData] = useState<{
     season1: { games: number; wins: number };
-    season: { games: number; points: number; wins: number; meddles: number; sixForces: number };
+    season: { games: number; points: number; wins: number };
     achievements: { id: string; title: string; desc: string; unlockedAt: number }[];
   } | null>(null);
   const [fail, setFail] = useState("");
@@ -3068,8 +3068,6 @@ function PlayerStatsBody({ userId }: { userId: string }) {
             games: Number(p?.season?.games) || 0,
             points: Number(p?.season?.points) || 0,
             wins: Number(p?.season?.wins) || 0,
-            meddles: Number(p?.season?.meddles) || 0,
-            sixForces: Number(p?.season?.sixForces) || 0,
           },
           achievements: ACHIEVEMENT_META.map((def) => {
             const hit = rawAch.find((a: any) => a && a.id === def.id);
@@ -3132,14 +3130,10 @@ function PlayerStatsBody({ userId }: { userId: string }) {
       >
         Now
       </div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: data.achievements.length ? 16 : 0 }}>
         <StatPair label="games" value={data.season.games} />
         <StatPair label={data.season.points === 1 ? "pt" : "pts"} value={data.season.points} />
         <StatPair label="avg" value={avgPts(data.season.points, data.season.games)} />
-      </div>
-      <div style={{ display: "flex", gap: 8, marginBottom: data.achievements.length ? 16 : 0 }}>
-        <StatPair label={data.season.meddles === 1 ? "meddle" : "meddles"} value={data.season.meddles} />
-        <StatPair label="6→pickup" value={data.season.sixForces} />
       </div>
       {data.achievements.length > 0 ? (
         <>
@@ -7264,6 +7258,7 @@ function LeaderboardPanel() {
   const auth = useClerkAuth();
   const [rows, setRows] = useState<BoardRow[] | null>(null);
   const [fail, setFail] = useState("");
+  const [achInfo, setAchInfo] = useState<{ playerName: string; achievementId: string } | null>(null);
 
   useEffect(() => {
     let stop = false;
@@ -7329,6 +7324,8 @@ function LeaderboardPanel() {
     flexShrink: 0,
   };
 
+  const openAch = achInfo ? achievementMeta(achInfo.achievementId) : null;
+
   return (
     <div
       style={{
@@ -7338,6 +7335,7 @@ function LeaderboardPanel() {
         display: "flex",
         flexDirection: "column",
         textAlign: "left",
+        position: "relative",
       }}
     >
       {rows && rows.length > 0 ? (
@@ -7447,9 +7445,26 @@ function LeaderboardPanel() {
                   </div>
                   {row.achievements.length > 0 ? (
                     <div style={{ display: "flex", gap: 2, flexShrink: 0, alignItems: "center" }}>
-                      {row.achievements.map((id) => (
-                        <AchievementIcon key={id} id={id} size={18} title={achievementMeta(id).title} />
-                      ))}
+                      {row.achievements.map((id) => {
+                        const selected =
+                          !!achInfo && achInfo.achievementId === id && achInfo.playerName === row.name;
+                        return (
+                          <AchievementIcon
+                            key={id}
+                            id={id}
+                            size={18}
+                            title={achievementMeta(id).title}
+                            selected={selected}
+                            onClick={() =>
+                              setAchInfo((prev) =>
+                                prev && prev.achievementId === id && prev.playerName === row.name
+                                  ? null
+                                  : { playerName: row.name, achievementId: id }
+                              )
+                            }
+                          />
+                        );
+                      })}
                     </div>
                   ) : null}
                 </div>
@@ -7497,11 +7512,57 @@ function LeaderboardPanel() {
           })
         )}
       </div>
+      {openAch && achInfo ? (
+        <div
+          onClick={() => setAchInfo(null)}
+          style={{
+            position: "absolute",
+            inset: 0,
+            zIndex: 30,
+            background: "rgba(0,0,0,0.48)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 12,
+            boxSizing: "border-box",
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "min(300px, 100%)",
+              padding: "14px 14px 12px",
+              borderRadius: 14,
+              border: "1.5px solid rgba(241,196,15,0.55)",
+              background: "linear-gradient(180deg, rgba(26,43,26,0.98), rgba(16,32,18,0.99))",
+              boxShadow: "0 12px 32px rgba(0,0,0,0.45)",
+              color: "#f5f0e6",
+              textAlign: "center",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "center", marginBottom: 10 }}>
+              <AchievementIcon id={openAch.id} size={56} />
+            </div>
+            <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 4 }}>{openAch.title}</div>
+            <div style={{ fontSize: 12, color: "rgba(241,196,15,0.9)", fontWeight: 700, marginBottom: 8 }}>
+              {achInfo.playerName}
+            </div>
+            <div style={{ fontSize: 13, lineHeight: 1.4, color: "rgba(245,240,230,0.78)", marginBottom: 12 }}>
+              {openAch.desc}
+            </div>
+            <button
+              type="button"
+              onClick={() => setAchInfo(null)}
+              style={{ ...PROFILE_GHOST, maxWidth: "100%", height: 36, fontSize: 13 }}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
-
-type NetAnim = {
   kind?: string;
   fromPlayer: number;
   played?: string[];
