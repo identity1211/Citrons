@@ -1166,43 +1166,21 @@ function useCardBack(): CardBackId {
 function isCardBack(id: unknown): id is CardBackId {
   return id === "classic" || id === "shades" || id === "sweaty" || id === "camera" || id === "dealer";
 }
+/** Image backs are 2:3; in-game cards are a bit wider (~56×78). Zoom past 100% so art bleeds past the card edge. */
+function imageCardBackFill(src: string, fallback: string): CSSProperties {
+  return {
+    backgroundColor: fallback,
+    backgroundImage: `url(${src})`,
+    backgroundSize: "112% 112%",
+    backgroundPosition: "center",
+    backgroundRepeat: "no-repeat",
+  };
+}
 function cardBackFill(id: CardBackId): CSSProperties {
-  if (id === "shades") {
-    return {
-      backgroundColor: "#145230",
-      backgroundImage: `url(${SHADES_BACK_SRC})`,
-      backgroundSize: "cover",
-      backgroundPosition: "center",
-      backgroundRepeat: "no-repeat",
-    };
-  }
-  if (id === "sweaty") {
-    return {
-      backgroundColor: "#0f3d38",
-      backgroundImage: `url(${SWEATY_BACK_SRC})`,
-      backgroundSize: "cover",
-      backgroundPosition: "center",
-      backgroundRepeat: "no-repeat",
-    };
-  }
-  if (id === "camera") {
-    return {
-      backgroundColor: "#0d2f2a",
-      backgroundImage: `url(${CAMERA_BACK_SRC})`,
-      backgroundSize: "cover",
-      backgroundPosition: "center",
-      backgroundRepeat: "no-repeat",
-    };
-  }
-  if (id === "dealer") {
-    return {
-      backgroundColor: "#12352f",
-      backgroundImage: `url(${DEALER_BACK_SRC})`,
-      backgroundSize: "cover",
-      backgroundPosition: "center",
-      backgroundRepeat: "no-repeat",
-    };
-  }
+  if (id === "shades") return imageCardBackFill(SHADES_BACK_SRC, "#145230");
+  if (id === "sweaty") return imageCardBackFill(SWEATY_BACK_SRC, "#0f3d38");
+  if (id === "camera") return imageCardBackFill(CAMERA_BACK_SRC, "#0d2f2a");
+  if (id === "dealer") return imageCardBackFill(DEALER_BACK_SRC, "#12352f");
   return {
     background: CARD_BACK_BG,
     backgroundImage: CARD_BACK_PATTERN,
