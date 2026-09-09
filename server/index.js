@@ -1035,7 +1035,6 @@ function updateSixForceAfterPlay(room, playerIndex, result) {
   const p = room.seats[playerIndex];
   if (!p) return;
   room.sixForceBy = {
-    seatIndex: playerIndex,
     seatId: String(p.id || ""),
     clerkUserId: p.clerkUserId || "",
     name: p.name,
@@ -1046,8 +1045,11 @@ function updateSixForceAfterPlay(room, playerIndex, result) {
 function creditSixForcePickup(room, pickerIndex, pileBefore) {
   const force = room.sixForceBy;
   room.sixForceBy = null;
-  if (!force || !force.clerkUserId) return;
-  if (force.seatIndex === pickerIndex) return;
+  if (!force || !force.clerkUserId || !force.seatId) return;
+  const picker = room.seats[pickerIndex];
+  if (!picker) return;
+  // Compare stable seat ids — indexes shift after kick/leave.
+  if (String(picker.id) === String(force.seatId)) return;
   const top = engine.getEffectiveTop(pileBefore || []);
   if (!top || engine.getRank(top) !== "6") return;
   try {
