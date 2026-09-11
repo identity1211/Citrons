@@ -3130,7 +3130,7 @@ const PROFILE_PANEL: CSSProperties = {
   background: "#145230",
   border: "1.5px solid rgba(255,255,255,0.22)",
   boxShadow: "0 18px 48px rgba(0,0,0,0.45)",
-  padding: "12px 14px 10px",
+  padding: "14px 14px 12px",
   color: "#f5f0e6",
   textAlign: "center",
   overflowY: "auto",
@@ -3149,6 +3149,140 @@ const PROFILE_GHOST: CSSProperties = {
   cursor: "pointer",
   flexShrink: 0,
 };
+
+const PROFILE_DIVIDER: CSSProperties = {
+  height: 1,
+  margin: "10px 0",
+  background: "rgba(255,255,255,0.14)",
+  border: "none",
+};
+
+const PROFILE_NAV_BTN: CSSProperties = {
+  width: "100%",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 10,
+  minHeight: 42,
+  padding: "8px 12px",
+  borderRadius: 10,
+  border: "1px solid rgba(255,255,255,0.18)",
+  background: "rgba(0,0,0,0.18)",
+  color: "#f5f0e6",
+  fontSize: 14,
+  fontWeight: 600,
+  cursor: "pointer",
+  textAlign: "left",
+  boxSizing: "border-box",
+};
+
+const PROFILE_MUTED_BTN: CSSProperties = {
+  ...PROFILE_GHOST,
+  height: 34,
+  border: "1px solid rgba(255,255,255,0.2)",
+  color: "rgba(245,240,230,0.72)",
+  fontSize: 12,
+  fontWeight: 600,
+};
+
+const PROFILE_DANGER_BTN: CSSProperties = {
+  ...PROFILE_MUTED_BTN,
+  border: "1px solid rgba(231,76,60,0.45)",
+  color: "#f5b7b1",
+};
+
+function ProfileHeader({
+  title,
+  onBack,
+}: {
+  title: string;
+  onBack?: () => void;
+}) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        marginBottom: 12,
+        minHeight: 28,
+      }}
+    >
+      {onBack ? (
+        <button
+          type="button"
+          onClick={onBack}
+          aria-label="Back"
+          style={{
+            flexShrink: 0,
+            width: 32,
+            height: 32,
+            borderRadius: 8,
+            border: "1px solid rgba(255,255,255,0.28)",
+            background: "rgba(0,0,0,0.18)",
+            color: "#f5f0e6",
+            fontSize: 16,
+            fontWeight: 700,
+            cursor: "pointer",
+            lineHeight: 1,
+          }}
+        >
+          ←
+        </button>
+      ) : (
+        <span style={{ width: 32, flexShrink: 0 }} />
+      )}
+      <div
+        style={{
+          flex: 1,
+          fontFamily: 'Georgia, "Times New Roman", serif',
+          fontSize: 18,
+          fontWeight: 700,
+          textAlign: "center",
+        }}
+      >
+        {title}
+      </div>
+      <span style={{ width: 32, flexShrink: 0 }} />
+    </div>
+  );
+}
+
+function ProfileNavRow({
+  label,
+  hint,
+  onClick,
+  emphasize,
+}: {
+  label: string;
+  hint?: string;
+  onClick: () => void;
+  emphasize?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        ...PROFILE_NAV_BTN,
+        ...(emphasize
+          ? {
+              border: "1px solid rgba(241,196,15,0.55)",
+              background: "rgba(241,196,15,0.14)",
+              color: "#f1c40f",
+            }
+          : null),
+        marginBottom: 8,
+      }}
+    >
+      <span>{label}</span>
+      <span style={{ display: "flex", alignItems: "center", gap: 8, opacity: 0.85, fontSize: 12, fontWeight: 600 }}>
+        {hint ? <span>{hint}</span> : null}
+        <span aria-hidden>›</span>
+      </span>
+    </button>
+  );
+}
 
 function StatPair({ label, value }: { label: string; value: number | string }) {
   return (
@@ -3309,10 +3443,9 @@ function PlayerStatsBody({ userId }: { userId: string }) {
 function ProfileButton() {
   const { loaded, user, isPlus, setIsPlus, error } = useClerkAuth();
   const [open, setOpen] = useState(false);
-  const [pane, setPane] = useState<"profile" | "stats" | "plus">("profile");
+  const [pane, setPane] = useState<"profile" | "edit" | "stats" | "plus">("profile");
   const [nick, setNick] = useState("");
   const [busy, setBusy] = useState(false);
-  const [reloading, setReloading] = useState(false);
   const [msg, setMsg] = useState("");
   const fileRef = useRef<HTMLInputElement | null>(null);
   const pricingRef = useRef<HTMLDivElement | null>(null);
@@ -3323,7 +3456,10 @@ function ProfileButton() {
   }, [user]);
 
   useEffect(() => {
-    if (!open) setPane("profile");
+    if (!open) {
+      setPane("profile");
+      setMsg("");
+    }
   }, [open]);
 
   useEffect(() => {
@@ -3365,9 +3501,6 @@ function ProfileButton() {
           newSubscriptionRedirectUrl: appUrl(),
         });
         pricingMountedRef.current = true;
-        if (typeof clerk.addListener === "function") {
-          /* session updates after checkout */
-        }
         try {
           await clerk.session?.reload?.();
         } catch {
@@ -3409,6 +3542,9 @@ function ProfileButton() {
   }
 
   const nickName = user ? clerkNickname(user) : "Sign in";
+  const paneTitle =
+    pane === "stats" ? "Stats" : pane === "plus" ? "Citrons Plus" : pane === "edit" ? "Edit profile" : "Profile";
+  const showBack = !!user && pane !== "profile";
 
   return (
     <>
@@ -3478,7 +3614,8 @@ function ProfileButton() {
             alignItems: "stretch",
             justifyContent: "center",
             overflow: "auto",
-            padding: "max(8px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left))",
+            padding:
+              "max(8px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left))",
             boxSizing: "border-box",
           }}
         >
@@ -3486,43 +3623,40 @@ function ProfileButton() {
             onClick={(e) => e.stopPropagation()}
             style={{
               ...PROFILE_PANEL,
-              width: pane === "plus" ? "min(420px, 100%)" : PROFILE_PANEL.width,
+              width: pane === "plus" ? "min(400px, 100%)" : PROFILE_PANEL.width,
             }}
           >
-            <div style={{ fontFamily: 'Georgia, "Times New Roman", serif', fontSize: 18, fontWeight: 700, marginBottom: 8 }}>
-              {pane === "stats" ? "Stats" : pane === "plus" ? "Citrons Plus" : "Profile"}
-            </div>
+            <ProfileHeader title={paneTitle} onBack={showBack ? () => setPane("profile") : undefined} />
+
             {user && pane === "stats" ? (
-              <>
-                <PlayerStatsBody userId={String(user.id || "")} />
-                <button
-                  type="button"
-                  onClick={() => setPane("profile")}
-                  style={{ ...PROFILE_GHOST, marginTop: 8, height: 32, fontSize: 13 }}
-                >
-                  Back
-                </button>
-              </>
+              <PlayerStatsBody userId={String(user.id || "")} />
             ) : user && pane === "plus" ? (
               <>
-                <div style={{ fontSize: 13, lineHeight: 1.4, color: "rgba(245,240,230,0.78)", marginBottom: 10 }}>
+                <div
+                  style={{
+                    fontSize: 13,
+                    lineHeight: 1.4,
+                    color: "rgba(245,240,230,0.78)",
+                    marginBottom: 10,
+                    textAlign: "left",
+                  }}
+                >
                   {isPlus
-                    ? "You're on Plus. Manage billing below, or cancel anytime."
-                    : "$2.99 / month — unlock Plus perks as we roll them out (extra card backs, tables, and more)."}
+                    ? "You're on Plus. Cancel or update payment anytime."
+                    : "$2.99 / month — extra card backs, tables, and more as we roll them out."}
                 </div>
                 {isPlus ? (
                   <div
                     style={{
                       display: "inline-flex",
                       alignItems: "center",
-                      gap: 6,
                       margin: "0 auto 10px",
                       padding: "4px 10px",
                       borderRadius: 999,
                       background: "rgba(241,196,15,0.18)",
                       border: "1px solid rgba(241,196,15,0.55)",
                       color: "#f1c40f",
-                      fontSize: 12,
+                      fontSize: 11,
                       fontWeight: 800,
                       letterSpacing: 0.6,
                       textTransform: "uppercase",
@@ -3540,26 +3674,6 @@ function ProfileButton() {
                     marginBottom: 8,
                   }}
                 />
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() =>
-                    run(async () => {
-                      const clerk = await ensureClerk();
-                      try {
-                        await clerk.session?.reload?.();
-                      } catch {
-                        /* ignore */
-                      }
-                      const plus = await clerkSessionHasPlus(clerk);
-                      setIsPlus(plus);
-                      setMsg(plus ? "Plus status updated" : "Not subscribed yet");
-                    })
-                  }
-                  style={{ ...PROFILE_GHOST, height: 32, fontSize: 13 }}
-                >
-                  Refresh status
-                </button>
                 {isPlus ? (
                   <button
                     type="button"
@@ -3574,49 +3688,49 @@ function ProfileButton() {
                         }
                       })
                     }
-                    style={{ ...PROFILE_GHOST, marginTop: 6 }}
+                    style={{ ...PROFILE_GHOST, marginBottom: 6 }}
                   >
                     Manage subscription
                   </button>
                 ) : null}
                 <button
                   type="button"
-                  onClick={() => setPane("profile")}
-                  style={{ ...PROFILE_GHOST, marginTop: 8, height: 32, fontSize: 13 }}
+                  disabled={busy}
+                  onClick={() =>
+                    run(async () => {
+                      const clerk = await ensureClerk();
+                      try {
+                        await clerk.session?.reload?.();
+                      } catch {
+                        /* ignore */
+                      }
+                      const plus = await clerkSessionHasPlus(clerk);
+                      setIsPlus(plus);
+                      setMsg(plus ? "Plus is active" : "Not subscribed yet");
+                    })
+                  }
+                  style={{
+                    ...PROFILE_MUTED_BTN,
+                    border: "none",
+                    background: "transparent",
+                    height: 28,
+                    marginTop: 2,
+                  }}
                 >
-                  Back
+                  Refresh status
                 </button>
               </>
-            ) : user ? (
+            ) : user && pane === "edit" ? (
               <>
-                <div style={{ display: "flex", justifyContent: "center", marginBottom: 8, position: "relative" }}>
-                  <AvatarBubble src={user.imageUrl} name={nickName} size={56} />
-                  {isPlus ? (
-                    <span
-                      style={{
-                        position: "absolute",
-                        right: "calc(50% - 40px)",
-                        bottom: -2,
-                        fontSize: 10,
-                        fontWeight: 800,
-                        letterSpacing: 0.4,
-                        textTransform: "uppercase",
-                        color: "#1a2e1a",
-                        background: "#f1c40f",
-                        borderRadius: 6,
-                        padding: "2px 5px",
-                      }}
-                    >
-                      Plus
-                    </span>
-                  ) : null}
+                <div style={{ display: "flex", justifyContent: "center", marginBottom: 10 }}>
+                  <AvatarBubble src={user.imageUrl} name={nickName} size={64} />
                 </div>
                 <input
                   value={nick}
                   onChange={(e) => setNick(e.target.value.slice(0, 18))}
                   placeholder="Nickname"
                   maxLength={18}
-                  style={{ ...LOBBY_INPUT, maxWidth: "100%", height: 38, margin: "0 auto 6px", fontSize: 16 }}
+                  style={{ ...LOBBY_INPUT, maxWidth: "100%", height: 38, margin: "0 auto 8px", fontSize: 16 }}
                 />
                 <button
                   type="button"
@@ -3646,7 +3760,7 @@ function ProfileButton() {
                   onClick={() => fileRef.current?.click()}
                   style={PROFILE_GHOST}
                 >
-                  Upload photo
+                  Change photo
                 </button>
                 <input
                   ref={fileRef}
@@ -3667,26 +3781,73 @@ function ProfileButton() {
                     });
                   }}
                 />
-                <button
-                  type="button"
-                  onClick={() => setPane("stats")}
-                  style={{ ...PROFILE_GHOST, marginTop: 8 }}
-                >
-                  Stats
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPane("plus")}
+              </>
+            ) : user ? (
+              <>
+                <div style={{ display: "flex", justifyContent: "center", marginBottom: 6, position: "relative" }}>
+                  <AvatarBubble src={user.imageUrl} name={nickName} size={56} />
+                  {isPlus ? (
+                    <span
+                      style={{
+                        position: "absolute",
+                        right: "calc(50% - 40px)",
+                        bottom: -2,
+                        fontSize: 10,
+                        fontWeight: 800,
+                        letterSpacing: 0.4,
+                        textTransform: "uppercase",
+                        color: "#1a2e1a",
+                        background: "#f1c40f",
+                        borderRadius: 6,
+                        padding: "2px 5px",
+                      }}
+                    >
+                      Plus
+                    </span>
+                  ) : null}
+                </div>
+                <div
                   style={{
-                    ...(isPlus ? PROFILE_GHOST : LOBBY_GOLD_BTN),
-                    maxWidth: "100%",
-                    marginTop: 8,
-                    height: 36,
-                    fontSize: 13,
+                    fontSize: 16,
+                    fontWeight: 700,
+                    marginBottom: 2,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
                   }}
                 >
-                  {isPlus ? "Manage Plus" : "Citrons Plus · $2.99/mo"}
+                  {nickName}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setPane("edit")}
+                  style={{
+                    border: "none",
+                    background: "transparent",
+                    color: "rgba(245,240,230,0.62)",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    padding: "2px 6px 8px",
+                    textDecoration: "underline",
+                    textUnderlineOffset: 3,
+                  }}
+                >
+                  Edit profile
                 </button>
+
+                <div style={PROFILE_DIVIDER} />
+
+                <ProfileNavRow label="Stats" onClick={() => setPane("stats")} />
+                <ProfileNavRow
+                  label="Citrons Plus"
+                  hint={isPlus ? "Manage" : "$2.99/mo"}
+                  emphasize={!isPlus}
+                  onClick={() => setPane("plus")}
+                />
+
+                <div style={PROFILE_DIVIDER} />
+
                 <button
                   type="button"
                   disabled={busy}
@@ -3701,15 +3862,18 @@ function ProfileButton() {
                       }
                     })
                   }
-                  style={{ ...PROFILE_GHOST, marginTop: 6, opacity: 0.85 }}
+                  style={{ ...PROFILE_DANGER_BTN, marginBottom: 8 }}
                 >
                   Sign out
+                </button>
+                <button type="button" onClick={() => setOpen(false)} style={PROFILE_MUTED_BTN}>
+                  Close
                 </button>
               </>
             ) : (
               <>
-                <div style={{ fontSize: 13, lineHeight: 1.4, color: "rgba(255,255,255,0.72)", marginBottom: 12 }}>
-                  Sign in with Google to save your nickname and avatar.
+                <div style={{ fontSize: 13, lineHeight: 1.4, color: "rgba(255,255,255,0.72)", marginBottom: 14 }}>
+                  Sign in with Google to save your nickname, avatar, and Plus.
                 </div>
                 <button
                   type="button"
@@ -3719,35 +3883,21 @@ function ProfileButton() {
                       await signInWithGoogle();
                     })
                   }
-                  style={{ ...LOBBY_GOLD_BTN, maxWidth: "100%", height: 40, fontSize: 15 }}
+                  style={{ ...LOBBY_GOLD_BTN, maxWidth: "100%", height: 42, fontSize: 15, marginBottom: 10 }}
                 >
                   {busy ? "Opening Google…" : "Sign in with Google"}
                 </button>
+                <button type="button" onClick={() => setOpen(false)} style={PROFILE_MUTED_BTN}>
+                  Close
+                </button>
               </>
             )}
+
             {(msg || (!user && error)) && (
-              <div style={{ marginTop: 8, fontSize: 12, lineHeight: 1.35, color: msg ? "#d5f5e3" : "#f5b7b1" }}>
+              <div style={{ marginTop: 10, fontSize: 12, lineHeight: 1.35, color: msg ? "#d5f5e3" : "#f5b7b1" }}>
                 {msg || error}
               </div>
             )}
-            <button
-              type="button"
-              disabled={reloading}
-              onClick={() => {
-                setReloading(true);
-                void reloadCitronsApp();
-              }}
-              style={{ ...PROFILE_GHOST, marginTop: 8, height: 32, fontSize: 13 }}
-            >
-              {reloading ? "Reloading…" : "Reload game"}
-            </button>
-            <button
-              type="button"
-              onClick={() => setOpen(false)}
-              style={{ ...PROFILE_GHOST, marginTop: 6, height: 32, fontSize: 13 }}
-            >
-              Close
-            </button>
           </div>
         </div>
       )}
