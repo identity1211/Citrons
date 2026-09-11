@@ -8,6 +8,7 @@ const clerk = require("./clerk");
 const leaderboard = require("./leaderboard");
 const push = require("./push");
 const daily = require("./daily");
+const stripeBilling = require("./stripe-billing");
 
 push.init();
 
@@ -1510,80 +1511,192 @@ setInterval(() => {
 
 const server = http.createServer((req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Stripe-Signature");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   if (req.method === "OPTIONS") {
     res.writeHead(204);
     res.end();
     return;
   }
   const path = String(req.url || "/").split("?")[0];
+
+  const readBody = () =>
+    new Promise((resolve, reject) => {
+      const chunks = [];
+      req.on("data", (c) => chunks.push(c));
+      req.on("end", () => resolve(Buffer.concat(chunks)));
+      req.on("error", reject);
+    });
+
+  const json = (code, obj) => {
+    res.writeHead(code, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify(obj));
+  };
+
+  const bearerToken = () => {
+    const h = String(req.headers.authorization || "");
+    const m = /^Bearer\s+(.+)$/i.exec(h);
+    return m ? m[1].trim() : "";
+  };
+
   if (path === "/lobbies") {
-    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify({ lobbies: publicLobbies() }));
+    json(200, { lobbies: publicLobbies() });
     return;
   }
   if (path === "/leaderboard") {
-    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify({ players: leaderboard.top(), matches: leaderboard.matches() }));
+    json(200, { players: leaderboard.top(), matches: leaderboard.matches() });
     return;
   }
   if (path === "/stats") {
     const q = new URL(req.url || "/", "http://citrons.local").searchParams.get("id");
-    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify({ player: leaderboard.stats(q) }));
+    json(200, { player: leaderboard.stats(q) });
     return;
   }
   if (path === "/push/vapid") {
-    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify({ publicKey: push.publicKey() }));
+    json(200, { publicKey: push.publicKey() });
     return;
   }
+
+  if (path === "/billing/webhook" && req.method === "POST") {
+    void (async () => {
+      try {
+        const raw = await readBody();
+        const sig = String(req.headers["stripe-signature"] || "");
+        const out = await stripeBilling.handleWebhook(raw, sig);
+        json(200, out);
+      } catch (err) {
+        const code = err && err.code === "bad_sig" ? 400 : 400;
+        console.warn("billing webhook", err && err.message);
+        json(code, { error: String((err && err.message) || "webhook") });
+      }
+    })();
+    return;
+  }
+
+  if (path === "/billing/checkout" && req.method === "POST") {
+    void (async () => {
+      try {
+        const raw = await readBody();
+        let body = {};
+        try {
+          body = raw.length ? JSON.parse(raw.toString("utf8")) : {};
+        } catch {
+          body = {};
+        }
+        const token = bearerToken() || String(body.clerkToken || "");
+        const auth = await clerk.verifyClerkToken(token);
+        if (!auth.ok) {
+          json(401, { error: "Sign in required" });
+          return;
+        }
+        const session = await stripeBilling.createCheckoutSession({
+          userId: auth.userId,
+          successUrl: body.successUrl,
+          cancelUrl: body.cancelUrl,
+        });
+        json(200, session);
+      } catch (err) {
+        console.warn("billing checkout", err && err.message);
+        const status = err && err.code === "stripe_off" ? 503 : err && err.code === "auth" ? 401 : 400;
+        json(status, { error: String((err && err.message) || "checkout failed") });
+      }
+    })();
+    return;
+  }
+
+  if (path === "/billing/portal" && req.method === "POST") {
+    void (async () => {
+      try {
+        const raw = await readBody();
+        let body = {};
+        try {
+          body = raw.length ? JSON.parse(raw.toString("utf8")) : {};
+        } catch {
+          body = {};
+        }
+        const token = bearerToken() || String(body.clerkToken || "");
+        const auth = await clerk.verifyClerkToken(token);
+        if (!auth.ok) {
+          json(401, { error: "Sign in required" });
+          return;
+        }
+        const session = await stripeBilling.createPortalSession({
+          userId: auth.userId,
+          returnUrl: body.returnUrl,
+        });
+        json(200, session);
+      } catch (err) {
+        console.warn("billing portal", err && err.message);
+        const status = err && err.code === "stripe_off" ? 503 : err && err.code === "no_customer" ? 400 : 400;
+        json(status, { error: String((err && err.message) || "portal failed") });
+      }
+    })();
+    return;
+  }
+
+  if (path === "/billing/status" && req.method === "GET") {
+    void (async () => {
+      try {
+        const token = bearerToken();
+        const auth = token ? await clerk.verifyClerkToken(token) : { ok: false };
+        if (!auth.ok) {
+          json(401, { error: "Sign in required" });
+          return;
+        }
+        const st = await stripeBilling.statusForUser(auth.userId);
+        json(200, st);
+      } catch (err) {
+        console.warn("billing status", err && err.message);
+        json(400, { error: String((err && err.message) || "status failed") });
+      }
+    })();
+    return;
+  }
+
   if (path === "/health" || path === "/") {
-    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(
-      JSON.stringify({
-        ok: true,
-        service: "citrons",
-        rooms: rooms.size,
-        waiting: [...rooms.values()].filter((r) => r.phase === "waiting").length,
-        live: [...rooms.values()].filter((r) => roomLive(r)).length,
-        clerk: clerk.clerkConfigured(),
-        push: (() => {
-          const p = push.info();
-          return {
-            ready: p.ready,
-            volume: p.volume,
-            clerk: p.clerk,
-            vapidSource: p.vapidSource,
-            users: p.users,
-            reachable: p.reachable,
-            pending: p.pending,
-            lastError: p.lastError,
-          };
-        })(),
-        leaderboard: (() => {
-          const board = leaderboard.info();
-          return {
-            clerk: board.clerk,
-            clerkKind: board.clerkKind,
-            expectedKind: board.expectedKind,
-            mismatch: board.mismatch,
-            players: board.players,
-            pending: board.pending,
-            lastError: board.lastError || undefined,
-          };
-        })(),
-        voice: (() => {
-          const v = daily.info();
-          return {
-            ready: v.ready,
-            domain: v.domain,
-            roomsCached: v.roomsCached,
-            lastError: v.lastError,
-          };
-        })(),
-      })
-    );
+    json(200, {
+      ok: true,
+      service: "citrons",
+      rooms: rooms.size,
+      waiting: [...rooms.values()].filter((r) => r.phase === "waiting").length,
+      live: [...rooms.values()].filter((r) => roomLive(r)).length,
+      clerk: clerk.clerkConfigured(),
+      billing: stripeBilling.info(),
+      push: (() => {
+        const p = push.info();
+        return {
+          ready: p.ready,
+          volume: p.volume,
+          clerk: p.clerk,
+          vapidSource: p.vapidSource,
+          users: p.users,
+          reachable: p.reachable,
+          pending: p.pending,
+          lastError: p.lastError,
+        };
+      })(),
+      leaderboard: (() => {
+        const board = leaderboard.info();
+        return {
+          clerk: board.clerk,
+          clerkKind: board.clerkKind,
+          expectedKind: board.expectedKind,
+          mismatch: board.mismatch,
+          players: board.players,
+          pending: board.pending,
+          lastError: board.lastError || undefined,
+        };
+      })(),
+      voice: (() => {
+        const v = daily.info();
+        return {
+          ready: v.ready,
+          domain: v.domain,
+          roomsCached: v.roomsCached,
+          lastError: v.lastError,
+        };
+      })(),
+    });
     return;
   }
   res.writeHead(404);
@@ -1612,12 +1725,16 @@ Promise.resolve(leaderboard.hydrateFromClerk())
     server.listen(PORT, "0.0.0.0", () => {
       const board = leaderboard.info();
       const invites = push.info();
+      const bill = stripeBilling.info();
       console.log(`Citrons multiplayer on :${PORT}`);
       console.log(
         `leaderboard file=${board.file} clerk=${board.clerkKind} expected=${board.expectedKind} players=${board.players} pending=${board.pending}`
       );
       console.log(
         `push file=${invites.file} vapid=${invites.vapidSource} volume=${invites.volume} clerk=${invites.clerk} users=${invites.users} reachable=${invites.reachable} pending=${invites.pending}`
+      );
+      console.log(
+        `billing stripe ready=${bill.ready} secret=${bill.hasSecret} webhook=${bill.hasWebhookSecret} price=${bill.hasPrice}`
       );
       const voice = daily.info();
       console.log(`voice daily ready=${voice.ready} domain=${voice.domain || "off"}`);

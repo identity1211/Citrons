@@ -5,6 +5,7 @@ const crypto = require("crypto");
 const DEFAULT_CLERK_PK = process.env.CLERK_PUBLISHABLE_KEY || "pk_live_Y2xlcmsuY2l0cm9ucy5sYXQk";
 const PLUS_PLAN = "plus";
 const PLUS_FEATURE = "plus_perks";
+const META_PLUS = "citrons_plus";
 
 function clerkSecret() {
   return String(process.env.CLERK_SECRET_KEY || "").trim();
@@ -29,6 +30,21 @@ function issuerFromPk(pk) {
 
 let jwksCache = { issuer: "", keys: [], at: 0 };
 const plusCache = new Map(); // userId -> { plus, at }
+
+function setPlusCache(userId, plus) {
+  const id = String(userId || "").trim();
+  if (!id) return;
+  plusCache.set(id, { plus: !!plus, at: Date.now() });
+}
+
+function peekPlusCache(userId) {
+  const id = String(userId || "").trim();
+  if (!id) return null;
+  const cached = plusCache.get(id);
+  if (!cached) return null;
+  if (Date.now() - cached.at >= 60 * 1000) return null;
+  return { plus: !!cached.plus };
+}
 
 function b64urlToBuf(s) {
   const pad = 4 - (s.length % 4);
@@ -103,7 +119,7 @@ async function verifyClerkToken(token) {
   const sub = String(payload.sub || "");
   if (!sub) return { ok: false, reason: "sub" };
   const plus = claimsIndicatePlus(payload);
-  if (plus) plusCache.set(sub, { plus: true, at: Date.now() });
+  if (plus) setPlusCache(sub, true);
   return { ok: true, userId: sub, plus };
 }
 
@@ -126,55 +142,24 @@ async function clerkApi(method, urlPath) {
   return res.json();
 }
 
-function subscriptionLooksPlus(data) {
-  if (!data || typeof data !== "object") return false;
-  const items = Array.isArray(data.subscription_items)
-    ? data.subscription_items
-    : Array.isArray(data.items)
-      ? data.items
-      : [];
-  for (const item of items) {
-    const status = String((item && item.status) || data.status || "").toLowerCase();
-    if (status && status !== "active" && status !== "trialing" && status !== "past_due") continue;
-    const plan = (item && item.plan) || data.plan || {};
-    const slug = String(plan.slug || plan.name || "").toLowerCase();
-    if (slug === PLUS_PLAN || slug === `u:${PLUS_PLAN}`) return true;
-    const feats = Array.isArray(plan.features) ? plan.features : [];
-    if (feats.some((f) => String((f && f.slug) || f || "").toLowerCase() === PLUS_FEATURE)) return true;
-  }
-  const topSlug = String((data.plan && data.plan.slug) || "").toLowerCase();
-  return topSlug === PLUS_PLAN;
-}
-
 /**
- * Future perk gates: true if Clerk Billing says this user is on Plus.
- * Prefers short cache; falls back to Backend billing subscription lookup.
+ * Plus from Stripe → Clerk publicMetadata.citrons_plus (primary),
+ * with JWT claim / short cache fallbacks.
  */
 async function userHasPlus(userId) {
   const id = String(userId || "").trim();
   if (!id) return false;
-  const cached = plusCache.get(id);
-  if (cached && Date.now() - cached.at < 60 * 1000) return !!cached.plus;
-  if (!clerkSecret()) return !!(cached && cached.plus);
+  const cached = peekPlusCache(id);
+  if (cached) return cached.plus;
+  if (!clerkSecret()) return false;
   try {
-    // Newer Billing API paths; tolerate 404 on older instances.
-    let data =
-      (await clerkApi("GET", `/users/${encodeURIComponent(id)}/billing/subscription`)) ||
-      (await clerkApi("GET", `/billing/users/${encodeURIComponent(id)}/subscriptions`)) ||
-      (await clerkApi("GET", `/users/${encodeURIComponent(id)}`));
-    let plus = false;
-    if (data && data.public_metadata && data.public_metadata.citrons_plus) {
-      plus = true;
-    } else if (Array.isArray(data && data.data)) {
-      plus = data.data.some(subscriptionLooksPlus);
-    } else {
-      plus = subscriptionLooksPlus(data);
-    }
-    plusCache.set(id, { plus, at: Date.now() });
+    const data = await clerkApi("GET", `/users/${encodeURIComponent(id)}`);
+    const plus = !!(data && data.public_metadata && data.public_metadata[META_PLUS]);
+    setPlusCache(id, plus);
     return plus;
   } catch (err) {
     console.warn("clerk userHasPlus", err && err.message);
-    return !!(cached && cached.plus);
+    return false;
   }
 }
 
@@ -187,6 +172,9 @@ module.exports = {
   clerkConfigured,
   userHasPlus,
   claimsIndicatePlus,
+  setPlusCache,
+  peekPlusCache,
   PLUS_PLAN,
   PLUS_FEATURE,
+  META_PLUS,
 };

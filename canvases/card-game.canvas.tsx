@@ -2946,8 +2946,7 @@ function clerkNickname(user: any): string {
   return String(raw).replace(/\s+/g, " ").trim().slice(0, 18) || "Player";
 }
 
-const PLUS_PLAN_SLUG = "plus";
-const PLUS_FEATURE_SLUG = "plus_perks";
+const PLUS_PRICE_LABEL = "€2.99/mo";
 
 function decodeJwtPayload(token: string): any | null {
   try {
@@ -2970,11 +2969,17 @@ function claimsIndicatePlus(payload: any): boolean {
   return false;
 }
 
+function userPublicMetaPlus(user: any): boolean {
+  const meta = (user && (user.publicMetadata || user.public_metadata)) || {};
+  return !!(meta.citrons_plus || meta.citronsPlus);
+}
+
 function clerkSessionHasPlusSync(clerk: any): boolean {
   try {
+    if (userPublicMetaPlus(clerk && clerk.user)) return true;
     const session = clerk && clerk.session;
     if (!session) return false;
-    const checks = [{ plan: PLUS_PLAN_SLUG }, { feature: PLUS_FEATURE_SLUG }];
+    const checks = [{ plan: "plus" }, { feature: "plus_perks" }];
     for (const c of checks) {
       try {
         if (typeof session.has === "function" && session.has(c)) return true;
@@ -2998,10 +3003,20 @@ async function clerkSessionHasPlus(clerk?: any): Promise<boolean> {
   if (!c) return false;
   if (clerkSessionHasPlusSync(c)) return true;
   try {
+    if (c.user && typeof c.user.reload === "function") {
+      await c.user.reload();
+      if (userPublicMetaPlus(c.user)) return true;
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
     const session = c.session;
     if (session && typeof session.getToken === "function") {
       const token = await session.getToken();
       if (claimsIndicatePlus(decodeJwtPayload(String(token || "")))) return true;
+      const st = await fetchBillingStatus(String(token || ""));
+      if (st && st.plus) return true;
     }
   } catch {
     /* ignore */
@@ -3009,17 +3024,56 @@ async function clerkSessionHasPlus(clerk?: any): Promise<boolean> {
   return false;
 }
 
-const PLUS_PRICING_APPEARANCE = {
-  variables: {
-    colorPrimary: "#f1c40f",
-    colorBackground: "#145230",
-    colorText: "#f5f0e6",
-    colorTextSecondary: "rgba(245,240,230,0.72)",
-    colorInputBackground: "rgba(0,0,0,0.28)",
-    colorInputText: "#f5f0e6",
-    borderRadius: "10px",
-  },
-};
+async function fetchBillingStatus(clerkToken: string): Promise<{ plus?: boolean } | null> {
+  try {
+    const res = await fetch(httpUrlFromWs(defaultWsUrl(), "/billing/status"), {
+      headers: { Authorization: `Bearer ${clerkToken}` },
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+async function startPlusCheckout(): Promise<string> {
+  const clerk = await ensureClerk();
+  const token = clerk.session ? await clerk.session.getToken() : "";
+  if (!token) throw new Error("Sign in required");
+  const base = appUrl();
+  const join = base.includes("?") ? "&" : "?";
+  const res = await fetch(httpUrlFromWs(defaultWsUrl(), "/billing/checkout"), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      successUrl: `${base}${join}plus=success`,
+      cancelUrl: `${base}${join}plus=cancel`,
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.url) throw new Error(data.error || "Checkout failed");
+  return String(data.url);
+}
+
+async function openPlusPortal(): Promise<string> {
+  const clerk = await ensureClerk();
+  const token = clerk.session ? await clerk.session.getToken() : "";
+  if (!token) throw new Error("Sign in required");
+  const res = await fetch(httpUrlFromWs(defaultWsUrl(), "/billing/portal"), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ returnUrl: appUrl() }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.url) throw new Error(data.error || "Portal failed");
+  return String(data.url);
+}
 
 function clerkErrorText(err: any): string {
   if (!err) return "Clerk error";
@@ -3448,8 +3502,6 @@ function ProfileButton() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const fileRef = useRef<HTMLInputElement | null>(null);
-  const pricingRef = useRef<HTMLDivElement | null>(null);
-  const pricingMountedRef = useRef(false);
 
   useEffect(() => {
     if (user) setNick(clerkNickname(user));
@@ -3463,71 +3515,57 @@ function ProfileButton() {
   }, [open]);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    const q = new URLSearchParams(window.location.search).get("plus");
+    if (q !== "success" && q !== "cancel") return;
     let cancelled = false;
-    if (!open || pane !== "plus" || !user) {
-      if (pricingMountedRef.current && pricingRef.current) {
-        void ensureClerk()
-          .then((clerk) => {
-            try {
-              clerk.unmountPricingTable?.(pricingRef.current);
-            } catch {
-              /* ignore */
-            }
-          })
-          .catch(() => {});
-        pricingMountedRef.current = false;
-      }
-      return;
-    }
     void (async () => {
       try {
         const clerk = await ensureClerk();
-        if (cancelled || !pricingRef.current) return;
-        if (typeof clerk.mountPricingTable !== "function") {
-          setMsg("Billing UI is unavailable — refresh and try again.");
-          return;
-        }
         try {
-          clerk.unmountPricingTable?.(pricingRef.current);
+          await clerk.user?.reload?.();
         } catch {
           /* ignore */
         }
-        clerk.mountPricingTable(pricingRef.current, {
-          for: "user",
-          collapseFeatures: true,
-          highlightedPlan: PLUS_PLAN_SLUG,
-          appearance: PLUS_PRICING_APPEARANCE,
-          checkoutProps: { appearance: PLUS_PRICING_APPEARANCE },
-          newSubscriptionRedirectUrl: appUrl(),
-        });
-        pricingMountedRef.current = true;
-        try {
-          await clerk.session?.reload?.();
-        } catch {
-          /* ignore */
+        let plus = await clerkSessionHasPlus(clerk);
+        if (q === "success" && !plus) {
+          for (let i = 0; i < 6 && !plus && !cancelled; i++) {
+            await new Promise((r) => window.setTimeout(r, 700));
+            try {
+              await clerk.user?.reload?.();
+            } catch {
+              /* ignore */
+            }
+            plus = await clerkSessionHasPlus(clerk);
+          }
         }
-        const plus = await clerkSessionHasPlus(clerk);
-        if (!cancelled) setIsPlus(plus);
-      } catch (e) {
-        if (!cancelled) setMsg(clerkErrorText(e));
+        if (!cancelled) {
+          setIsPlus(plus);
+          setOpen(true);
+          setPane("plus");
+          setMsg(
+            q === "success"
+              ? plus
+                ? "Welcome to Plus"
+                : "Payment received — tap Refresh if Plus is not active yet"
+              : "Checkout canceled"
+          );
+        }
+      } catch {
+        /* ignore */
+      }
+      try {
+        const u = new URL(window.location.href);
+        u.searchParams.delete("plus");
+        window.history.replaceState({}, "", u.pathname + u.search + u.hash);
+      } catch {
+        /* ignore */
       }
     })();
     return () => {
       cancelled = true;
-      if (pricingMountedRef.current && pricingRef.current) {
-        void ensureClerk()
-          .then((clerk) => {
-            try {
-              clerk.unmountPricingTable?.(pricingRef.current);
-            } catch {
-              /* ignore */
-            }
-          })
-          .catch(() => {});
-        pricingMountedRef.current = false;
-      }
     };
-  }, [open, pane, user, setIsPlus]);
+  }, [setIsPlus]);
 
   async function run(fn: () => Promise<void>) {
     setBusy(true);
@@ -3623,7 +3661,7 @@ function ProfileButton() {
             onClick={(e) => e.stopPropagation()}
             style={{
               ...PROFILE_PANEL,
-              width: pane === "plus" ? "min(400px, 100%)" : PROFILE_PANEL.width,
+              width: pane === "plus" ? "min(360px, 100%)" : PROFILE_PANEL.width,
             }}
           >
             <ProfileHeader title={paneTitle} onBack={showBack ? () => setPane("profile") : undefined} />
@@ -3634,16 +3672,24 @@ function ProfileButton() {
               <>
                 <div
                   style={{
-                    fontSize: 13,
-                    lineHeight: 1.4,
-                    color: "rgba(245,240,230,0.78)",
-                    marginBottom: 10,
                     textAlign: "left",
+                    background: "#f7f3ea",
+                    color: "#1a2e1a",
+                    borderRadius: 12,
+                    padding: "14px 14px 12px",
+                    marginBottom: 10,
                   }}
                 >
-                  {isPlus
-                    ? "You're on Plus. Cancel or update payment anytime."
-                    : "$2.99 / month — extra card backs, tables, and more as we roll them out."}
+                  <div style={{ fontFamily: 'Georgia, "Times New Roman", serif', fontSize: 22, fontWeight: 700 }}>
+                    Plus
+                  </div>
+                  <div style={{ marginTop: 4, fontSize: 28, fontWeight: 800, letterSpacing: -0.5 }}>€2.99</div>
+                  <div style={{ fontSize: 12, color: "rgba(26,46,26,0.65)", marginBottom: 8 }}>per month · EUR</div>
+                  <div style={{ fontSize: 13, lineHeight: 1.4, color: "rgba(26,46,26,0.78)" }}>
+                    {isPlus
+                      ? "You're on Plus. Manage billing in the Stripe portal — cancel anytime."
+                      : "Extra card backs, tables, and more as we roll them out."}
+                  </div>
                 </div>
                 {isPlus ? (
                   <div
@@ -3665,34 +3711,35 @@ function ProfileButton() {
                     Plus active
                   </div>
                 ) : null}
-                <div
-                  ref={pricingRef}
-                  style={{
-                    width: "100%",
-                    minHeight: 120,
-                    textAlign: "left",
-                    marginBottom: 8,
-                  }}
-                />
                 {isPlus ? (
                   <button
                     type="button"
                     disabled={busy}
                     onClick={() =>
                       run(async () => {
-                        const clerk = await ensureClerk();
-                        if (typeof clerk.openUserProfile === "function") {
-                          clerk.openUserProfile({ routing: "virtual" });
-                        } else {
-                          setMsg("Open your Clerk account to manage billing.");
-                        }
+                        const url = await openPlusPortal();
+                        window.location.assign(url);
                       })
                     }
-                    style={{ ...PROFILE_GHOST, marginBottom: 6 }}
+                    style={{ ...LOBBY_GOLD_BTN, maxWidth: "100%", height: 40, fontSize: 14, marginBottom: 8 }}
                   >
-                    Manage subscription
+                    {busy ? "Opening…" : "Manage subscription"}
                   </button>
-                ) : null}
+                ) : (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() =>
+                      run(async () => {
+                        const url = await startPlusCheckout();
+                        window.location.assign(url);
+                      })
+                    }
+                    style={{ ...LOBBY_GOLD_BTN, maxWidth: "100%", height: 40, fontSize: 14, marginBottom: 8 }}
+                  >
+                    {busy ? "Opening checkout…" : `Subscribe · ${PLUS_PRICE_LABEL}`}
+                  </button>
+                )}
                 <button
                   type="button"
                   disabled={busy}
@@ -3700,7 +3747,7 @@ function ProfileButton() {
                     run(async () => {
                       const clerk = await ensureClerk();
                       try {
-                        await clerk.session?.reload?.();
+                        await clerk.user?.reload?.();
                       } catch {
                         /* ignore */
                       }
@@ -3841,7 +3888,7 @@ function ProfileButton() {
                 <ProfileNavRow label="Stats" onClick={() => setPane("stats")} />
                 <ProfileNavRow
                   label="Citrons Plus"
-                  hint={isPlus ? "Manage" : "$2.99/mo"}
+                  hint={isPlus ? "Manage" : PLUS_PRICE_LABEL}
                   emphasize={!isPlus}
                   onClick={() => setPane("plus")}
                 />
