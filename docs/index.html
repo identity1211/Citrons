@@ -2996,8 +2996,8 @@ async function ensureClerk(): Promise<any> {
     }
     const host = clerkFrontendHost(pk);
     const clerkSrc = host
-      ? `https://${host}/npm/@clerk/clerk-js@5/dist/clerk.browser.js`
-      : "https://cdn.jsdelivr.net/npm/@clerk/clerk-js@5/dist/clerk.browser.js";
+      ? `https://${host}/npm/@clerk/clerk-js@6/dist/clerk.browser.js`
+      : "https://cdn.jsdelivr.net/npm/@clerk/clerk-js@6/dist/clerk.browser.js";
     await loadScriptOnce(clerkSrc, { "data-clerk-publishable-key": pk });
     let clerk = w.Clerk;
     if (typeof clerk === "function") clerk = new clerk(pk);
@@ -3038,6 +3038,81 @@ function clerkNickname(user: any): string {
   const raw = meta.nickname || user?.firstName || user?.username || local || "Player";
   return String(raw).replace(/\s+/g, " ").trim().slice(0, 18) || "Player";
 }
+
+const PLUS_PLAN_SLUG = "plus";
+const PLUS_FEATURE_SLUG = "plus_perks";
+
+function decodeJwtPayload(token: string): any | null {
+  try {
+    const part = String(token || "").split(".")[1];
+    if (!part) return null;
+    const pad = 4 - (part.length % 4);
+    const b64 = part.replace(/-/g, "+").replace(/_/g, "/") + (pad === 4 ? "" : "=".repeat(pad));
+    return JSON.parse(atob(b64));
+  } catch {
+    return null;
+  }
+}
+
+function claimsIndicatePlus(payload: any): boolean {
+  if (!payload || typeof payload !== "object") return false;
+  const pla = String(payload.pla || payload.plan || "");
+  const fea = String(payload.fea || payload.features || "");
+  if (/\bu:plus\b/i.test(pla) || /(^|[,:])plus($|[,:])/i.test(pla)) return true;
+  if (/\bu:plus_perks\b/i.test(fea) || /(^|[,:])plus_perks($|[,:])/i.test(fea)) return true;
+  return false;
+}
+
+function clerkSessionHasPlusSync(clerk: any): boolean {
+  try {
+    const session = clerk && clerk.session;
+    if (!session) return false;
+    const checks = [{ plan: PLUS_PLAN_SLUG }, { feature: PLUS_FEATURE_SLUG }];
+    for (const c of checks) {
+      try {
+        if (typeof session.has === "function" && session.has(c)) return true;
+      } catch {
+        /* ignore */
+      }
+      try {
+        if (typeof session.checkAuthorization === "function" && session.checkAuthorization(c)) return true;
+      } catch {
+        /* ignore */
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return false;
+}
+
+async function clerkSessionHasPlus(clerk?: any): Promise<boolean> {
+  const c = clerk || (typeof window !== "undefined" ? (window as any).Clerk : null);
+  if (!c) return false;
+  if (clerkSessionHasPlusSync(c)) return true;
+  try {
+    const session = c.session;
+    if (session && typeof session.getToken === "function") {
+      const token = await session.getToken();
+      if (claimsIndicatePlus(decodeJwtPayload(String(token || "")))) return true;
+    }
+  } catch {
+    /* ignore */
+  }
+  return false;
+}
+
+const PLUS_PRICING_APPEARANCE = {
+  variables: {
+    colorPrimary: "#f1c40f",
+    colorBackground: "#145230",
+    colorText: "#f5f0e6",
+    colorTextSecondary: "rgba(245,240,230,0.72)",
+    colorInputBackground: "rgba(0,0,0,0.28)",
+    colorInputText: "#f5f0e6",
+    borderRadius: "10px",
+  },
+};
 
 function clerkErrorText(err: any): string {
   if (!err) return "Clerk error";
@@ -3080,6 +3155,7 @@ async function signInWithGoogle(): Promise<void> {
 function useClerkAuth() {
   const [loaded, setLoaded] = useState(() => !clerkPublishableKey());
   const [user, setUser] = useState<any>(null);
+  const [isPlus, setIsPlus] = useState(false);
   const [error, setError] = useState(() =>
     clerkPublishableKey() ? "" : clerkErrorText(new Error("NO_PK"))
   );
@@ -3107,6 +3183,11 @@ function useClerkAuth() {
             } catch {
               /* ignore */
             }
+            void clerkSessionHasPlus(clerk).then((plus) => {
+              if (!cancelled) setIsPlus(plus);
+            });
+          } else {
+            setIsPlus(false);
           }
         };
         sync();
@@ -3120,6 +3201,7 @@ function useClerkAuth() {
         if (cancelled) return;
         setLoaded(true);
         setUser(null);
+        setIsPlus(false);
         setError(clerkErrorText(e));
       }
     })();
@@ -3129,7 +3211,7 @@ function useClerkAuth() {
     };
   }, []);
 
-  return { loaded, user, error };
+  return { loaded, user, isPlus, setIsPlus, error };
 }
 
 const PROFILE_PANEL: CSSProperties = {
@@ -3318,14 +3400,16 @@ function PlayerStatsBody({ userId }: { userId: string }) {
 }
 
 function ProfileButton() {
-  const { loaded, user, error } = useClerkAuth();
+  const { loaded, user, isPlus, setIsPlus, error } = useClerkAuth();
   const [open, setOpen] = useState(false);
-  const [pane, setPane] = useState<"profile" | "stats">("profile");
+  const [pane, setPane] = useState<"profile" | "stats" | "plus">("profile");
   const [nick, setNick] = useState("");
   const [busy, setBusy] = useState(false);
   const [reloading, setReloading] = useState(false);
   const [msg, setMsg] = useState("");
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const pricingRef = useRef<HTMLDivElement | null>(null);
+  const pricingMountedRef = useRef(false);
 
   useEffect(() => {
     if (user) setNick(clerkNickname(user));
@@ -3334,6 +3418,76 @@ function ProfileButton() {
   useEffect(() => {
     if (!open) setPane("profile");
   }, [open]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!open || pane !== "plus" || !user) {
+      if (pricingMountedRef.current && pricingRef.current) {
+        void ensureClerk()
+          .then((clerk) => {
+            try {
+              clerk.unmountPricingTable?.(pricingRef.current);
+            } catch {
+              /* ignore */
+            }
+          })
+          .catch(() => {});
+        pricingMountedRef.current = false;
+      }
+      return;
+    }
+    void (async () => {
+      try {
+        const clerk = await ensureClerk();
+        if (cancelled || !pricingRef.current) return;
+        if (typeof clerk.mountPricingTable !== "function") {
+          setMsg("Billing UI is unavailable — refresh and try again.");
+          return;
+        }
+        try {
+          clerk.unmountPricingTable?.(pricingRef.current);
+        } catch {
+          /* ignore */
+        }
+        clerk.mountPricingTable(pricingRef.current, {
+          for: "user",
+          collapseFeatures: true,
+          highlightedPlan: PLUS_PLAN_SLUG,
+          appearance: PLUS_PRICING_APPEARANCE,
+          checkoutProps: { appearance: PLUS_PRICING_APPEARANCE },
+          newSubscriptionRedirectUrl: appUrl(),
+        });
+        pricingMountedRef.current = true;
+        if (typeof clerk.addListener === "function") {
+          /* session updates after checkout */
+        }
+        try {
+          await clerk.session?.reload?.();
+        } catch {
+          /* ignore */
+        }
+        const plus = await clerkSessionHasPlus(clerk);
+        if (!cancelled) setIsPlus(plus);
+      } catch (e) {
+        if (!cancelled) setMsg(clerkErrorText(e));
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (pricingMountedRef.current && pricingRef.current) {
+        void ensureClerk()
+          .then((clerk) => {
+            try {
+              clerk.unmountPricingTable?.(pricingRef.current);
+            } catch {
+              /* ignore */
+            }
+          })
+          .catch(() => {});
+        pricingMountedRef.current = false;
+      }
+    };
+  }, [open, pane, user, setIsPlus]);
 
   async function run(fn: () => Promise<void>) {
     setBusy(true);
@@ -3361,7 +3515,30 @@ function ProfileButton() {
         }}
       >
         {user ? (
-          <AvatarBubble src={user.imageUrl} name={nickName} size={40} onClick={() => setOpen(true)} />
+          <span style={{ position: "relative", display: "inline-flex" }}>
+            <AvatarBubble src={user.imageUrl} name={nickName} size={40} onClick={() => setOpen(true)} />
+            {isPlus ? (
+              <span
+                style={{
+                  position: "absolute",
+                  right: -4,
+                  bottom: -4,
+                  fontSize: 9,
+                  fontWeight: 800,
+                  letterSpacing: 0.4,
+                  textTransform: "uppercase",
+                  color: "#1a2e1a",
+                  background: "#f1c40f",
+                  borderRadius: 6,
+                  padding: "2px 4px",
+                  boxShadow: "0 2px 6px rgba(0,0,0,0.35)",
+                  pointerEvents: "none",
+                }}
+              >
+                Plus
+              </span>
+            ) : null}
+          </span>
         ) : (
           <button
             type="button"
@@ -3400,10 +3577,13 @@ function ProfileButton() {
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            style={PROFILE_PANEL}
+            style={{
+              ...PROFILE_PANEL,
+              width: pane === "plus" ? "min(420px, 100%)" : PROFILE_PANEL.width,
+            }}
           >
             <div style={{ fontFamily: 'Georgia, "Times New Roman", serif', fontSize: 18, fontWeight: 700, marginBottom: 8 }}>
-              {pane === "stats" ? "Stats" : "Profile"}
+              {pane === "stats" ? "Stats" : pane === "plus" ? "Citrons Plus" : "Profile"}
             </div>
             {user && pane === "stats" ? (
               <>
@@ -3416,10 +3596,113 @@ function ProfileButton() {
                   Back
                 </button>
               </>
+            ) : user && pane === "plus" ? (
+              <>
+                <div style={{ fontSize: 13, lineHeight: 1.4, color: "rgba(245,240,230,0.78)", marginBottom: 10 }}>
+                  {isPlus
+                    ? "You're on Plus. Manage billing below, or cancel anytime."
+                    : "$2.99 / month — unlock Plus perks as we roll them out (extra card backs, tables, and more)."}
+                </div>
+                {isPlus ? (
+                  <div
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
+                      margin: "0 auto 10px",
+                      padding: "4px 10px",
+                      borderRadius: 999,
+                      background: "rgba(241,196,15,0.18)",
+                      border: "1px solid rgba(241,196,15,0.55)",
+                      color: "#f1c40f",
+                      fontSize: 12,
+                      fontWeight: 800,
+                      letterSpacing: 0.6,
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    Plus active
+                  </div>
+                ) : null}
+                <div
+                  ref={pricingRef}
+                  style={{
+                    width: "100%",
+                    minHeight: 120,
+                    textAlign: "left",
+                    marginBottom: 8,
+                  }}
+                />
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() =>
+                    run(async () => {
+                      const clerk = await ensureClerk();
+                      try {
+                        await clerk.session?.reload?.();
+                      } catch {
+                        /* ignore */
+                      }
+                      const plus = await clerkSessionHasPlus(clerk);
+                      setIsPlus(plus);
+                      setMsg(plus ? "Plus status updated" : "Not subscribed yet");
+                    })
+                  }
+                  style={{ ...PROFILE_GHOST, height: 32, fontSize: 13 }}
+                >
+                  Refresh status
+                </button>
+                {isPlus ? (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() =>
+                      run(async () => {
+                        const clerk = await ensureClerk();
+                        if (typeof clerk.openUserProfile === "function") {
+                          clerk.openUserProfile({ routing: "virtual" });
+                        } else {
+                          setMsg("Open your Clerk account to manage billing.");
+                        }
+                      })
+                    }
+                    style={{ ...PROFILE_GHOST, marginTop: 6 }}
+                  >
+                    Manage subscription
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => setPane("profile")}
+                  style={{ ...PROFILE_GHOST, marginTop: 8, height: 32, fontSize: 13 }}
+                >
+                  Back
+                </button>
+              </>
             ) : user ? (
               <>
-                <div style={{ display: "flex", justifyContent: "center", marginBottom: 8 }}>
+                <div style={{ display: "flex", justifyContent: "center", marginBottom: 8, position: "relative" }}>
                   <AvatarBubble src={user.imageUrl} name={nickName} size={56} />
+                  {isPlus ? (
+                    <span
+                      style={{
+                        position: "absolute",
+                        right: "calc(50% - 40px)",
+                        bottom: -2,
+                        fontSize: 10,
+                        fontWeight: 800,
+                        letterSpacing: 0.4,
+                        textTransform: "uppercase",
+                        color: "#1a2e1a",
+                        background: "#f1c40f",
+                        borderRadius: 6,
+                        padding: "2px 5px",
+                      }}
+                    >
+                      Plus
+                    </span>
+                  ) : null}
                 </div>
                 <input
                   value={nick}
@@ -3483,6 +3766,19 @@ function ProfileButton() {
                   style={{ ...PROFILE_GHOST, marginTop: 8 }}
                 >
                   Stats
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPane("plus")}
+                  style={{
+                    ...(isPlus ? PROFILE_GHOST : LOBBY_GOLD_BTN),
+                    maxWidth: "100%",
+                    marginTop: 8,
+                    height: 36,
+                    fontSize: 13,
+                  }}
+                >
+                  {isPlus ? "Manage Plus" : "Citrons Plus · $2.99/mo"}
                 </button>
                 <button
                   type="button"

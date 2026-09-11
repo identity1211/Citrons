@@ -3,6 +3,12 @@
 const crypto = require("crypto");
 
 const DEFAULT_CLERK_PK = process.env.CLERK_PUBLISHABLE_KEY || "pk_live_Y2xlcmsuY2l0cm9ucy5sYXQk";
+const PLUS_PLAN = "plus";
+const PLUS_FEATURE = "plus_perks";
+
+function clerkSecret() {
+  return String(process.env.CLERK_SECRET_KEY || "").trim();
+}
 
 function frontendApiFromPk(pk) {
   try {
@@ -22,6 +28,7 @@ function issuerFromPk(pk) {
 }
 
 let jwksCache = { issuer: "", keys: [], at: 0 };
+const plusCache = new Map(); // userId -> { plus, at }
 
 function b64urlToBuf(s) {
   const pad = 4 - (s.length % 4);
@@ -48,6 +55,15 @@ function verifyRs256(data, signature, jwk) {
   verify.update(data);
   verify.end();
   return verify.verify(key, signature);
+}
+
+function claimsIndicatePlus(payload) {
+  if (!payload || typeof payload !== "object") return false;
+  const pla = String(payload.pla || payload.plan || "");
+  const fea = String(payload.fea || payload.features || "");
+  if (/\bu:plus\b/i.test(pla) || /(^|[,:])plus($|[,:])/i.test(pla)) return true;
+  if (/\bu:plus_perks\b/i.test(fea) || /(^|[,:])plus_perks($|[,:])/i.test(fea)) return true;
+  return false;
 }
 
 async function verifyClerkToken(token) {
@@ -86,11 +102,91 @@ async function verifyClerkToken(token) {
   }
   const sub = String(payload.sub || "");
   if (!sub) return { ok: false, reason: "sub" };
-  return { ok: true, userId: sub };
+  const plus = claimsIndicatePlus(payload);
+  if (plus) plusCache.set(sub, { plus: true, at: Date.now() });
+  return { ok: true, userId: sub, plus };
+}
+
+async function clerkApi(method, urlPath) {
+  const key = clerkSecret();
+  if (!key) return null;
+  const res = await fetch(`https://api.clerk.com/v1${urlPath}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${key}`,
+      "Content-Type": "application/json",
+    },
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`clerk ${method} ${urlPath} ${res.status} ${text.slice(0, 160)}`);
+  }
+  if (res.status === 204) return null;
+  return res.json();
+}
+
+function subscriptionLooksPlus(data) {
+  if (!data || typeof data !== "object") return false;
+  const items = Array.isArray(data.subscription_items)
+    ? data.subscription_items
+    : Array.isArray(data.items)
+      ? data.items
+      : [];
+  for (const item of items) {
+    const status = String((item && item.status) || data.status || "").toLowerCase();
+    if (status && status !== "active" && status !== "trialing" && status !== "past_due") continue;
+    const plan = (item && item.plan) || data.plan || {};
+    const slug = String(plan.slug || plan.name || "").toLowerCase();
+    if (slug === PLUS_PLAN || slug === `u:${PLUS_PLAN}`) return true;
+    const feats = Array.isArray(plan.features) ? plan.features : [];
+    if (feats.some((f) => String((f && f.slug) || f || "").toLowerCase() === PLUS_FEATURE)) return true;
+  }
+  const topSlug = String((data.plan && data.plan.slug) || "").toLowerCase();
+  return topSlug === PLUS_PLAN;
+}
+
+/**
+ * Future perk gates: true if Clerk Billing says this user is on Plus.
+ * Prefers short cache; falls back to Backend billing subscription lookup.
+ */
+async function userHasPlus(userId) {
+  const id = String(userId || "").trim();
+  if (!id) return false;
+  const cached = plusCache.get(id);
+  if (cached && Date.now() - cached.at < 60 * 1000) return !!cached.plus;
+  if (!clerkSecret()) return !!(cached && cached.plus);
+  try {
+    // Newer Billing API paths; tolerate 404 on older instances.
+    let data =
+      (await clerkApi("GET", `/users/${encodeURIComponent(id)}/billing/subscription`)) ||
+      (await clerkApi("GET", `/billing/users/${encodeURIComponent(id)}/subscriptions`)) ||
+      (await clerkApi("GET", `/users/${encodeURIComponent(id)}`));
+    let plus = false;
+    if (data && data.public_metadata && data.public_metadata.citrons_plus) {
+      plus = true;
+    } else if (Array.isArray(data && data.data)) {
+      plus = data.data.some(subscriptionLooksPlus);
+    } else {
+      plus = subscriptionLooksPlus(data);
+    }
+    plusCache.set(id, { plus, at: Date.now() });
+    return plus;
+  } catch (err) {
+    console.warn("clerk userHasPlus", err && err.message);
+    return !!(cached && cached.plus);
+  }
 }
 
 function clerkConfigured() {
   return !!DEFAULT_CLERK_PK;
 }
 
-module.exports = { verifyClerkToken, clerkConfigured };
+module.exports = {
+  verifyClerkToken,
+  clerkConfigured,
+  userHasPlus,
+  claimsIndicatePlus,
+  PLUS_PLAN,
+  PLUS_FEATURE,
+};

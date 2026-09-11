@@ -1,0 +1,27 @@
+{
+  "billing": {
+    "user_enabled": true,
+    "organization_enabled": false,
+    "free_trial_requires_payment_method": true,
+    "features": {
+      "plus_perks": {
+        "name": "Plus perks",
+        "description": "Access to Plus-only card backs, tables, and future perks",
+        "publicly_visible": true,
+        "include_in_jwt": true
+      }
+    },
+    "plans": {
+      "plus": {
+        "name": "Plus",
+        "description": "Citrons Plus — extra cosmetics and perks",
+        "amount": 299,
+        "currency": "usd",
+        "payer_type": "user",
+        "is_recurring": true,
+        "publicly_visible": true,
+        "features": ["plus_perks"]
+      }
+    }
+  }
+}
