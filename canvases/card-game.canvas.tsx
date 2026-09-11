@@ -2667,11 +2667,13 @@ function AvatarBubble({
   name,
   size = 36,
   onClick,
+  speaking,
 }: {
   src?: string;
   name?: string;
   size?: number;
   onClick?: () => void;
+  speaking?: boolean;
 }) {
   const letter = (name || "?").trim().charAt(0).toUpperCase() || "?";
   const inner = src ? (
@@ -2688,20 +2690,37 @@ function AvatarBubble({
     alignItems: "center",
     justifyContent: "center",
     background: src ? "#145230" : "#f1c40f",
-    border: "1.5px solid rgba(255,255,255,0.4)",
+    border: speaking ? "1.5px solid #2ecc71" : "1.5px solid rgba(255,255,255,0.4)",
     padding: 0,
     flexShrink: 0,
     cursor: onClick ? "pointer" : "default",
-    boxShadow: "0 2px 8px rgba(0,0,0,0.28)",
+    boxShadow: speaking ? "none" : "0 2px 8px rgba(0,0,0,0.28)",
   };
-  if (onClick) {
-    return (
-      <button type="button" onClick={onClick} style={style} aria-label="Profile">
-        {inner}
-      </button>
-    );
-  }
-  return <div style={style}>{inner}</div>;
+  const bubble = onClick ? (
+    <button type="button" onClick={onClick} style={style} aria-label="Profile">
+      {inner}
+    </button>
+  ) : (
+    <div style={style}>{inner}</div>
+  );
+  if (!speaking) return bubble;
+  return (
+    <span
+      title="Speaking"
+      aria-label={`${name || "Player"} speaking`}
+      style={{
+        display: "inline-flex",
+        borderRadius: "50%",
+        padding: 2,
+        flexShrink: 0,
+        boxShadow: "0 0 0 2px #2ecc71, 0 0 12px rgba(46, 204, 113, 0.55)",
+        background: "transparent",
+        lineHeight: 0,
+      }}
+    >
+      {bubble}
+    </span>
+  );
 }
 
 // Publishable key is public. Prefer the baked key so a leftover localStorage value cannot hide it.
@@ -3437,6 +3456,7 @@ function SeatLabel({
   place,
   offline,
   onKick,
+  speaking,
 }: {
   name: string;
   avatar?: string;
@@ -3446,6 +3466,7 @@ function SeatLabel({
   place?: number | null;
   offline?: boolean;
   onKick?: () => void;
+  speaking?: boolean;
 }) {
   const theme = useHostTheme();
   const [open, setOpen] = useState(false);
@@ -3453,7 +3474,7 @@ function SeatLabel({
   const [menuPos, setMenuPos] = useState({ top: 0, left: 0 });
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 6, position: "relative" }}>
-      <AvatarBubble src={avatar} name={name} size={22} />
+      <AvatarBubble src={avatar} name={name} size={22} speaking={speaking} />
       <button
         ref={btnRef}
         type="button"
@@ -6157,6 +6178,7 @@ function Table({
   reacts,
   onSendReact,
   voice,
+  speakingIds,
   showSpecials = true,
   watching = false,
   kickVote = null,
@@ -6206,6 +6228,7 @@ function Table({
   reacts?: ReactBurst[];
   onSendReact?: (emoji: string) => void;
   voice?: VoiceChatControls;
+  speakingIds?: string[];
   showSpecials?: boolean;
   watching?: boolean;
   kickVote?: KickVoteInfo | null;
@@ -6485,6 +6508,7 @@ function Table({
           place={finishOrder.includes(pIdx) ? finishOrder.indexOf(pIdx) + 1 : null}
           offline={players[pIdx].connected === false}
           onKick={kickFor(pIdx)}
+          speaking={!!players[pIdx]?.id && (speakingIds || []).includes(String(players[pIdx].id))}
         />
         <div
           style={{
@@ -6811,6 +6835,7 @@ function Table({
               isTurn={isPlaying && currentPlayer === 0 && phase === "playing"}
               place={finishOrder.includes(0) ? finishOrder.indexOf(0) + 1 : null}
               offline={players[0]?.connected === false}
+              speaking={!!players[0]?.id && (speakingIds || []).includes(String(players[0].id))}
             />
           ) : null}
           <div style={{ position: "relative" }}>
@@ -8241,6 +8266,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     () => shouldShowHomeIconUpdate()
   );
   const [voiceUi, setVoiceUi] = useState<VoiceUiState>({ phase: "off", peers: 0 });
+  const [voiceSpeakingIds, setVoiceSpeakingIds] = useState<string[]>([]);
 
   const wsRef = useRef<WebSocket | null>(null);
   const pingRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -8266,6 +8292,10 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   const voiceMicOnRef = useRef(false);
   const voiceListenOnlyRef = useRef(false);
   const voiceAutoCodeRef = useRef("");
+  const voiceLevelsRef = useRef<{ remote: Record<string, number>; local: number }>({ remote: {}, local: 0 });
+  const voiceSpeakingKeyRef = useRef("");
+  const voiceLevelAtRef = useRef(0);
+  const voiceSpeakTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   viewRef.current = view;
   screenRef.current = screen;
   inviteOpenRef.current = inviteOpen;
@@ -8277,6 +8307,72 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     } catch {
       return 1;
     }
+  }
+
+  function seatIdFromDailyUserId(userId: unknown): string {
+    const raw = String(userId || "").trim();
+    if (!raw) return "";
+    // Prefer seatId.deviceId; also accept seatId_deviceId if a proxy strips dots.
+    const seat = (raw.includes(".") ? raw.split(".")[0] : raw.split("_")[0]) || "";
+    return /^[a-f0-9]{8,32}$/i.test(seat) ? seat : "";
+  }
+
+  function publishVoiceSpeaking(call: any) {
+    const speaking = new Set<string>();
+    const THRESH = 0.045;
+    try {
+      const parts = call && call.participants ? call.participants() || {} : {};
+      for (const [sessionId, level] of Object.entries(voiceLevelsRef.current.remote)) {
+        if (Number(level) < THRESH) continue;
+        const part = parts[sessionId];
+        const seatId = seatIdFromDailyUserId(part && part.user_id);
+        if (seatId) speaking.add(seatId);
+      }
+      if (voiceMicOnRef.current && voiceLevelsRef.current.local >= THRESH) {
+        const local = parts.local;
+        const seatId =
+          seatIdFromDailyUserId(local && local.user_id) || String(viewRef.current?.youId || "");
+        if (seatId) speaking.add(seatId);
+      }
+    } catch {
+      /* ignore */
+    }
+    const next = [...speaking].sort();
+    const key = next.join(",");
+    if (key === voiceSpeakingKeyRef.current) return;
+    voiceSpeakingKeyRef.current = key;
+    setVoiceSpeakingIds(next);
+  }
+
+  function clearVoiceSpeaking() {
+    voiceLevelsRef.current = { remote: {}, local: 0 };
+    voiceLevelAtRef.current = 0;
+    if (voiceSpeakTimerRef.current) {
+      clearInterval(voiceSpeakTimerRef.current);
+      voiceSpeakTimerRef.current = null;
+    }
+    if (voiceSpeakingKeyRef.current === "") {
+      setVoiceSpeakingIds((prev) => (prev.length ? [] : prev));
+      return;
+    }
+    voiceSpeakingKeyRef.current = "";
+    setVoiceSpeakingIds([]);
+  }
+
+  function armVoiceSpeakingWatchdog(call: any) {
+    if (voiceSpeakTimerRef.current) return;
+    voiceSpeakTimerRef.current = setInterval(() => {
+      if (voiceCallRef.current !== call) return;
+      // If Daily stops emitting levels while everyone is silent, drop sticky rings.
+      if (voiceLevelAtRef.current && Date.now() - voiceLevelAtRef.current > 500) {
+        const hadRemote = Object.keys(voiceLevelsRef.current.remote).length > 0;
+        const hadLocal = voiceLevelsRef.current.local > 0;
+        if (!hadRemote && !hadLocal) return;
+        voiceLevelsRef.current.remote = {};
+        voiceLevelsRef.current.local = 0;
+        publishVoiceSpeaking(call);
+      }
+    }, 250);
   }
 
   function releaseVoiceMicTrack() {
@@ -8350,6 +8446,8 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     } catch {
       /* ignore */
     }
+    if (!on) voiceLevelsRef.current.local = 0;
+    publishVoiceSpeaking(call);
   }
 
   function clearVoiceAudioElements() {
@@ -8486,6 +8584,16 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     voiceCallRef.current = null;
     if (call) {
       try {
+        call.stopRemoteParticipantsAudioLevelObserver?.();
+      } catch {
+        /* ignore */
+      }
+      try {
+        call.stopLocalAudioLevelObserver?.();
+      } catch {
+        /* ignore */
+      }
+      try {
         call.setLocalAudio(false);
       } catch {
         /* ignore */
@@ -8501,6 +8609,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         /* ignore */
       }
     }
+    clearVoiceSpeaking();
     if (!opts?.keepMic) releaseVoiceMicTrack();
   }
 
@@ -8549,6 +8658,19 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     call.on("joined-meeting", () => {
       onState();
       syncAllRemoteAudio(call);
+      armVoiceSpeakingWatchdog(call);
+      try {
+        const ret = call.startRemoteParticipantsAudioLevelObserver?.(150);
+        if (ret && typeof ret.then === "function") void ret.catch(() => {});
+      } catch {
+        /* older daily-js */
+      }
+      try {
+        const ret = call.startLocalAudioLevelObserver?.(150);
+        if (ret && typeof ret.then === "function") void ret.catch(() => {});
+      } catch {
+        /* older daily-js */
+      }
     });
     call.on("participant-joined", (ev: any) => {
       syncVoicePeers(call);
@@ -8558,6 +8680,8 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       syncVoicePeers(call);
       const sessionId = ev && ev.participant && ev.participant.session_id;
       if (sessionId) {
+        delete voiceLevelsRef.current.remote[sessionId];
+        publishVoiceSpeaking(call);
         const el = voiceAudioElsRef.current.get(sessionId);
         if (el) {
           try {
@@ -8575,6 +8699,19 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       onState();
       if (ev && ev.participant && !ev.participant.local) subscribeRemoteAudio(call, ev.participant);
     });
+    call.on("remote-participants-audio-level", (ev: any) => {
+      if (voiceCallRef.current !== call) return;
+      const levels = (ev && ev.participantsAudioLevel) || {};
+      voiceLevelsRef.current.remote = levels as Record<string, number>;
+      voiceLevelAtRef.current = Date.now();
+      publishVoiceSpeaking(call);
+    });
+    call.on("local-audio-level", (ev: any) => {
+      if (voiceCallRef.current !== call) return;
+      voiceLevelsRef.current.local = Number(ev && ev.audioLevel) || 0;
+      voiceLevelAtRef.current = Date.now();
+      publishVoiceSpeaking(call);
+    });
     call.on("track-started", playRemoteVoiceTrack);
     call.on("track-stopped", stopRemoteVoiceTrack);
     call.on("error", (ev: any) => {
@@ -8588,6 +8725,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         voiceJoiningRef.current = false;
         voiceMicOnRef.current = false;
         releaseVoiceMicTrack();
+        clearVoiceSpeaking();
         setVoiceUi({ phase: "off", peers: 0 });
       }
     });
@@ -10490,7 +10628,12 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
                     }}
                   >
                     <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-                      <AvatarBubble src={p.avatar} name={p.name} size={24} />
+                      <AvatarBubble
+                        src={p.avatar}
+                        name={p.name}
+                        size={24}
+                        speaking={voiceSpeakingIds.includes(String(p.id))}
+                      />
                       <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {p.name}
                         {p.host ? " · host" : ""}
@@ -10626,6 +10769,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
           listenOnly: !!view.spectator || voiceListenOnlyRef.current,
           onToggle: () => void onVoiceToggle(),
         }}
+        speakingIds={voiceSpeakingIds}
         showSpecials={false}
         watching={!!view.spectator}
         kickVote={view.kickVote || null}

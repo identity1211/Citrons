@@ -1352,13 +1352,18 @@ async function handleVoiceJoin(ws, room, person, msg, opts) {
   const listenOnly = !!(opts && opts.listenOnly);
   try {
     // Unique per Join so phone + laptop (even same Clerk user) never share one Daily participant.
+    // Prefix with seat/spectator id so the client can map speakers → avatars.
     const voiceId = String((msg && (msg.voiceId || msg.deviceId)) || "")
       .replace(/[^\w-]/g, "")
-      .slice(0, 64);
+      .slice(0, 47);
+    const seatKey = String(person.id || "")
+      .replace(/[^\w-]/g, "")
+      .slice(0, 16);
     const creds = await daily.meetingToken({
       code: room.code,
       userName: person.name,
-      userId: voiceId || `${person.id}-${Date.now()}`,
+      // seatId.deviceId — Daily user_id max 64; client maps speakers by the seat prefix.
+      userId: seatKey ? `${seatKey}.${voiceId || id()}` : voiceId || id(),
       listenOnly,
     });
     send(ws, {

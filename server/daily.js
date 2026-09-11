@@ -110,7 +110,8 @@ async function meetingToken({ code, userName, userId, listenOnly }) {
         .trim()
         .slice(0, 32) || "Player",
     user_id: String(userId || "")
-      .replace(/[^\w-]/g, "")
+      // Keep `.` / `_` so clients can encode `seatId.deviceId` (or seatId_deviceId).
+      .replace(/[^\w.-]/g, "")
       .slice(0, 64),
     enable_screenshare: false,
     start_audio_off: true,
