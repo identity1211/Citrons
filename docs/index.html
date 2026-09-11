@@ -2967,6 +2967,31 @@ function loadScriptOnce(src: string, attrs?: Record<string, string>): Promise<vo
 
 let clerkPromise: Promise<any> | null = null;
 
+/** clerk-js@6 mount* (PricingTable, UserProfile, …) needs the separate @clerk/ui bundle. */
+async function ensureClerkUiCtor(): Promise<any> {
+  const w = window as any;
+  if (w.__internal_ClerkUICtor) return w.__internal_ClerkUICtor;
+  const host = clerkFrontendHost(clerkPublishableKey());
+  const uiSrc = host
+    ? `https://${host}/npm/@clerk/ui@1/dist/ui.browser.js`
+    : "https://cdn.jsdelivr.net/npm/@clerk/ui@1/dist/ui.browser.js";
+  await loadScriptOnce(uiSrc);
+  if (!w.__internal_ClerkUICtor) throw new Error("Clerk UI failed to load");
+  return w.__internal_ClerkUICtor;
+}
+
+function clerkLoadOptions(uiCtor: any) {
+  return {
+    ui: { ClerkUI: uiCtor },
+    signInUrl: clerkSignInUrl() || undefined,
+    signUpUrl: clerkSignUpUrl() || undefined,
+    afterSignInUrl: appUrl(),
+    afterSignUpUrl: appUrl(),
+    afterSignOutUrl: appUrl(),
+    allowedRedirectOrigins: ["https://citrons.lat", "https://www.citrons.lat", "https://identity1211.github.io"],
+  };
+}
+
 async function ensureClerk(): Promise<any> {
   if (clerkPromise) return clerkPromise;
   clerkPromise = (async () => {
@@ -2977,16 +3002,10 @@ async function ensureClerk(): Promise<any> {
     }
     const w = window as any;
     const callbackHref = window.location.href;
+    const uiCtor = await ensureClerkUiCtor();
     if (w.Clerk && typeof w.Clerk.load === "function" && typeof w.Clerk !== "function") {
       if (!w.Clerk.loaded) {
-        await w.Clerk.load({
-          signInUrl: clerkSignInUrl() || undefined,
-          signUpUrl: clerkSignUpUrl() || undefined,
-          afterSignInUrl: appUrl(),
-          afterSignUpUrl: appUrl(),
-          afterSignOutUrl: appUrl(),
-          allowedRedirectOrigins: ["https://citrons.lat", "https://www.citrons.lat", "https://identity1211.github.io"],
-        });
+        await w.Clerk.load(clerkLoadOptions(uiCtor));
       }
       const fromCallback = isClerkCallbackUrl(callbackHref);
       if (fromCallback || !w.Clerk.user) {
@@ -3002,14 +3021,7 @@ async function ensureClerk(): Promise<any> {
     let clerk = w.Clerk;
     if (typeof clerk === "function") clerk = new clerk(pk);
     if (!clerk || typeof clerk.load !== "function") throw new Error("Clerk failed to load");
-    await clerk.load({
-      signInUrl: clerkSignInUrl() || undefined,
-      signUpUrl: clerkSignUpUrl() || undefined,
-      afterSignInUrl: appUrl(),
-      afterSignUpUrl: appUrl(),
-      afterSignOutUrl: appUrl(),
-      allowedRedirectOrigins: ["https://citrons.lat", "https://www.citrons.lat", "https://identity1211.github.io"],
-    });
+    await clerk.load(clerkLoadOptions(uiCtor));
     w.Clerk = clerk;
     const fromCallback = isClerkCallbackUrl(callbackHref);
     if (fromCallback || !clerk.user) {
