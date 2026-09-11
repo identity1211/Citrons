@@ -1604,6 +1604,43 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (path === "/billing/donate" && req.method === "POST") {
+    void (async () => {
+      try {
+        const raw = await readBody();
+        let body = {};
+        try {
+          body = raw.length ? JSON.parse(raw.toString("utf8")) : {};
+        } catch {
+          body = {};
+        }
+        const token = bearerToken() || String(body.clerkToken || "");
+        let userId = "";
+        if (token) {
+          const auth = await clerk.verifyClerkToken(token);
+          if (auth.ok) userId = auth.userId;
+        }
+        const session = await stripeBilling.createDonateSession({
+          amountCents: body.amountCents,
+          userId,
+          successUrl: body.successUrl,
+          cancelUrl: body.cancelUrl,
+        });
+        json(200, session);
+      } catch (err) {
+        console.warn("billing donate", err && err.message);
+        const status = err && err.code === "stripe_off" ? 503 : 400;
+        json(status, { error: String((err && err.message) || "donate failed") });
+      }
+    })();
+    return;
+  }
+
+  if (path === "/billing/raised" && req.method === "GET") {
+    json(200, stripeBilling.raisedPublic());
+    return;
+  }
+
   if (path === "/billing/portal" && req.method === "POST") {
     void (async () => {
       try {
