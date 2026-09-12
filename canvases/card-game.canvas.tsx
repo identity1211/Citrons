@@ -2941,29 +2941,14 @@ function loadScriptOnce(src: string, attrs?: Record<string, string>): Promise<vo
 
 let clerkPromise: Promise<any> | null = null;
 
-/** clerk-js@6 mount* (PricingTable, UserProfile, …) needs the separate @clerk/ui bundle. */
-async function ensureClerkUiCtor(): Promise<any> {
-  const w = window as any;
-  if (w.__internal_ClerkUICtor) return w.__internal_ClerkUICtor;
-  const host = clerkFrontendHost(clerkPublishableKey());
-  const uiSrc = host
-    ? `https://${host}/npm/@clerk/ui@1/dist/ui.browser.js`
-    : "https://cdn.jsdelivr.net/npm/@clerk/ui@1/dist/ui.browser.js";
-  await loadScriptOnce(uiSrc);
-  if (!w.__internal_ClerkUICtor) throw new Error("Clerk UI failed to load");
-  return w.__internal_ClerkUICtor;
-}
-
-function clerkLoadOptions(uiCtor: any) {
+function clerkLoadOptions() {
   return {
-    ui: { ClerkUI: uiCtor },
     signInUrl: clerkSignInUrl() || undefined,
     signUpUrl: clerkSignUpUrl() || undefined,
     afterSignInUrl: appUrl(),
     afterSignUpUrl: appUrl(),
     afterSignOutUrl: appUrl(),
     allowedRedirectOrigins: ["https://citrons.lat", "https://www.citrons.lat", "https://identity1211.github.io"],
-    // Keep the last-active session alive; Safari ITP otherwise drops the __client cookie.
     touchSession: true,
     standardBrowser: true,
   };
@@ -2979,10 +2964,9 @@ async function ensureClerk(): Promise<any> {
     }
     const w = window as any;
     const callbackHref = window.location.href;
-    const uiCtor = await ensureClerkUiCtor();
     if (w.Clerk && typeof w.Clerk.load === "function" && typeof w.Clerk !== "function") {
       if (!w.Clerk.loaded) {
-        await w.Clerk.load(clerkLoadOptions(uiCtor));
+        await w.Clerk.load(clerkLoadOptions());
       }
       const fromCallback = isClerkCallbackUrl(callbackHref);
       if (fromCallback || !w.Clerk.user) {
@@ -2990,9 +2974,8 @@ async function ensureClerk(): Promise<any> {
       } else if (w.Clerk.session && String(w.Clerk.session.status || "") && String(w.Clerk.session.status) !== "active") {
         await ensureActiveClerkSession(w.Clerk);
       }
-      if (await refreshSafariSessionOrHop(w.Clerk)) {
-        await new Promise(() => {});
-      }
+      rememberWarmedJwt(clerkJwtFromClerk(w.Clerk, { allowExpired: true }));
+      armSafariClerkWarming();
       return w.Clerk;
     }
     const host = clerkFrontendHost(pk);
@@ -3003,16 +2986,13 @@ async function ensureClerk(): Promise<any> {
     let clerk = w.Clerk;
     if (typeof clerk === "function") clerk = new clerk(pk);
     if (!clerk || typeof clerk.load !== "function") throw new Error("Clerk failed to load");
-    await clerk.load(clerkLoadOptions(uiCtor));
+    await clerk.load(clerkLoadOptions());
     w.Clerk = clerk;
     const fromCallback = isClerkCallbackUrl(callbackHref);
     if (fromCallback || !clerk.user) {
       await activateClerkSession(clerk, fromCallback);
     } else if (clerk.session && String(clerk.session.status || "") && String(clerk.session.status) !== "active") {
       await ensureActiveClerkSession(clerk);
-    }
-    if (await refreshSafariSessionOrHop(clerk)) {
-      await new Promise(() => {});
     }
     if (clerk.user && isClerkCallbackUrl(window.location.href)) {
       try {
@@ -3021,6 +3001,8 @@ async function ensureClerk(): Promise<any> {
         /* ignore */
       }
     }
+    rememberWarmedJwt(clerkJwtFromClerk(clerk, { allowExpired: true }));
+    armSafariClerkWarming();
     return clerk;
   })().catch((err) => {
     clerkPromise = null;
@@ -3253,24 +3235,89 @@ function needsClerkItpTouch(): boolean {
   return iOS || macSafari;
 }
 
-/**
- * Safari ITP: refresh the first-party `__client` cookie via a top-level
- * `/v1/client/touch` hop. decorateUrl() is a no-op when the cookie is still healthy.
- * Returns true if the page is navigating away.
- */
 function clerkJwtFromClerk(clerk: any, opts?: { allowExpired?: boolean }): string {
-  if (!clerk) return "";
-  const hit = clerkJwtFromSession(clerk.session, opts);
-  if (hit) return hit;
+  if (!clerk) return warmedClerkJwt(opts);
+  const hit = clerkJwtFromSession(clerk.session, opts) || warmedClerkJwt(opts);
+  if (hit) {
+    rememberWarmedJwt(hit);
+    return hit;
+  }
   const sessions = clerk.client && clerk.client.sessions;
   if (Array.isArray(sessions)) {
     for (const s of sessions) {
       const jwt = clerkJwtFromSession(s, opts);
-      if (jwt) return jwt;
+      if (jwt) {
+        rememberWarmedJwt(jwt);
+        return jwt;
+      }
     }
   }
-  return "";
+  return warmedClerkJwt(opts);
 }
+
+let warmedJwt = { token: "", exp: 0 };
+
+function rememberWarmedJwt(token: string) {
+  const jwt = String(token || "").trim();
+  if (!jwt || jwt.split(".").length !== 3) return;
+  const payload = decodeJwtPayload(jwt);
+  if (!payload) return;
+  warmedJwt = { token: jwt, exp: Number(payload.exp) || 0 };
+}
+
+function warmedClerkJwt(opts?: { allowExpired?: boolean }): string {
+  if (!warmedJwt.token) return "";
+  const now = Math.floor(Date.now() / 1000);
+  if (warmedJwt.exp && warmedJwt.exp + (opts?.allowExpired === false ? 5 : 60) < now) return "";
+  return warmedJwt.token;
+}
+
+/** Mint from a tap when possible — Safari is more willing to send Clerk cookies after a gesture. */
+async function warmClerkJwt(clerk: any, timeoutMs = 1800): Promise<string> {
+  const existing = clerkJwtFromClerk(clerk, { allowExpired: true });
+  if (existing) {
+    const payload = decodeJwtPayload(existing);
+    const exp = payload ? Number(payload.exp) || 0 : 0;
+    if (exp - 20 > Math.floor(Date.now() / 1000)) return existing;
+  }
+  const session = clerk && clerk.session;
+  if (!session || typeof session.getToken !== "function") return existing;
+  try {
+    const token = await withTimeout(session.getToken({ leewayInSeconds: 60 }), timeoutMs, "Sign-in timed out");
+    if (token) {
+      rememberWarmedJwt(String(token));
+      return String(token);
+    }
+  } catch {
+    /* keep whatever we already have */
+  }
+  return existing;
+}
+
+function armSafariClerkWarming() {
+  if (typeof window === "undefined" || (window as any).__citronsClerkWarm) return;
+  (window as any).__citronsClerkWarm = true;
+  const kick = () => {
+    void (async () => {
+      try {
+        const clerk = await ensureClerk();
+        await warmClerkJwt(clerk, needsClerkItpTouch() ? 1800 : 4000);
+      } catch {
+        /* ignore */
+      }
+    })();
+  };
+  document.addEventListener("pointerdown", kick, { passive: true });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") kick();
+  });
+  window.setInterval(() => {
+    if (document.visibilityState === "visible") kick();
+  }, 45000);
+  kick();
+}
+
+if (typeof window !== "undefined") armSafariClerkWarming();
 
 function clerkFrontendTouchUrl(redirectUrl: string): string {
   const host = clerkFrontendHost(clerkPublishableKey());
@@ -3289,27 +3336,6 @@ function hopClerkItp(redirectUrl: string, fromGesture: boolean): boolean {
   if (fromGesture) navigateOffsite(href);
   else window.location.replace(href);
   return true;
-}
-
-/**
- * On load (not a click): try a short getToken, then hop. Never block the UI for 8s.
- * Returns true if the page is navigating away.
- */
-async function refreshSafariSessionOrHop(clerk: any): Promise<boolean> {
-  if (!clerk || !clerk.user) return false;
-  if (!needsClerkItpTouch() || clerkItpTouchTried()) return false;
-  if (isClerkCallbackUrl(window.location.href)) return false;
-  if (clerkJwtFromClerk(clerk, { allowExpired: true })) return false;
-  const session = clerk.session;
-  if (session && typeof session.getToken === "function") {
-    try {
-      const token = await withTimeout(session.getToken({ leewayInSeconds: 60 }), 1200, "Sign-in timed out");
-      if (token) return false;
-    } catch {
-      /* Safari often hangs here — hop instead of retrying */
-    }
-  }
-  return hopClerkItp(appUrl(), false);
 }
 
 /** Safari often keeps clerk.user from cache while session JWT minting is inactive. */
@@ -3336,7 +3362,7 @@ async function ensureActiveClerkSession(clerk: any, timeoutMs = 4000): Promise<a
  * after an expired 60s JWT, and ignores redirects that run after that await.
  */
 async function clerkSessionToken(clerk: any, budgetMs = 8000): Promise<string> {
-  if (!clerk) return "";
+  if (!clerk) return warmedClerkJwt({ allowExpired: true });
   const hit = clerkJwtFromClerk(clerk, { allowExpired: true });
   if (hit) return hit;
 
@@ -3355,7 +3381,10 @@ async function clerkSessionToken(clerk: any, budgetMs = 8000): Promise<string> {
         Math.max(3000, budgetMs),
         "Sign-in timed out"
       );
-      if (token) return String(token);
+      if (token) {
+        rememberWarmedJwt(String(token));
+        return String(token);
+      }
     } catch {
       const again = clerkJwtFromClerk(clerk, { allowExpired: true });
       if (again) return again;
@@ -3556,7 +3585,7 @@ function clerkPortalHref(path: "sign-in" | "sign-up"): string {
 /** Safari: hop in the click itself. Awaiting getToken first makes iOS ignore the redirect. */
 function beginSafariClerkHopIfNeeded(clerk: any, pending: PendingMp): boolean {
   if (!needsClerkItpTouch()) return false;
-  if (clerkJwtFromClerk(clerk, { allowExpired: true })) return false;
+  if (clerkJwtFromClerk(clerk, { allowExpired: true }) || warmedClerkJwt({ allowExpired: true })) return false;
   rememberPendingMp(pending);
   if (hopClerkItp(appUrl(), true)) return true;
   const href = clerkPortalHref("sign-in");
