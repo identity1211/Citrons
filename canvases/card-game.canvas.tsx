@@ -2,6 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef, useCallback, createContex
 import { useHostTheme, Text, Row, Spacer } from "cursor/canvas";
 
 const JOIN_KEY = "citrons-join";
+const STRIPE_GO_KEY = "citrons-stripe-go";
 const INVITE_PROMPT_KEY = "citrons-invite-prompt-dismissed";
 const IOS_INSTALL_KEY = "citrons-ios-install-seen";
 const HOME_ICON_VER_KEY = "citrons-home-icon-ver";
@@ -26,6 +27,38 @@ function rememberJoinFromUrl() {
 }
 
 rememberJoinFromUrl();
+
+/** Safari often won't leave for Stripe after await; hop via same-origin ?go=stripe first. */
+function isTrustedStripeUrl(href: string): boolean {
+  try {
+    const u = new URL(href);
+    if (u.protocol !== "https:") return false;
+    const h = u.hostname;
+    return h === "checkout.stripe.com" || h === "billing.stripe.com" || h.endsWith(".stripe.com");
+  } catch {
+    return false;
+  }
+}
+
+function consumeStripeGoRedirect() {
+  if (typeof window === "undefined") return;
+  try {
+    const page = new URL(window.location.href);
+    if (page.searchParams.get("go") !== "stripe") return;
+    const dest = String(sessionStorage.getItem(STRIPE_GO_KEY) || "");
+    sessionStorage.removeItem(STRIPE_GO_KEY);
+    page.searchParams.delete("go");
+    const clean = `${page.pathname}${page.search}${page.hash}` || "/";
+    window.history.replaceState({}, "", clean);
+    if (isTrustedStripeUrl(dest)) {
+      window.location.replace(dest);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+consumeStripeGoRedirect();
 
 if (typeof window !== "undefined" && navigator.serviceWorker) {
   navigator.serviceWorker.addEventListener("message", (ev) => {
@@ -3122,75 +3155,61 @@ function clerkSessionIds(clerk: any): string[] {
 }
 
 /** Safari often keeps clerk.user from cache while session JWT minting is inactive. */
-async function ensureActiveClerkSession(clerk: any): Promise<any> {
+async function ensureActiveClerkSession(clerk: any, timeoutMs = 4000): Promise<any> {
   if (!clerk) return null;
   const status = String(clerk.session?.status || "");
   if (clerk.session && typeof clerk.session.getToken === "function" && (!status || status === "active")) {
     return clerk.session;
   }
   if (typeof clerk.setActive !== "function") return clerk.session || null;
-  for (const id of clerkSessionIds(clerk)) {
-    try {
-      await withTimeout(clerk.setActive({ session: id }), 10000, "Sign-in timed out");
-      if (clerk.session && typeof clerk.session.getToken === "function") return clerk.session;
-    } catch {
-      /* try next */
-    }
+  const id = clerkSessionIds(clerk)[0];
+  if (!id) return clerk.session || null;
+  try {
+    await withTimeout(clerk.setActive({ session: id }), timeoutMs, "Sign-in timed out");
+  } catch {
+    /* keep whatever session we have */
   }
   return clerk.session || null;
 }
 
-async function clerkSessionToken(clerk: any): Promise<string> {
+/** Mint a Clerk JWT. Keep the budget short — Safari iOS can hang for a minute on retries. */
+async function clerkSessionToken(clerk: any, budgetMs = 10000): Promise<string> {
   if (!clerk) return "";
-  let lastErr: Error | null = null;
+  const deadline = Date.now() + Math.max(3000, budgetMs);
+  const slice = () => Math.max(700, Math.min(4000, deadline - Date.now()));
   const tryToken = async (session: any, opts?: Record<string, unknown>) => {
     if (!session || typeof session.getToken !== "function") return "";
-    const token = await withTimeout(
-      opts ? session.getToken(opts) : session.getToken(),
-      12000,
-      "Sign-in timed out"
-    );
-    return token ? String(token) : "";
+    if (Date.now() >= deadline) return "";
+    try {
+      const token = await withTimeout(
+        opts ? session.getToken(opts) : session.getToken(),
+        slice(),
+        "Sign-in timed out"
+      );
+      return token ? String(token) : "";
+    } catch {
+      return "";
+    }
   };
 
-  // 1) Active / cached session
-  let session = await ensureActiveClerkSession(clerk);
-  for (const opts of [undefined, { skipCache: true }, { leewayInSeconds: 60 }] as (Record<string, unknown> | undefined)[]) {
+  let session = await ensureActiveClerkSession(clerk, slice());
+  let token = await tryToken(session);
+  if (token) return token;
+  token = await tryToken(clerk.session, { skipCache: true });
+  if (token) return token;
+
+  // One forced re-activate, then one more mint
+  const id = clerkSessionIds(clerk)[0];
+  if (id && typeof clerk.setActive === "function" && Date.now() < deadline) {
     try {
-      const token = await tryToken(session, opts);
-      if (token) return token;
-    } catch (e: any) {
-      lastErr = e instanceof Error ? e : new Error(String(e?.message || e));
+      await withTimeout(clerk.setActive({ session: id }), slice(), "Sign-in timed out");
+    } catch {
+      /* ignore */
     }
-  }
-
-  // 2) Force re-activate even when clerk.user already exists (Safari iOS)
-  if (typeof clerk.setActive === "function") {
-    for (const id of clerkSessionIds(clerk)) {
-      try {
-        await withTimeout(clerk.setActive({ session: id }), 10000, "Sign-in timed out");
-        session = clerk.session;
-        const token = await tryToken(session, { skipCache: true });
-        if (token) return token;
-      } catch (e: any) {
-        lastErr = e instanceof Error ? e : new Error(String(e?.message || e));
-      }
-    }
-  }
-
-  // 3) Touch then mint
-  try {
-    session = clerk.session;
-    if (session && typeof session.touch === "function") {
-      await withTimeout(session.touch(), 8000, "Sign-in timed out");
-    }
-    const token = await tryToken(clerk.session, { skipCache: true });
+    token = await tryToken(clerk.session, { skipCache: true });
     if (token) return token;
-  } catch (e: any) {
-    lastErr = e instanceof Error ? e : new Error(String(e?.message || e));
   }
 
-  if (lastErr && /timed out/i.test(lastErr.message)) throw lastErr;
   if (clerk.user) {
     throw new Error("Couldn't refresh your session token. Reload the page, or sign out and sign in again.");
   }
@@ -3200,14 +3219,19 @@ async function clerkSessionToken(clerk: any): Promise<string> {
 async function fetchBillingJson(
   path: string,
   init: RequestInit,
-  ms = 20000
+  ms = 15000
 ): Promise<{ ok: boolean; status: number; data: any }> {
   const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
   const t = ctrl ? window.setTimeout(() => ctrl.abort(), ms) : 0;
   try {
     const res = await fetch(httpUrlFromWs(defaultWsUrl(), path), {
-      ...init,
+      method: init.method,
+      headers: init.headers,
+      body: init.body,
       signal: ctrl ? ctrl.signal : undefined,
+      mode: "cors",
+      credentials: "omit",
+      cache: "no-store",
     });
     const data = await res.json().catch(() => ({}));
     return { ok: res.ok, status: res.status, data };
@@ -3221,42 +3245,47 @@ async function fetchBillingJson(
   }
 }
 
-/** Same-tab redirect — Safari iOS blanks out window.open("", "_blank") after await. */
+/** Same-tab leave. Prefer form.submit() — Safari often ignores location.href after await. */
 function navigateOffsite(url: string) {
   const href = String(url || "");
   if (!href) return;
   try {
-    const a = document.createElement("a");
-    a.href = href;
-    a.rel = "noopener noreferrer";
-    a.style.display = "none";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+    const form = document.createElement("form");
+    form.method = "GET";
+    form.action = href;
+    form.style.display = "none";
+    form.setAttribute("aria-hidden", "true");
+    document.body.appendChild(form);
+    form.submit();
+    return;
   } catch {
     /* fall through */
   }
-  try {
-    window.location.replace(href);
-  } catch {
-    try {
-      window.location.href = href;
-    } catch {
-      try {
-        window.location.assign(href);
-      } catch {
-        /* ignore */
-      }
-    }
-  }
+  window.location.href = href;
 }
 
-/** Navigate in this tab; if Safari never leaves, show an error instead of hanging. */
+/**
+ * Safari iOS frequently ignores cross-origin redirects after an async click handler.
+ * Hop to same-origin ?go=stripe (always allowed), then sync-replace to Stripe on load.
+ */
 async function leaveForCheckout(url: string) {
   const href = String(url || "");
   if (!href) throw new Error("Checkout URL missing");
+  if (!isTrustedStripeUrl(href)) throw new Error("Invalid checkout URL");
+
+  try {
+    sessionStorage.setItem(STRIPE_GO_KEY, href);
+    const base = appUrl();
+    const join = base.includes("?") ? "&" : "?";
+    window.location.href = `${base}${join}go=stripe`;
+  } catch {
+    navigateOffsite(href);
+  }
+
+  await new Promise((r) => window.setTimeout(r, 2500));
+  // Still here — try direct leave, then error
   navigateOffsite(href);
-  await new Promise((r) => window.setTimeout(r, 3200));
+  await new Promise((r) => window.setTimeout(r, 1500));
   throw new Error("Couldn't open Stripe. Reload and try again (disable content blockers if needed).");
 }
 
@@ -3270,8 +3299,8 @@ function billingAuthError(clerk: any, serverMsg?: string): Error {
 }
 
 async function startPlusCheckout(): Promise<string> {
-  const clerk = await withTimeout(ensureClerk(), 15000, "Clerk timed out — reload and try again");
-  const token = await clerkSessionToken(clerk);
+  const clerk = await withTimeout(ensureClerk(), 10000, "Clerk timed out — reload and try again");
+  const token = await clerkSessionToken(clerk, 8000);
   if (!token) throw billingAuthError(clerk);
   const base = appUrl();
   const join = base.includes("?") ? "&" : "?";
@@ -3289,7 +3318,7 @@ async function startPlusCheckout(): Promise<string> {
         cancelUrl: `${base}${join}plus=cancel`,
       }),
     },
-    20000
+    15000
   );
   if (!ok || !data.url) {
     if (status === 401) throw billingAuthError(clerk, data.error);
@@ -3299,8 +3328,8 @@ async function startPlusCheckout(): Promise<string> {
 }
 
 async function openPlusPortal(): Promise<string> {
-  const clerk = await withTimeout(ensureClerk(), 15000, "Clerk timed out — reload and try again");
-  const token = await clerkSessionToken(clerk);
+  const clerk = await withTimeout(ensureClerk(), 10000, "Clerk timed out — reload and try again");
+  const token = await clerkSessionToken(clerk, 8000);
   if (!token) throw billingAuthError(clerk);
   const { ok, status, data } = await fetchBillingJson(
     "/billing/portal",
@@ -3312,7 +3341,7 @@ async function openPlusPortal(): Promise<string> {
       },
       body: JSON.stringify({ clerkToken: token, returnUrl: appUrl() }),
     },
-    20000
+    15000
   );
   if (!ok || !data.url) {
     if (status === 401) throw billingAuthError(clerk, data.error);
@@ -4085,7 +4114,9 @@ function ProfileButton() {
                     disabled={isBusy}
                     onClick={() =>
                       run(async () => {
+                        setMsg("Preparing checkout…");
                         const url = await startPlusCheckout();
+                        setMsg("Opening Stripe…");
                         await leaveForCheckout(url);
                       }, "checkout")
                     }
