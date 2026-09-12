@@ -114,6 +114,7 @@ function Spacer() {
 
 
 const JOIN_KEY = "citrons-join";
+const PENDING_MP_KEY = "citrons-pending-mp";
 const STRIPE_GO_KEY = "citrons-stripe-go";
 const INVITE_PROMPT_KEY = "citrons-invite-prompt-dismissed";
 const IOS_INSTALL_KEY = "citrons-ios-install-seen";
@@ -139,6 +140,30 @@ function rememberJoinFromUrl() {
 }
 
 rememberJoinFromUrl();
+
+type PendingMp = { kind: "create"; title: string } | { kind: "join"; code: string } | { kind: "rejoin" };
+
+function rememberPendingMp(pending: PendingMp) {
+  try {
+    sessionStorage.setItem(PENDING_MP_KEY, JSON.stringify({ ...pending, at: Date.now() }));
+  } catch {
+    /* ignore */
+  }
+}
+
+function takePendingMp(): PendingMp | null {
+  try {
+    const raw = sessionStorage.getItem(PENDING_MP_KEY);
+    sessionStorage.removeItem(PENDING_MP_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PendingMp & { at?: number };
+    if (!parsed || !parsed.kind) return null;
+    if (Date.now() - Number(parsed.at || 0) > 2 * 60 * 1000) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
 
 /** Safari often won't leave for Stripe after await; hop via same-origin ?go=stripe first. */
 function isTrustedStripeUrl(href: string): boolean {
@@ -3077,7 +3102,7 @@ async function ensureClerk(): Promise<any> {
       } else if (w.Clerk.session && String(w.Clerk.session.status || "") && String(w.Clerk.session.status) !== "active") {
         await ensureActiveClerkSession(w.Clerk);
       }
-      if (await maybeRefreshClerkItpCookie(w.Clerk)) {
+      if (await refreshSafariSessionOrHop(w.Clerk)) {
         await new Promise(() => {});
       }
       return w.Clerk;
@@ -3098,7 +3123,7 @@ async function ensureClerk(): Promise<any> {
     } else if (clerk.session && String(clerk.session.status || "") && String(clerk.session.status) !== "active") {
       await ensureActiveClerkSession(clerk);
     }
-    if (await maybeRefreshClerkItpCookie(clerk)) {
+    if (await refreshSafariSessionOrHop(clerk)) {
       await new Promise(() => {});
     }
     if (clerk.user && isClerkCallbackUrl(window.location.href)) {
@@ -3345,56 +3370,58 @@ function needsClerkItpTouch(): boolean {
  * `/v1/client/touch` hop. decorateUrl() is a no-op when the cookie is still healthy.
  * Returns true if the page is navigating away.
  */
+function clerkJwtFromClerk(clerk: any, opts?: { allowExpired?: boolean }): string {
+  if (!clerk) return "";
+  const hit = clerkJwtFromSession(clerk.session, opts);
+  if (hit) return hit;
+  const sessions = clerk.client && clerk.client.sessions;
+  if (Array.isArray(sessions)) {
+    for (const s of sessions) {
+      const jwt = clerkJwtFromSession(s, opts);
+      if (jwt) return jwt;
+    }
+  }
+  return "";
+}
+
 function clerkFrontendTouchUrl(redirectUrl: string): string {
   const host = clerkFrontendHost(clerkPublishableKey());
   if (!host) return "";
   return `https://${host}/v1/client/touch?redirect_url=${encodeURIComponent(redirectUrl)}`;
 }
 
-/**
- * Safari ITP: refresh the first-party `__client` cookie via a top-level
- * `/v1/client/touch` hop. decorateUrl() is a no-op when the cookie is still healthy.
- * Returns true if the page is navigating away.
- */
-async function maybeRefreshClerkItpCookie(clerk: any, opts?: { force?: boolean }): Promise<boolean> {
-  if (!clerk || typeof clerk.setActive !== "function") return false;
+/** Top-level navigation — Safari ignores location changes after an awaited fetch. */
+function hopClerkItp(redirectUrl: string, fromGesture: boolean): boolean {
   if (typeof window === "undefined") return false;
   if (!needsClerkItpTouch()) return false;
-  if (isClerkCallbackUrl(window.location.href)) return false;
   if (clerkItpTouchTried()) return false;
-  const id = clerkSessionIds(clerk)[0];
-  if (!id) return false;
-  let navigated = false;
-  try {
-    await withTimeout(
-      clerk.setActive({
-        session: id,
-        navigate: ({ decorateUrl }: { decorateUrl?: (url: string) => string }) => {
-          const dest = appUrl();
-          const url = String((typeof decorateUrl === "function" ? decorateUrl(dest) : dest) || dest);
-          if (/\/v1\/client\/touch/i.test(url)) {
-            markClerkItpTouchTried();
-            navigated = true;
-            window.location.replace(url);
-          }
-        },
-      }),
-      8000,
-      "Sign-in timed out"
-    );
-  } catch {
-    /* keep the in-memory session */
-  }
-  if (navigated) return true;
-  if (opts?.force) {
-    const href = clerkFrontendTouchUrl(appUrl());
-    if (href) {
-      markClerkItpTouchTried();
-      window.location.replace(href);
-      return true;
+  const href = clerkFrontendTouchUrl(redirectUrl);
+  if (!href) return false;
+  markClerkItpTouchTried();
+  if (fromGesture) navigateOffsite(href);
+  else window.location.replace(href);
+  return true;
+}
+
+/**
+ * On load (not a click): try a short getToken, then hop. Never block the UI for 8s.
+ * Returns true if the page is navigating away.
+ */
+async function refreshSafariSessionOrHop(clerk: any): Promise<boolean> {
+  if (!clerk || !clerk.user) return false;
+  if (!needsClerkItpTouch() || clerkItpTouchTried()) return false;
+  if (isClerkCallbackUrl(window.location.href)) return false;
+  if (clerkJwtFromClerk(clerk, { allowExpired: true })) return false;
+  const session = clerk.session;
+  if (session && typeof session.getToken === "function") {
+    try {
+      const token = await withTimeout(session.getToken({ leewayInSeconds: 60 }), 1200, "Sign-in timed out");
+      if (token) return false;
+    } catch {
+      /* Safari often hangs here — hop instead of retrying */
     }
   }
-  return false;
+  return hopClerkItp(appUrl(), false);
 }
 
 /** Safari often keeps clerk.user from cache while session JWT minting is inactive. */
@@ -3417,49 +3444,34 @@ async function ensureActiveClerkSession(clerk: any, timeoutMs = 4000): Promise<a
 }
 
 /**
- * Mint a Clerk JWT. Prefer the in-memory token — Safari iOS often hangs for a minute
- * on getToken({ skipCache: true }), and a second getToken waits on that lock.
+ * Mint a Clerk JWT. Prefer the in-memory token — Safari iOS often hangs on getToken()
+ * after an expired 60s JWT, and ignores redirects that run after that await.
  */
-async function clerkSessionToken(clerk: any, budgetMs = 12000): Promise<string> {
+async function clerkSessionToken(clerk: any, budgetMs = 8000): Promise<string> {
   if (!clerk) return "";
-  const cached = () =>
-    clerkJwtFromSession(clerk.session, { allowExpired: true }) ||
-    clerkJwtFromSession(clerk.client && clerk.client.sessions && clerk.client.sessions[0], { allowExpired: true });
-  const hit = cached();
+  const hit = clerkJwtFromClerk(clerk, { allowExpired: true });
   if (hit) return hit;
 
-  const deadline = Date.now() + Math.max(4000, budgetMs);
-  const session = await ensureActiveClerkSession(clerk, Math.min(5000, deadline - Date.now()));
-  const afterActive = clerkJwtFromSession(session, { allowExpired: true }) || cached();
+  const session = await ensureActiveClerkSession(clerk, 2500);
+  const afterActive = clerkJwtFromClerk(clerk, { allowExpired: true }) || clerkJwtFromSession(session, { allowExpired: true });
   if (afterActive) return afterActive;
 
-  if (session && typeof session.getToken === "function" && Date.now() < deadline) {
+  if (needsClerkItpTouch()) {
+    throw new Error("Couldn't refresh your session token. Reload the page, or sign out and sign in again.");
+  }
+
+  if (session && typeof session.getToken === "function") {
     try {
       const token = await withTimeout(
         session.getToken({ leewayInSeconds: 60 }),
-        Math.min(8000, deadline - Date.now()),
+        Math.max(3000, budgetMs),
         "Sign-in timed out"
       );
       if (token) return String(token);
     } catch {
-      const again = cached();
+      const again = clerkJwtFromClerk(clerk, { allowExpired: true });
       if (again) return again;
     }
-  }
-
-  if (await maybeRefreshClerkItpCookie(clerk, { force: true })) {
-    await new Promise((r) => window.setTimeout(r, 8000));
-    return cached();
-  }
-
-  if (session && typeof session.touch === "function" && Date.now() < deadline) {
-    try {
-      await withTimeout(session.touch(), Math.min(4000, deadline - Date.now()), "Sign-in timed out");
-    } catch {
-      /* ignore */
-    }
-    const touched = cached();
-    if (touched) return touched;
   }
 
   if (clerk.user) {
@@ -3651,6 +3663,20 @@ function clerkPortalHref(path: "sign-in" | "sign-up"): string {
   const dest = encodeURIComponent(appUrl());
   const qs = `redirect_url=${dest}&after_sign_in_url=${dest}&after_sign_up_url=${dest}`;
   return `${origin}/${path}?${qs}#/?${qs}`;
+}
+
+/** Safari: hop in the click itself. Awaiting getToken first makes iOS ignore the redirect. */
+function beginSafariClerkHopIfNeeded(clerk: any, pending: PendingMp): boolean {
+  if (!needsClerkItpTouch()) return false;
+  if (clerkJwtFromClerk(clerk, { allowExpired: true })) return false;
+  rememberPendingMp(pending);
+  if (hopClerkItp(appUrl(), true)) return true;
+  const href = clerkPortalHref("sign-in");
+  if (href) {
+    navigateOffsite(href);
+    return true;
+  }
+  return false;
 }
 
 async function signInWithGoogle(): Promise<void> {
@@ -9819,6 +9845,8 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   const dealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const revealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sessionRef = useRef<MpSession | null>(readMpSession());
+  const creatingRef = useRef(false);
+  const pendingResumeRef = useRef(false);
   const pickupSentRef = useRef(false);
   const titleInputRef = useRef<HTMLInputElement | null>(null);
   const reconnectTriesRef = useRef(0);
@@ -10850,13 +10878,20 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   }
 
   function createLobby() {
+    if (creatingRef.current) return;
+    creatingRef.current = true;
+    setBusy(true);
+    setError("");
     void (async () => {
       try {
         const payload = await clerkPayload();
+        creatingRef.current = false;
         connect((ws) =>
           ws.send(JSON.stringify({ type: "create", ...payload, title: roomTitle.trim() }))
         );
       } catch (e) {
+        creatingRef.current = false;
+        setBusy(false);
         setError(clerkErrorText(e));
       }
     })();
@@ -10870,17 +10905,24 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       rejoinSavedGame();
       return;
     }
+    const clerk = typeof window !== "undefined" ? (window as any).Clerk : null;
+    if (beginSafariClerkHopIfNeeded(clerk, { kind: "join", code: c })) {
+      setBusy(true);
+      return;
+    }
     void (async () => {
+      setBusy(true);
+      setError("");
       try {
         const payload = await clerkPayload();
         const ws = wsRef.current;
         if (ws && ws.readyState === 1) {
-          setBusy(true);
           ws.send(JSON.stringify({ type: "join", code: c, ...payload }));
         } else {
           connect((sock) => sock.send(JSON.stringify({ type: "join", code: c, ...payload })));
         }
       } catch (e) {
+        setBusy(false);
         setError(clerkErrorText(e));
       }
     })();
@@ -11042,10 +11084,16 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       setDropped(false);
       return;
     }
+    const clerk = typeof window !== "undefined" ? (window as any).Clerk : null;
+    if (beginSafariClerkHopIfNeeded(clerk, { kind: "rejoin" })) {
+      setBusy(true);
+      return;
+    }
     sessionRef.current = sess;
     setSavedGame(sess);
     setDropped(false);
     setError("");
+    setBusy(true);
     void (async () => {
       try {
         const payload = await clerkPayload();
@@ -11060,6 +11108,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
           )
         );
       } catch (e) {
+        setBusy(false);
         setError(clerkErrorText(e));
         setDropped(true);
       }
@@ -11253,6 +11302,31 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [createOpen, busy]);
+
+  useEffect(() => {
+    if (screen !== "pick") return;
+    if (!auth.loaded || !auth.user) return;
+    if (pendingResumeRef.current) return;
+    const clerk = typeof window !== "undefined" ? (window as any).Clerk : null;
+    if (needsClerkItpTouch() && !clerkJwtFromClerk(clerk, { allowExpired: true })) return;
+    const pending = takePendingMp();
+    if (!pending) return;
+    pendingResumeRef.current = true;
+    if (pending.kind === "create") {
+      if (pending.title) {
+        persistRoomTitle(pending.title);
+        setRoomTitle(pending.title);
+      }
+      setCreateOpen(false);
+      createLobby();
+      return;
+    }
+    if (pending.kind === "join") {
+      joinOpenLobby(pending.code);
+      return;
+    }
+    rejoinSavedGame();
+  }, [screen, auth.loaded, auth.user]);
 
   useEffect(() => {
     if (!view || view.phase !== "dealing") {
@@ -11478,7 +11552,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         }}
       >
         {children}
-        {error ? <div style={{ color: "#f5b7b1", fontSize: 13, maxWidth: 300, lineHeight: 1.4 }}>{error}</div> : null}
+        {error && !createOpen ? <div style={{ color: "#f5b7b1", fontSize: 13, maxWidth: 300, lineHeight: 1.4 }}>{error}</div> : null}
       </div>
     </FeltShell>
   );
@@ -11598,6 +11672,12 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     const confirmCreate = () => {
       if (!auth.user) {
         setError("Sign in with Google first");
+        return;
+      }
+      persistRoomTitle(roomTitle);
+      const clerk = typeof window !== "undefined" ? (window as any).Clerk : null;
+      if (beginSafariClerkHopIfNeeded(clerk, { kind: "create", title: roomTitle.trim() })) {
+        setBusy(true);
         return;
       }
       createLobby();
@@ -11761,9 +11841,8 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
                   >
                     {busy ? "…" : "Create"}
                   </button>
-                ) : null}
-              </form>
-              <div style={{ display: "flex", gap: 10, width: "100%" }}>
+                ) : (
+              <div style={{ display: "flex", gap: 10, width: "100%", marginTop: 12 }}>
                 <button
                   type="button"
                   disabled={busy}
@@ -11773,15 +11852,28 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
                   Cancel
                 </button>
                 <button
-                  type="button"
+                  type="submit"
                   className="lobby-play-btn"
                   disabled={busy}
-                  onClick={confirmCreate}
                   style={{ ...LOBBY_GOLD_BTN, flex: 1, maxWidth: "none", height: 44 }}
                 >
                   {busy ? "Creating…" : "Create"}
                 </button>
               </div>
+                )}
+              </form>
+              {createKb ? (
+              <div style={{ display: "flex", gap: 10, width: "100%" }}>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setCreateOpen(false)}
+                  style={{ ...LOBBY_GHOST_BTN, flex: 1, maxWidth: "none", height: 44 }}
+                >
+                  Cancel
+                </button>
+              </div>
+              ) : null}
               {error ? (
                 <div style={{ color: "#f5b7b1", fontSize: 13, marginTop: 12, lineHeight: 1.4 }}>{error}</div>
               ) : null}
