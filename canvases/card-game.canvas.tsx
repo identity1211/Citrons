@@ -3002,6 +3002,11 @@ function userPublicMetaSupporter(user: any): boolean {
   return v === true || v === 1 || v === "1" || String(v).toLowerCase() === "true";
 }
 
+function userHasStripeCustomer(user: any): boolean {
+  const meta = (user && (user.publicMetadata || user.public_metadata)) || {};
+  return !!(meta.stripeCustomerId || meta.stripe_customer_id);
+}
+
 function clerkSessionHasPlusSync(clerk: any): boolean {
   try {
     if (userPublicMetaPlus(clerk && clerk.user)) return true;
@@ -3845,19 +3850,32 @@ function ProfileButton() {
                   </div>
                 ) : null}
                 {isPlus ? (
-                  <button
-                    type="button"
-                    disabled={isBusy}
-                    onClick={() =>
-                      run(async () => {
-                        const url = await openPlusPortal();
-                        window.location.assign(url);
-                      }, "portal")
-                    }
-                    style={{ ...LOBBY_GOLD_BTN, maxWidth: "100%", height: 40, fontSize: 14, marginBottom: 4 }}
-                  >
-                    {busy === "portal" ? "Opening…" : "Manage subscription"}
-                  </button>
+                  userHasStripeCustomer(user) ? (
+                    <button
+                      type="button"
+                      disabled={isBusy}
+                      onClick={() =>
+                        run(async () => {
+                          const url = await openPlusPortal();
+                          window.location.assign(url);
+                        }, "portal")
+                      }
+                      style={{ ...LOBBY_GOLD_BTN, maxWidth: "100%", height: 40, fontSize: 14, marginBottom: 4 }}
+                    >
+                      {busy === "portal" ? "Opening…" : "Manage subscription"}
+                    </button>
+                  ) : (
+                    <div
+                      style={{
+                        marginBottom: 8,
+                        fontSize: 12,
+                        lineHeight: 1.35,
+                        color: "rgba(245,240,230,0.7)",
+                      }}
+                    >
+                      Complimentary Plus — no Stripe billing to manage.
+                    </div>
+                  )
                 ) : (
                   <button
                     type="button"
@@ -8167,7 +8185,15 @@ function FundraiserMeter({ compact }: { compact?: boolean }) {
         void (async () => {
           try {
             const clerk = await ensureClerk();
-            await clerk.user?.reload?.();
+            for (let i = 0; i < 6; i++) {
+              try {
+                await clerk.user?.reload?.();
+              } catch {
+                /* ignore */
+              }
+              if (userPublicMetaSupporter(clerk.user) || userPublicMetaPlus(clerk.user)) break;
+              await new Promise((r) => window.setTimeout(r, 700));
+            }
           } catch {
             /* ignore */
           }
