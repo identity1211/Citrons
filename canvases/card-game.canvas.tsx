@@ -5819,7 +5819,8 @@ function EmojiDock({ onPick }: { onPick: (emoji: string) => void }) {
               <button
                 key={face}
                 type="button"
-                onClick={() => {
+                onClick={(e) => {
+                  e.stopPropagation();
                   if (locked) {
                     setGateHint("Plus or a tip unlocks 🖕");
                     openPlusFromLobby();
@@ -5827,7 +5828,6 @@ function EmojiDock({ onPick }: { onPick: (emoji: string) => void }) {
                   }
                   setGateHint("");
                   onPick(face);
-                  setOpen(false);
                 }}
                 aria-label={locked ? `Locked react ${face}` : `React ${face}`}
                 title={locked ? "Plus or Donate" : undefined}
