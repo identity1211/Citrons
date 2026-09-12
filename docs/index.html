@@ -3333,10 +3333,21 @@ async function fetchBillingJson(
   }
 }
 
-/** Safari iOS can stall on location.assign after an await; replace/href are more reliable. */
+/** Same-tab redirect — Safari iOS blanks out window.open("", "_blank") after await. */
 function navigateOffsite(url: string) {
   const href = String(url || "");
   if (!href) return;
+  try {
+    const a = document.createElement("a");
+    a.href = href;
+    a.rel = "noopener noreferrer";
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } catch {
+    /* fall through */
+  }
   try {
     window.location.replace(href);
   } catch {
@@ -3352,56 +3363,13 @@ function navigateOffsite(url: string) {
   }
 }
 
-/** Open during the click gesture so Safari allows later navigation after await. */
-function openCheckoutBridge(): Window | null {
-  try {
-    const w = window.open("", "_blank");
-    if (w) {
-      try {
-        w.opener = null;
-      } catch {
-        /* ignore */
-      }
-      try {
-        w.document.title = "Opening checkout…";
-      } catch {
-        /* ignore */
-      }
-    }
-    return w;
-  } catch {
-    return null;
-  }
-}
-
-/** Prefer gesture-opened tab on iOS; fall back to same-tab replace. */
-async function leaveForCheckout(url: string, bridge?: Window | null) {
+/** Navigate in this tab; if Safari never leaves, show an error instead of hanging. */
+async function leaveForCheckout(url: string) {
   const href = String(url || "");
   if (!href) throw new Error("Checkout URL missing");
-
-  if (bridge && !bridge.closed) {
-    try {
-      bridge.location.href = href;
-      await new Promise((r) => window.setTimeout(r, 400));
-      try {
-        const loc = String(bridge.location.href || "");
-        if (loc && loc !== "about:blank") return;
-      } catch {
-        // Cross-origin after Stripe load — navigation succeeded.
-        return;
-      }
-    } catch {
-      try {
-        bridge.close();
-      } catch {
-        /* ignore */
-      }
-    }
-  }
-
   navigateOffsite(href);
-  await new Promise((r) => window.setTimeout(r, 2800));
-  throw new Error("Couldn't open Stripe. Disable content blockers for citrons.lat and try again.");
+  await new Promise((r) => window.setTimeout(r, 3200));
+  throw new Error("Couldn't open Stripe. Reload and try again (disable content blockers if needed).");
 }
 
 function billingAuthError(clerk: any, serverMsg?: string): Error {
@@ -4201,22 +4169,12 @@ function ProfileButton() {
                     <button
                       type="button"
                       disabled={isBusy}
-                      onClick={() => {
-                        const bridge = openCheckoutBridge();
+                      onClick={() =>
                         run(async () => {
-                          try {
-                            const url = await openPlusPortal();
-                            await leaveForCheckout(url, bridge);
-                          } catch (e) {
-                            try {
-                              bridge?.close();
-                            } catch {
-                              /* ignore */
-                            }
-                            throw e;
-                          }
-                        }, "portal");
-                      }}
+                          const url = await openPlusPortal();
+                          await leaveForCheckout(url);
+                        }, "portal")
+                      }
                       style={{ ...LOBBY_GOLD_BTN, maxWidth: "100%", height: 40, fontSize: 14, marginBottom: 4 }}
                     >
                       {busy === "portal" ? "Opening…" : "Manage subscription"}
@@ -4237,22 +4195,12 @@ function ProfileButton() {
                   <button
                     type="button"
                     disabled={isBusy}
-                    onClick={() => {
-                      const bridge = openCheckoutBridge();
+                    onClick={() =>
                       run(async () => {
-                        try {
-                          const url = await startPlusCheckout();
-                          await leaveForCheckout(url, bridge);
-                        } catch (e) {
-                          try {
-                            bridge?.close();
-                          } catch {
-                            /* ignore */
-                          }
-                          throw e;
-                        }
-                      }, "checkout");
-                    }}
+                        const url = await startPlusCheckout();
+                        await leaveForCheckout(url);
+                      }, "checkout")
+                    }
                     style={{ ...LOBBY_GOLD_BTN, maxWidth: "100%", height: 40, fontSize: 14, marginBottom: 4 }}
                   >
                     {busy === "checkout" ? "Opening checkout…" : `Subscribe · ${PLUS_PRICE_LABEL}`}
@@ -8654,17 +8602,10 @@ function DonateButton({ compact }: { compact?: boolean }) {
   async function pay(cents: number) {
     setBusy(true);
     setMsg("");
-    const bridge = openCheckoutBridge();
     try {
       const url = await startDonateCheckout(cents);
-      await leaveForCheckout(url, bridge);
-      setBusy(false);
+      await leaveForCheckout(url);
     } catch (e) {
-      try {
-        bridge?.close();
-      } catch {
-        /* ignore */
-      }
       setMsg(clerkErrorText(e));
       setBusy(false);
     }
@@ -10729,9 +10670,9 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
 
   async function clerkPayload() {
     const clerk = await ensureClerk();
-    const token = clerk.session ? await clerk.session.getToken() : "";
+    const token = await clerkSessionToken(clerk);
     const u = clerk.user;
-    if (!token || !u) throw new Error("Sign in with Google first");
+    if (!token || !u) throw billingAuthError(clerk);
     const nick = clerkNickname(u);
     persistName(nick);
     return { name: nick, avatar: u.imageUrl || "", clerkToken: token };
