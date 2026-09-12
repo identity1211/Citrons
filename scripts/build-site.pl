@@ -61,6 +61,7 @@ SHIMS
 my $react = "https://cdn.jsdelivr.net/npm/react\@18.3.1/umd/react.production.min.js";
 my $reactdom = "https://cdn.jsdelivr.net/npm/react-dom\@18.3.1/umd/react-dom.production.min.js";
 my $babel = "https://cdn.jsdelivr.net/npm/\@babel/standalone\@7.26.10/babel.min.js";
+my $clerk_js = "https://clerk.citrons.lat/npm/\@clerk/clerk-js\@6/dist/clerk.browser.js";
 
 my $html = <<"HTML";
 <!DOCTYPE html>
@@ -74,6 +75,9 @@ my $html = <<"HTML";
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Citrons" />
   <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="preconnect" href="https://clerk.citrons.lat" crossorigin />
+  <link rel="preconnect" href="https://accounts.citrons.lat" />
+  <link rel="dns-prefetch" href="https://clerk.citrons.lat" />
   <!-- keep ?v= in sync with HOME_ICON_VERSION in canvases/card-game.canvas.tsx -->
   <link rel="apple-touch-icon" href="apple-touch-icon.png?v=1" />
   <title>Citrons — TwoCircles Edition</title>
@@ -134,6 +138,7 @@ my $html = <<"HTML";
 </head>
 <body>
   <script>window.CITRONS_WS = window.CITRONS_WS || "wss://web-production-b9cc89.up.railway.app"; window.CLERK_PK = window.CLERK_PK || "pk_live_Y2xlcmsuY2l0cm9ucy5sYXQk";</script>
+  <script src="$clerk_js" async crossorigin="anonymous" data-clerk-publishable-key="pk_live_Y2xlcmsuY2l0cm9ucy5sYXQk"></script>
   <div id="root"><p style="color:#f5f0e6;text-align:center;padding:48px 16px;letter-spacing:0.04em;background:#145230">Loading Citrons…</p></div>
   <script src="$react" crossorigin onerror="window.__citronsBootFail && window.__citronsBootFail('Could not load React')"></script>
   <script src="$reactdom" crossorigin onerror="window.__citronsBootFail && window.__citronsBootFail('Could not load ReactDOM')"></script>
