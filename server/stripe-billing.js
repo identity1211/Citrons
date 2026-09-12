@@ -7,6 +7,7 @@ const clerk = require("./clerk");
 
 const APP_ORIGIN = "https://citrons.lat";
 const META_PLUS = "citrons_plus";
+const META_SUPPORTER = "citrons_supporter";
 const META_CUSTOMER = "stripeCustomerId";
 const META_SUB = "stripeSubscriptionId";
 const GOAL_CENTS = 3000; // €30
@@ -154,6 +155,9 @@ async function patchPlusMetadata(userId, patch) {
   if (Object.prototype.hasOwnProperty.call(patch, "plus")) {
     public_metadata[META_PLUS] = !!patch.plus;
   }
+  if (Object.prototype.hasOwnProperty.call(patch, "supporter")) {
+    public_metadata[META_SUPPORTER] = !!patch.supporter;
+  }
   if (Object.prototype.hasOwnProperty.call(patch, "customerId") && patch.customerId) {
     public_metadata[META_CUSTOMER] = String(patch.customerId);
   }
@@ -164,6 +168,9 @@ async function patchPlusMetadata(userId, patch) {
   await clerkApi("PATCH", `/users/${encodeURIComponent(id)}/metadata`, { public_metadata });
   if (Object.prototype.hasOwnProperty.call(patch, "plus")) {
     clerk.setPlusCache(id, !!patch.plus);
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "supporter")) {
+    clerk.setSupporterCache(id, !!patch.supporter);
   }
 }
 
@@ -348,6 +355,16 @@ async function handleCheckoutCompleted(session) {
   }
 
   if (kind === "donate" || mode === "payment") {
+    const clerkUserId = String(
+      (session && session.metadata && session.metadata.clerkUserId) || session.client_reference_id || ""
+    ).trim();
+    if (clerkUserId && session.payment_status === "paid") {
+      try {
+        await patchPlusMetadata(clerkUserId, { supporter: true });
+      } catch (err) {
+        console.warn("donate supporter flag", err && err.message);
+      }
+    }
     return;
   }
 
@@ -455,4 +472,5 @@ module.exports = {
   DONATE_MIN_CENTS,
   DONATE_MAX_CENTS,
   META_PLUS,
+  META_SUPPORTER,
 };

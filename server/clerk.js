@@ -3,9 +3,10 @@
 const crypto = require("crypto");
 
 const DEFAULT_CLERK_PK = process.env.CLERK_PUBLISHABLE_KEY || "pk_live_Y2xlcmsuY2l0cm9ucy5sYXQk";
+const META_PLUS = "citrons_plus";
+const META_SUPPORTER = "citrons_supporter";
 const PLUS_PLAN = "plus";
 const PLUS_FEATURE = "plus_perks";
-const META_PLUS = "citrons_plus";
 
 function clerkSecret() {
   return String(process.env.CLERK_SECRET_KEY || "").trim();
@@ -30,6 +31,7 @@ function issuerFromPk(pk) {
 
 let jwksCache = { issuer: "", keys: [], at: 0 };
 const plusCache = new Map(); // userId -> { plus, at }
+const supporterCache = new Map(); // userId -> { supporter, at }
 
 function setPlusCache(userId, plus) {
   const id = String(userId || "").trim();
@@ -44,6 +46,21 @@ function peekPlusCache(userId) {
   if (!cached) return null;
   if (Date.now() - cached.at >= 60 * 1000) return null;
   return { plus: !!cached.plus };
+}
+
+function setSupporterCache(userId, supporter) {
+  const id = String(userId || "").trim();
+  if (!id) return;
+  supporterCache.set(id, { supporter: !!supporter, at: Date.now() });
+}
+
+function peekSupporterCache(userId) {
+  const id = String(userId || "").trim();
+  if (!id) return null;
+  const cached = supporterCache.get(id);
+  if (!cached) return null;
+  if (Date.now() - cached.at >= 60 * 1000) return null;
+  return { supporter: !!cached.supporter };
 }
 
 function b64urlToBuf(s) {
@@ -156,11 +173,40 @@ async function userHasPlus(userId) {
     const data = await clerkApi("GET", `/users/${encodeURIComponent(id)}`);
     const plus = !!(data && data.public_metadata && data.public_metadata[META_PLUS]);
     setPlusCache(id, plus);
+    const supporter = !!(data && data.public_metadata && data.public_metadata[META_SUPPORTER]);
+    setSupporterCache(id, supporter);
     return plus;
   } catch (err) {
     console.warn("clerk userHasPlus", err && err.message);
     return false;
   }
+}
+
+async function userHasSupporter(userId) {
+  const id = String(userId || "").trim();
+  if (!id) return false;
+  const cached = peekSupporterCache(id);
+  if (cached) return cached.supporter;
+  if (!clerkSecret()) return false;
+  try {
+    const data = await clerkApi("GET", `/users/${encodeURIComponent(id)}`);
+    const supporter = !!(data && data.public_metadata && data.public_metadata[META_SUPPORTER]);
+    setSupporterCache(id, supporter);
+    const plus = !!(data && data.public_metadata && data.public_metadata[META_PLUS]);
+    setPlusCache(id, plus);
+    return supporter;
+  } catch (err) {
+    console.warn("clerk userHasSupporter", err && err.message);
+    return false;
+  }
+}
+
+/** Gated emojis: Plus subscriber or anyone who donated while signed in. */
+async function userHasEmojiPerks(userId) {
+  const id = String(userId || "").trim();
+  if (!id) return false;
+  if (await userHasPlus(id)) return true;
+  return userHasSupporter(id);
 }
 
 function clerkConfigured() {
@@ -171,10 +217,15 @@ module.exports = {
   verifyClerkToken,
   clerkConfigured,
   userHasPlus,
+  userHasSupporter,
+  userHasEmojiPerks,
   claimsIndicatePlus,
   setPlusCache,
   peekPlusCache,
+  setSupporterCache,
+  peekSupporterCache,
   PLUS_PLAN,
   PLUS_FEATURE,
   META_PLUS,
+  META_SUPPORTER,
 };

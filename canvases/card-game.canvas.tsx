@@ -2995,6 +2995,11 @@ function userPublicMetaPlus(user: any): boolean {
   return !!(meta.citrons_plus || meta.citronsPlus);
 }
 
+function userPublicMetaSupporter(user: any): boolean {
+  const meta = (user && (user.publicMetadata || user.public_metadata)) || {};
+  return !!(meta.citrons_supporter || meta.citronsSupporter || meta.citrons_donated);
+}
+
 function clerkSessionHasPlusSync(clerk: any): boolean {
   try {
     if (userPublicMetaPlus(clerk && clerk.user)) return true;
@@ -3165,6 +3170,7 @@ function useClerkAuth() {
   const [loaded, setLoaded] = useState(() => !clerkPublishableKey());
   const [user, setUser] = useState<any>(null);
   const [isPlus, setIsPlus] = useState(false);
+  const [isSupporter, setIsSupporter] = useState(false);
   const [error, setError] = useState(() =>
     clerkPublishableKey() ? "" : clerkErrorText(new Error("NO_PK"))
   );
@@ -3192,11 +3198,13 @@ function useClerkAuth() {
             } catch {
               /* ignore */
             }
+            setIsSupporter(userPublicMetaSupporter(u));
             void clerkSessionHasPlus(clerk).then((plus) => {
               if (!cancelled) setIsPlus(plus);
             });
           } else {
             setIsPlus(false);
+            setIsSupporter(false);
           }
         };
         sync();
@@ -3211,6 +3219,7 @@ function useClerkAuth() {
         setLoaded(true);
         setUser(null);
         setIsPlus(false);
+        setIsSupporter(false);
         setError(clerkErrorText(e));
       }
     })();
@@ -3220,7 +3229,7 @@ function useClerkAuth() {
     };
   }, []);
 
-  return { loaded, user, isPlus, setIsPlus, error };
+  return { loaded, user, isPlus, setIsPlus, isSupporter, setIsSupporter, error };
 }
 
 const PROFILE_PANEL: CSSProperties = {
@@ -5264,7 +5273,10 @@ const REACT_EMOJIS = [
   "🥴",
   "😬",
   "🤙",
+  "🖕",
 ];
+
+const GATED_REACT_EMOJIS = new Set(["🖕"]);
 
 type ReactBurst = { id: string; emoji: string; fromId: string };
 type EmojiFly = { id: string; emoji: string; x: number; rot: number };
@@ -5276,7 +5288,10 @@ function driftFromId(id: string) {
 }
 
 function EmojiDock({ onPick }: { onPick: (emoji: string) => void }) {
+  const { isPlus, isSupporter } = useClerkAuth();
+  const unlocked = isPlus || isSupporter;
   const [open, setOpen] = useState(false);
+  const [gateHint, setGateHint] = useState("");
   return (
     <div
       style={{
@@ -5302,29 +5317,71 @@ function EmojiDock({ onPick }: { onPick: (emoji: string) => void }) {
             boxShadow: "0 8px 20px rgba(0,0,0,0.35)",
           }}
         >
+          {gateHint ? (
+            <div
+              style={{
+                fontSize: 10,
+                lineHeight: 1.3,
+                color: "rgba(245,240,230,0.72)",
+                padding: "2px 4px 6px",
+                textAlign: "center",
+              }}
+            >
+              {gateHint}
+            </div>
+          ) : null}
           <div className="emoji-rail">
             {REACT_EMOJIS.map((face) => {
               const wide = [...face].length >= 3;
+              const gated = GATED_REACT_EMOJIS.has(face);
+              const locked = gated && !unlocked;
               return (
               <button
                 key={face}
                 type="button"
-                onClick={() => onPick(face)}
-                aria-label={`React ${face}`}
+                onClick={() => {
+                  if (locked) {
+                    setGateHint("Plus or a tip unlocks 🖕");
+                    openPlusFromLobby();
+                    return;
+                  }
+                  setGateHint("");
+                  onPick(face);
+                  setOpen(false);
+                }}
+                aria-label={locked ? `Locked react ${face}` : `React ${face}`}
+                title={locked ? "Plus or Donate" : undefined}
                 style={{
+                  position: "relative",
                   width: wide ? 58 : 40,
                   height: 40,
                   borderRadius: 10,
-                  border: "none",
-                  background: "transparent",
+                  border: locked ? "1px solid rgba(241,196,15,0.45)" : "none",
+                  background: locked ? "rgba(241,196,15,0.08)" : "transparent",
                   fontSize: wide ? 16 : 26,
                   lineHeight: "40px",
                   cursor: "pointer",
                   padding: 0,
                   whiteSpace: "nowrap",
+                  opacity: locked ? 0.55 : 1,
                 }}
               >
                 {face}
+                {locked ? (
+                  <span
+                    aria-hidden
+                    style={{
+                      position: "absolute",
+                      right: 2,
+                      bottom: 2,
+                      fontSize: 9,
+                      lineHeight: 1,
+                      opacity: 0.95,
+                    }}
+                  >
+                    🔒
+                  </span>
+                ) : null}
               </button>
               );
             })}
@@ -5334,7 +5391,10 @@ function EmojiDock({ onPick }: { onPick: (emoji: string) => void }) {
       <button
         type="button"
         aria-label={open ? "Close reactions" : "Reactions"}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          setOpen((v) => !v);
+          setGateHint("");
+        }}
         style={{
           width: 44,
           height: 44,
@@ -8070,6 +8130,16 @@ function FundraiserMeter({ compact }: { compact?: boolean }) {
           setGoal(Math.max(100, Math.floor(Number(data && data.goalCents) || 3000)));
         })
         .catch(() => {});
+      if (q === "success") {
+        void (async () => {
+          try {
+            const clerk = await ensureClerk();
+            await clerk.user?.reload?.();
+          } catch {
+            /* ignore */
+          }
+        })();
+      }
       try {
         const u = new URL(window.location.href);
         u.searchParams.delete("donate");
@@ -8149,6 +8219,7 @@ function FundraiserMeter({ compact }: { compact?: boolean }) {
 const DONATE_PRESETS = [100, 300, 500, 1000];
 
 function DonateButton({ compact }: { compact?: boolean }) {
+  const { user } = useClerkAuth();
   const shortLand = useShortLandscape();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -8224,6 +8295,7 @@ function DonateButton({ compact }: { compact?: boolean }) {
             </div>
             <div style={{ fontSize: 13, lineHeight: 1.4, color: "rgba(245,240,230,0.75)", marginBottom: 12 }}>
               One-time tip in EUR — no subscription. Helps us reach the €30 goal.
+              {user ? " Signed-in tips also unlock 🖕 in reactions." : " Sign in first if you want 🖕 unlocked."}
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
               {DONATE_PRESETS.map((cents) => (

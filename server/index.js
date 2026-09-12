@@ -67,7 +67,10 @@ const REACT_EMOJIS = new Set([
   "🥴",
   "😬",
   "🤙",
+  "🖕",
 ]);
+
+const GATED_REACT_EMOJIS = new Set(["🖕"]);
 
 const rooms = new Map();
 const browsers = new Set();
@@ -689,9 +692,19 @@ function sanitizeChat(text) {
     .slice(0, CHAT_MAX_LEN);
 }
 
-function handleReact(room, player, emoji) {
+async function handleReact(room, player, emoji) {
   const face = String(emoji || "");
   if (!REACT_EMOJIS.has(face)) return;
+  if (GATED_REACT_EMOJIS.has(face)) {
+    const uid = player && player.clerkUserId;
+    if (!uid) return;
+    try {
+      const ok = await clerk.userHasEmojiPerks(uid);
+      if (!ok) return;
+    } catch {
+      return;
+    }
+  }
   const now = Date.now();
   if (player.lastReactAt && now - player.lastReactAt < REACT_GAP_MS) return;
   player.lastReactAt = now;
@@ -1424,7 +1437,10 @@ function onMessage(ws, data) {
 
   if (spectator && !player) {
     if (type === "chat") return handleChat(room, spectator, msg.text);
-    if (type === "react") return handleReact(room, spectator, msg.emoji);
+    if (type === "react") {
+      void handleReact(room, spectator, msg.emoji);
+      return;
+    }
     if (type === "voiceJoin") {
       void handleVoiceJoin(ws, room, spectator, msg, { listenOnly: true });
       return;
@@ -1465,7 +1481,8 @@ function onMessage(ws, data) {
     return handleChat(room, player, msg.text);
   }
   if (type === "react") {
-    return handleReact(room, player, msg.emoji);
+    void handleReact(room, player, msg.emoji);
+    return;
   }
   if (type === "lobby") {
     return resetRoomToLobby(room);
