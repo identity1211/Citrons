@@ -5237,7 +5237,7 @@ function LobbySkinFly({
             right: "calc(100% + 8px)",
             ...(align === "bottom" ? { bottom: 0, top: "auto" } : { top: 18, bottom: "auto" }),
             width: panelWidth,
-            maxHeight: 220,
+            maxHeight: "min(220px, 70vh)",
             overflowX: "hidden",
             overflowY: "auto",
             overscrollBehavior: "contain",
@@ -5263,12 +5263,14 @@ function LobbyStylePickers({
   disabled,
   onTable,
   onBack,
+  footer,
 }: {
   table: TableSkinId;
   back: CardBackId;
   disabled?: boolean;
   onTable?: (id: TableSkinId) => void;
   onBack?: (id: CardBackId) => void;
+  footer?: ReactNode;
 }) {
   const [openKind, setOpenKind] = useState<"table" | "back" | null>(null);
   const tableMeta = TABLE_SKINS.find((s) => s.id === table) || TABLE_SKINS[0];
@@ -5297,14 +5299,17 @@ function LobbyStylePickers({
     <div
       style={{
         flexShrink: 0,
-        width: 84,
+        width: 88,
+        height: "100%",
+        minHeight: 0,
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
-        gap: 12,
+        gap: 10,
         paddingTop: 2,
         position: "relative",
         zIndex: 12,
+        boxSizing: "border-box",
       }}
     >
       <LobbySkinFly
@@ -5437,6 +5442,12 @@ function LobbyStylePickers({
           }}
         >
           Host picks
+        </div>
+      ) : null}
+
+      {footer ? (
+        <div style={{ marginTop: "auto", width: "100%", display: "flex", justifyContent: "center", paddingBottom: 2 }}>
+          {footer}
         </div>
       ) : null}
     </div>
@@ -12250,47 +12261,6 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
           <>
             <WindowButton />
             <WaitingMenu onMainMenu={exitWaitingToMenu} onLeaveLobby={leaveWaitingLobby} />
-            <div
-              style={{
-                position: "absolute",
-                right: FELT_INSET_RIGHT,
-                bottom: FELT_INSET_BOTTOM,
-                zIndex: 8,
-                pointerEvents: "auto",
-                display: inset.keyboard ? "none" : "block",
-              }}
-            >
-              {view.host ? (
-                <button
-                  type="button"
-                  className="lobby-play-btn"
-                  disabled={!view.canStart}
-                  onClick={() => send({ type: "start" })}
-                  style={{
-                    ...LOBBY_CORNER_BTN,
-                    position: "static",
-                    background: view.canStart ? "#f1c40f" : "rgba(0,0,0,0.35)",
-                    color: view.canStart ? "#1a2e1a" : "rgba(245,240,230,0.72)",
-                    border: view.canStart ? "none" : "1px solid rgba(255,255,255,0.28)",
-                    boxShadow: view.canStart ? "0 4px 12px rgba(0,0,0,0.28)" : "none",
-                    cursor: view.canStart ? "pointer" : "default",
-                  }}
-                >
-                  {view.canStart ? "Start game" : "Waiting…"}
-                </button>
-              ) : (
-                <div
-                  style={{
-                    ...LOBBY_CORNER_BTN,
-                    position: "static",
-                    color: "rgba(245,240,230,0.72)",
-                    fontWeight: 700,
-                  }}
-                >
-                  Waiting for host
-                </div>
-              )}
-            </div>
             <ProfileButton />
             {inviteOpen ? (
               <div
@@ -12525,9 +12495,9 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
               textAlign: "center",
               color: "#f5f0e6",
               fontWeight: 800,
-              fontSize: 22,
+              fontSize: 20,
               fontFamily: 'Georgia, "Times New Roman", serif',
-              padding: "0 128px",
+              padding: "0 72px",
               overflow: "hidden",
               textOverflow: "ellipsis",
               whiteSpace: "nowrap",
@@ -12540,22 +12510,23 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
               flex: 1,
               minHeight: 0,
               display: "flex",
-              gap: 12,
+              gap: 10,
               alignItems: "stretch",
               overflow: "visible",
             }}
           >
+            {/* Players ~28% */}
             <div
               style={{
-                flex: "1 1 42%",
-                minWidth: 0,
+                flex: "1 1 28%",
+                maxWidth: 280,
+                minWidth: 140,
                 display: "flex",
                 flexDirection: "column",
-                paddingBottom: LOBBY_CORNER_H,
                 boxSizing: "border-box",
               }}
             >
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
                 <div style={{ ...sectionLabel, marginBottom: 0 }}>Players</div>
                 {!view.spectator ? (
                   <button
@@ -12593,7 +12564,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
                   <div
                     key={p.id}
                     style={{
-                      padding: "8px 12px",
+                      padding: "6px 10px",
                       borderRadius: 8,
                       background: "rgba(0,0,0,0.28)",
                       color: "#f5f0e6",
@@ -12601,14 +12572,14 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
                       justifyContent: "space-between",
                       alignItems: "center",
                       gap: 8,
-                      fontSize: 14,
+                      fontSize: 13,
                     }}
                   >
                     <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
                       <AvatarBubble
                         src={p.avatar}
                         name={p.name}
-                        size={24}
+                        size={22}
                         speaking={voiceSpeakingIds.includes(String(p.id))}
                       />
                       <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -12616,48 +12587,94 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
                         {p.host ? " · host" : ""}
                       </span>
                     </span>
-                    <span style={{ opacity: 0.65, flexShrink: 0, fontSize: 12 }}>
+                    <span style={{ opacity: 0.65, flexShrink: 0, fontSize: 11 }}>
                       {p.connected ? "online" : "offline"}
                     </span>
                   </div>
                 ))}
               </div>
             </div>
+
+            {/* Chat */}
             <div
               style={{
-                flex: "1.15 1 50%",
+                flex: "1 1 50%",
                 minWidth: 0,
+                minHeight: 0,
                 display: "flex",
-                flexDirection: "row",
-                alignItems: "stretch",
-                gap: 8,
-                overflow: "visible",
+                flexDirection: "column",
                 position: "relative",
                 zIndex: 6,
               }}
             >
-              <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
-                <RoomChat
-                  fill
-                  variant="lobby"
-                  lines={chat}
-                  youId={view.youId}
-                  onSend={(text) => send({ type: "chat", text })}
-                  voice={{
-                    voice: voiceUi,
-                    listenOnly: !!view.spectator || voiceListenOnlyRef.current,
-                    onToggle: () => void onVoiceToggle(),
-                  }}
-                />
-              </div>
-              <LobbyStylePickers
-                table={waitSkin}
-                back={waitBack}
-                disabled={!view.host}
-                onTable={(id) => send({ type: "skin", skin: id })}
-                onBack={(id) => send({ type: "back", back: id })}
+              <RoomChat
+                fill
+                variant="lobby"
+                lines={chat}
+                youId={view.youId}
+                onSend={(text) => send({ type: "chat", text })}
+                voice={{
+                  voice: voiceUi,
+                  listenOnly: !!view.spectator || voiceListenOnlyRef.current,
+                  onToggle: () => void onVoiceToggle(),
+                }}
               />
             </div>
+
+            {/* Look + Start */}
+            <LobbyStylePickers
+              table={waitSkin}
+              back={waitBack}
+              disabled={!view.host}
+              onTable={(id) => send({ type: "skin", skin: id })}
+              onBack={(id) => send({ type: "back", back: id })}
+              footer={
+                inset.keyboard ? null : view.host ? (
+                  <button
+                    type="button"
+                    className="lobby-play-btn"
+                    disabled={!view.canStart}
+                    onClick={() => send({ type: "start" })}
+                    style={{
+                      width: "100%",
+                      maxWidth: 88,
+                      height: 40,
+                      minHeight: 40,
+                      borderRadius: 10,
+                      padding: "0 6px",
+                      fontSize: 12,
+                      fontWeight: 800,
+                      letterSpacing: 0.2,
+                      background: view.canStart ? "#f1c40f" : "rgba(0,0,0,0.35)",
+                      color: view.canStart ? "#1a2e1a" : "rgba(245,240,230,0.72)",
+                      border: view.canStart ? "none" : "1px solid rgba(255,255,255,0.28)",
+                      boxShadow: view.canStart ? "0 4px 12px rgba(0,0,0,0.28)" : "none",
+                      cursor: view.canStart ? "pointer" : "default",
+                    }}
+                  >
+                    {view.canStart ? "Start" : "Wait…"}
+                  </button>
+                ) : (
+                  <div
+                    style={{
+                      width: "100%",
+                      maxWidth: 88,
+                      padding: "8px 4px",
+                      borderRadius: 10,
+                      border: "1px solid rgba(255,255,255,0.2)",
+                      background: "rgba(0,0,0,0.28)",
+                      color: "rgba(245,240,230,0.72)",
+                      fontSize: 10,
+                      fontWeight: 700,
+                      lineHeight: 1.25,
+                      textAlign: "center",
+                    }}
+                  >
+                    Waiting for host
+                  </div>
+                )
+              }
+            />
           </div>
           {error ? <div style={{ color: "#f5b7b1", fontSize: 13, lineHeight: 1.4, textAlign: "center" }}>{error}</div> : null}
         </div>
