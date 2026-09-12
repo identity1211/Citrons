@@ -1120,20 +1120,10 @@ function ensureKeyframes() {
     }
     .emoji-rail::-webkit-scrollbar { display: none; }
     .emoji-rail button { scroll-snap-align: start; flex: 0 0 auto; min-width: 40px; }
-    .look-rail {
-      display: flex;
-      gap: 8px;
-      overflow-x: auto;
-      overflow-y: hidden;
-      scroll-snap-type: x proximity;
-      -webkit-overflow-scrolling: touch;
-      scrollbar-width: none;
-      overscroll-behavior-x: contain;
-      padding: 2px 2px 0;
-      margin: 0 -2px;
+    .look-fly {
+      animation: matchMenuIn 0.16s ease-out both;
+      transform-origin: top right;
     }
-    .look-rail::-webkit-scrollbar { display: none; }
-    .look-rail > button { scroll-snap-align: start; flex: 0 0 auto; }
     .chat-ime-bar {
       position: fixed;
       z-index: 140;
@@ -1211,6 +1201,7 @@ function ensureKeyframes() {
       .chat-toast { animation: none !important; }
       .emoji-react-fly { animation: none !important; opacity: 0 !important; }
       .match-menu-fly { animation: none !important; }
+      .look-fly { animation: none !important; }
       .ios-hint-pulse { animation: none !important; }
     }
   `;
@@ -5168,6 +5159,104 @@ function tablePreviewStyle(id: TableSkinId): CSSProperties {
   return { background: FELT_BG };
 }
 
+function LobbySkinFly({
+  label,
+  open,
+  onOpenChange,
+  disabled,
+  trigger,
+  panelWidth,
+  align = "top",
+  children,
+}: {
+  label: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  disabled?: boolean;
+  trigger: ReactNode;
+  panelWidth: number;
+  align?: "top" | "bottom";
+  children: ReactNode;
+}) {
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent | TouchEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) onOpenChange(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("touchstart", onDoc);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("touchstart", onDoc);
+    };
+  }, [open, onOpenChange]);
+
+  return (
+    <div ref={wrapRef} style={{ position: "relative", zIndex: open ? 30 : 2, flexShrink: 0 }}>
+      <div
+        style={{
+          fontSize: 9,
+          fontWeight: 800,
+          letterSpacing: 0.8,
+          textTransform: "uppercase",
+          color: "rgba(255,255,255,0.55)",
+          marginBottom: 4,
+          textAlign: "center",
+        }}
+      >
+        {label}
+      </div>
+      <button
+        type="button"
+        disabled={disabled}
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        onClick={() => {
+          if (!disabled) onOpenChange(!open);
+        }}
+        style={{
+          display: "block",
+          padding: 0,
+          border: "none",
+          background: "transparent",
+          cursor: disabled ? "default" : "pointer",
+          opacity: disabled ? 0.7 : 1,
+        }}
+      >
+        {trigger}
+      </button>
+      {open ? (
+        <div
+          className="look-fly"
+          role="listbox"
+          aria-label={label}
+          style={{
+            position: "absolute",
+            right: "calc(100% + 8px)",
+            ...(align === "bottom" ? { bottom: 0, top: "auto" } : { top: 18, bottom: "auto" }),
+            width: panelWidth,
+            maxHeight: 220,
+            overflowX: "hidden",
+            overflowY: "auto",
+            overscrollBehavior: "contain",
+            WebkitOverflowScrolling: "touch",
+            borderRadius: 12,
+            border: "1px solid rgba(241,196,15,0.45)",
+            background: "rgba(8, 18, 10, 0.96)",
+            boxShadow: "0 12px 28px rgba(0,0,0,0.45)",
+            padding: 8,
+            boxSizing: "border-box",
+          }}
+        >
+          {children}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function LobbyStylePickers({
   table,
   back,
@@ -5181,52 +5270,64 @@ function LobbyStylePickers({
   onTable?: (id: TableSkinId) => void;
   onBack?: (id: CardBackId) => void;
 }) {
-  const rowLabel: CSSProperties = {
-    fontSize: 11,
-    fontWeight: 800,
-    letterSpacing: 1.3,
-    textTransform: "uppercase",
-    color: "rgba(255,255,255,0.62)",
-    marginBottom: 6,
-    textAlign: "left",
-  };
-  const nameUnder: CSSProperties = {
+  const [openKind, setOpenKind] = useState<"table" | "back" | null>(null);
+  const tableMeta = TABLE_SKINS.find((s) => s.id === table) || TABLE_SKINS[0];
+  const backMeta = CARD_BACKS.find((s) => s.id === back) || CARD_BACKS[0];
+
+  const thumbBorder = (on: boolean): CSSProperties => ({
+    border: on ? "2px solid #f1c40f" : "1.5px solid rgba(255,255,255,0.28)",
+    boxShadow: on ? "0 0 0 1px rgba(241,196,15,0.35)" : "none",
+    boxSizing: "border-box",
+    overflow: "hidden",
+  });
+
+  const optName: CSSProperties = {
     marginTop: 4,
     fontSize: 10,
     fontWeight: 700,
-    letterSpacing: 0.2,
     color: "rgba(245,240,230,0.72)",
     textAlign: "center",
-    lineHeight: 1.2,
-    maxWidth: "100%",
+    lineHeight: 1.15,
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
   };
-  const selectedName: CSSProperties = {
-    ...nameUnder,
-    color: "#f1c40f",
-  };
 
   return (
-    <div style={{ width: "100%", flexShrink: 0, position: "relative", zIndex: 12 }}>
-      <div
-        style={{
-          fontSize: 11,
-          fontWeight: 800,
-          letterSpacing: 1.3,
-          textTransform: "uppercase",
-          color: "rgba(255,255,255,0.62)",
-          marginBottom: 8,
-          textAlign: "left",
-        }}
+    <div
+      style={{
+        flexShrink: 0,
+        width: 84,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: 12,
+        paddingTop: 2,
+        position: "relative",
+        zIndex: 12,
+      }}
+    >
+      <LobbySkinFly
+        label="Table"
+        open={openKind === "table"}
+        onOpenChange={(v) => setOpenKind(v ? "table" : null)}
+        disabled={disabled}
+        panelWidth={Math.min(260, 16 + TABLE_SKINS.length * 80)}
+        trigger={
+          <span
+            style={{
+              display: "block",
+              width: 72,
+              height: 44,
+              borderRadius: 10,
+              ...thumbBorder(openKind === "table"),
+              ...tablePreviewStyle(table),
+            }}
+            title={tableMeta.name}
+          />
+        }
       >
-        Look
-      </div>
-
-      <div style={{ marginBottom: 10 }}>
-        <div style={rowLabel}>Table</div>
-        <div className="look-rail" role="listbox" aria-label="Table skin" aria-disabled={disabled || undefined}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "flex-start" }}>
           {TABLE_SKINS.map((s) => {
             const on = s.id === table;
             return (
@@ -5235,17 +5336,16 @@ function LobbyStylePickers({
                 type="button"
                 role="option"
                 aria-selected={on}
-                disabled={disabled}
                 onClick={() => {
-                  if (!disabled) onTable?.(s.id);
+                  onTable?.(s.id);
+                  setOpenKind(null);
                 }}
                 style={{
-                  width: 76,
+                  width: 72,
                   padding: 0,
                   border: "none",
                   background: "transparent",
-                  cursor: disabled ? "default" : "pointer",
-                  opacity: disabled && !on ? 0.55 : 1,
+                  cursor: "pointer",
                 }}
               >
                 <span
@@ -5253,25 +5353,41 @@ function LobbyStylePickers({
                     display: "block",
                     width: 72,
                     height: 44,
-                    margin: "0 auto",
                     borderRadius: 10,
-                    border: on ? "2px solid #f1c40f" : "1.5px solid rgba(255,255,255,0.28)",
-                    boxShadow: on ? "0 0 0 1px rgba(241,196,15,0.35)" : "none",
-                    overflow: "hidden",
-                    boxSizing: "border-box",
+                    ...thumbBorder(on),
                     ...tablePreviewStyle(s.id),
                   }}
                 />
-                <span style={on ? selectedName : nameUnder}>{s.name}</span>
+                <span style={{ ...optName, color: on ? "#f1c40f" : optName.color }}>{s.name}</span>
               </button>
             );
           })}
         </div>
-      </div>
+      </LobbySkinFly>
 
-      <div>
-        <div style={rowLabel}>Card back</div>
-        <div className="look-rail" role="listbox" aria-label="Card back" aria-disabled={disabled || undefined}>
+      <LobbySkinFly
+        label="Cards"
+        open={openKind === "back"}
+        onOpenChange={(v) => setOpenKind(v ? "back" : null)}
+        disabled={disabled}
+        align="bottom"
+        panelWidth={Math.min(280, 16 + CARD_BACKS.length * 52)}
+        trigger={
+          <span
+            style={{
+              display: "block",
+              width: 40,
+              height: 56,
+              margin: "0 auto",
+              borderRadius: 7,
+              ...thumbBorder(openKind === "back"),
+              ...cardBackFill(back),
+            }}
+            title={backMeta.name}
+          />
+        }
+      >
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "flex-start" }}>
           {CARD_BACKS.map((s) => {
             const on = s.id === back;
             return (
@@ -5280,17 +5396,16 @@ function LobbyStylePickers({
                 type="button"
                 role="option"
                 aria-selected={on}
-                disabled={disabled}
                 onClick={() => {
-                  if (!disabled) onBack?.(s.id);
+                  onBack?.(s.id);
+                  setOpenKind(null);
                 }}
                 style={{
-                  width: 48,
+                  width: 44,
                   padding: 0,
                   border: "none",
                   background: "transparent",
-                  cursor: disabled ? "default" : "pointer",
-                  opacity: disabled && !on ? 0.55 : 1,
+                  cursor: "pointer",
                 }}
               >
                 <span
@@ -5300,23 +5415,28 @@ function LobbyStylePickers({
                     height: 56,
                     margin: "0 auto",
                     borderRadius: 7,
-                    border: on ? "2px solid #f1c40f" : "1.5px solid rgba(255,255,255,0.28)",
-                    boxShadow: on ? "0 0 0 1px rgba(241,196,15,0.35)" : "none",
-                    overflow: "hidden",
-                    boxSizing: "border-box",
+                    ...thumbBorder(on),
                     ...cardBackFill(s.id),
                   }}
                 />
-                <span style={on ? selectedName : nameUnder}>{s.name}</span>
+                <span style={{ ...optName, color: on ? "#f1c40f" : optName.color }}>{s.name}</span>
               </button>
             );
           })}
         </div>
-      </div>
+      </LobbySkinFly>
 
       {disabled ? (
-        <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", marginTop: 8, textAlign: "left" }}>
-          Host chooses the table and card back
+        <div
+          style={{
+            fontSize: 9,
+            lineHeight: 1.25,
+            color: "rgba(255,255,255,0.45)",
+            textAlign: "center",
+            maxWidth: 80,
+          }}
+        >
+          Host picks
         </div>
       ) : null}
     </div>
@@ -12508,31 +12628,34 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
                 flex: "1.15 1 50%",
                 minWidth: 0,
                 display: "flex",
-                flexDirection: "column",
-                gap: 10,
+                flexDirection: "row",
+                alignItems: "stretch",
+                gap: 8,
                 overflow: "visible",
                 position: "relative",
                 zIndex: 6,
               }}
             >
+              <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
+                <RoomChat
+                  fill
+                  variant="lobby"
+                  lines={chat}
+                  youId={view.youId}
+                  onSend={(text) => send({ type: "chat", text })}
+                  voice={{
+                    voice: voiceUi,
+                    listenOnly: !!view.spectator || voiceListenOnlyRef.current,
+                    onToggle: () => void onVoiceToggle(),
+                  }}
+                />
+              </div>
               <LobbyStylePickers
                 table={waitSkin}
                 back={waitBack}
                 disabled={!view.host}
                 onTable={(id) => send({ type: "skin", skin: id })}
                 onBack={(id) => send({ type: "back", back: id })}
-              />
-              <RoomChat
-                fill
-                variant="lobby"
-                lines={chat}
-                youId={view.youId}
-                onSend={(text) => send({ type: "chat", text })}
-                voice={{
-                  voice: voiceUi,
-                  listenOnly: !!view.spectator || voiceListenOnlyRef.current,
-                  onToggle: () => void onVoiceToggle(),
-                }}
               />
             </div>
           </div>
