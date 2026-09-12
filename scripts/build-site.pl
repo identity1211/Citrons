@@ -94,7 +94,7 @@ my $html = <<"HTML";
       .lobby-fs-hint { display: none !important; }
     }
     \@media (orientation: landscape) and (max-height: 520px) {
-      .lobby-logo { width: min(260px, 42vw) !important; margin: 0 0 2px !important; }
+      .lobby-logo { width: min(220px, 38vw) !important; margin: 0 0 2px !important; }
       .lobby-fs-hint, .lobby-edition { display: none !important; }
       .lobby-play-btn, .lobby-ghost-btn { height: 40px !important; font-size: 15px !important; }
       .lobby-main-land { max-width: min(720px, 100%) !important; }

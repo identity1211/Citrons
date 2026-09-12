@@ -33,7 +33,7 @@
       .lobby-fs-hint { display: none !important; }
     }
     @media (orientation: landscape) and (max-height: 520px) {
-      .lobby-logo { width: min(260px, 42vw) !important; margin: 0 0 2px !important; }
+      .lobby-logo { width: min(220px, 38vw) !important; margin: 0 0 2px !important; }
       .lobby-fs-hint, .lobby-edition { display: none !important; }
       .lobby-play-btn, .lobby-ghost-btn { height: 40px !important; font-size: 15px !important; }
       .lobby-main-land { max-width: min(720px, 100%) !important; }
@@ -982,7 +982,7 @@ function ensureKeyframes() {
       .lobby-fs-hint { display: none !important; }
     }
     @media (orientation: landscape) and (max-height: 520px) {
-      .lobby-logo { width: min(260px, 42vw) !important; margin: 0 0 2px !important; }
+      .lobby-logo { width: min(220px, 38vw) !important; margin: 0 0 2px !important; }
       .lobby-fs-hint, .lobby-edition { display: none !important; }
       .lobby-play-btn, .lobby-ghost-btn { height: 40px !important; font-size: 15px !important; }
       .lobby-main-land { max-width: min(720px, 100%) !important; }
@@ -6319,6 +6319,7 @@ function Lobby({
             gap: 18,
             padding: "0 8px",
             boxSizing: "border-box",
+            overflow: "auto",
           }}
         >
           <div
@@ -6329,6 +6330,7 @@ function Lobby({
               flexDirection: "column",
               alignItems: "center",
               textAlign: "center",
+              justifyContent: "center",
             }}
           >
             <img
@@ -6338,7 +6340,7 @@ function Lobby({
               width={360}
               height={100}
               style={{
-                width: "min(260px, 42vw)",
+                width: "min(220px, 38vw)",
                 maxWidth: "100%",
                 height: "auto",
                 display: "block",
@@ -8074,7 +8076,7 @@ function GamesPlayedLine({ compact }: { compact?: boolean }) {
         const data = await res.json();
         if (stop) return;
         const n = Number(data && data.matches);
-        setTotal(Number.isFinite(n) && n > 0 ? Math.floor(n) : 0);
+        setTotal(Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0);
       } catch {
         if (!stop) setTotal(null);
       }
@@ -8084,7 +8086,6 @@ function GamesPlayedLine({ compact }: { compact?: boolean }) {
     };
   }, []);
 
-  if (total === null) return null;
   return (
     <div
       style={{
@@ -8094,9 +8095,12 @@ function GamesPlayedLine({ compact }: { compact?: boolean }) {
         fontWeight: 600,
         letterSpacing: 0.4,
         textShadow: "0 1px 8px rgba(0,0,0,0.35)",
+        minHeight: compact ? 16 : 18,
       }}
     >
-      {total.toLocaleString("en-US")} {total === 1 ? "game played" : "games played"}
+      {total === null
+        ? "…"
+        : `${total.toLocaleString("en-US")} ${total === 1 ? "game played" : "games played"}`}
     </div>
   );
 }
@@ -8189,61 +8193,36 @@ function FundraiserMeter({ compact }: { compact?: boolean }) {
     return () => window.clearTimeout(t);
   }, []);
 
-  const chips = <LobbySupportChips />;
+  const loading = raised === null;
+  const shown = loading ? 0 : raised;
+  const pct = Math.max(0, Math.min(100, Math.round((100 * shown) / goal)));
 
-  if (raised === null) {
-    return (
-      <div
-        style={{
-          marginTop: compact ? 6 : 10,
-          width: compact ? "min(280px, 94%)" : "min(320px, 92vw)",
-          marginLeft: "auto",
-          marginRight: "auto",
-          textAlign: "center",
-          display: "flex",
-          justifyContent: "center",
-        }}
-      >
-        {chips}
-      </div>
-    );
-  }
-  const pct = Math.max(0, Math.min(100, Math.round((100 * raised) / goal)));
   return (
     <div
       style={{
         marginTop: compact ? 6 : 10,
-        width: compact ? "min(280px, 94%)" : "min(320px, 92vw)",
+        width: compact ? "min(260px, 100%)" : "min(300px, 92vw)",
+        maxWidth: "100%",
         marginLeft: "auto",
         marginRight: "auto",
         textAlign: "center",
+        boxSizing: "border-box",
       }}
     >
       <div
         style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 8,
+          fontSize: compact ? 11 : 12,
+          fontWeight: 700,
+          letterSpacing: 0.3,
+          color: "rgba(245,240,230,0.78)",
+          textShadow: "0 1px 8px rgba(0,0,0,0.35)",
           marginBottom: 5,
-          flexWrap: "wrap",
+          minHeight: compact ? 14 : 16,
         }}
       >
-        <div
-          style={{
-            fontSize: compact ? 11 : 12,
-            fontWeight: 700,
-            letterSpacing: 0.3,
-            color: "rgba(245,240,230,0.78)",
-            textShadow: "0 1px 8px rgba(0,0,0,0.35)",
-            textAlign: "left",
-            flex: "1 1 120px",
-            minWidth: 0,
-          }}
-        >
-          {formatEuroCents(raised)} / {formatEuroCents(goal)} raised
-        </div>
-        {chips}
+        {loading
+          ? "…"
+          : `${formatEuroCents(shown)} / ${formatEuroCents(goal)} raised`}
       </div>
       <div
         style={{
@@ -8260,10 +8239,20 @@ function FundraiserMeter({ compact }: { compact?: boolean }) {
             height: "100%",
             borderRadius: 999,
             background: "linear-gradient(90deg, #c9a227, #f1c40f)",
-            boxShadow: "0 0 10px rgba(241,196,15,0.35)",
+            boxShadow: pct > 0 ? "0 0 10px rgba(241,196,15,0.35)" : "none",
             transition: "width 0.45s ease",
           }}
         />
+      </div>
+      <div
+        style={{
+          marginTop: 8,
+          display: "flex",
+          justifyContent: "center",
+          width: "100%",
+        }}
+      >
+        <LobbySupportChips />
       </div>
     </div>
   );
