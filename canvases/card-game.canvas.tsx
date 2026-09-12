@@ -8764,7 +8764,22 @@ type SponsorRow = {
   avatar: string;
   plus: boolean;
   supporter: boolean;
+  amountCents: number;
 };
+
+function mapSponsorRows(list: any[]): SponsorRow[] {
+  return list
+    .map((s: any) => ({
+      id: String(s.id || ""),
+      name: String(s.name || "Player").slice(0, 18) || "Player",
+      avatar: String(s.avatar || ""),
+      plus: !!s.plus,
+      supporter: !!s.supporter,
+      amountCents: Math.max(0, Math.floor(Number(s.amountCents) || 0)),
+    }))
+    .filter((s: SponsorRow) => s.id && s.amountCents > 0)
+    .sort((a, b) => b.amountCents - a.amountCents || a.name.localeCompare(b.name));
+}
 
 function SponsorsStrip({ compact }: { compact?: boolean }) {
   const [sponsors, setSponsors] = useState<SponsorRow[] | null>(null);
@@ -8777,17 +8792,7 @@ function SponsorsStrip({ compact }: { compact?: boolean }) {
         const data = await res.json();
         if (stop) return;
         const list = Array.isArray(data && data.sponsors) ? data.sponsors : [];
-        setSponsors(
-          list
-            .map((s: any) => ({
-              id: String(s.id || ""),
-              name: String(s.name || "Player").slice(0, 18) || "Player",
-              avatar: String(s.avatar || ""),
-              plus: !!s.plus,
-              supporter: !!s.supporter,
-            }))
-            .filter((s: SponsorRow) => s.id && (s.plus || s.supporter))
-        );
+        setSponsors(mapSponsorRows(list));
       } catch {
         if (!stop) setSponsors([]);
       }
@@ -8806,17 +8811,7 @@ function SponsorsStrip({ compact }: { compact?: boolean }) {
         .then((r) => r.json())
         .then((data) => {
           const list = Array.isArray(data && data.sponsors) ? data.sponsors : [];
-          setSponsors(
-            list
-              .map((s: any) => ({
-                id: String(s.id || ""),
-                name: String(s.name || "Player").slice(0, 18) || "Player",
-                avatar: String(s.avatar || ""),
-                plus: !!s.plus,
-                supporter: !!s.supporter,
-              }))
-              .filter((s: SponsorRow) => s.id && (s.plus || s.supporter))
-          );
+          setSponsors(mapSponsorRows(list));
         })
         .catch(() => {});
     }, 1200);

@@ -67,14 +67,27 @@ function normalizeSponsor(raw) {
       .replace(/\s+/g, " ")
       .trim()
       .slice(0, 18) || "Player";
+  const amountCents = Math.max(0, Math.floor(Number((raw && raw.amountCents) || 0)));
   return {
     id,
     name,
     avatar: String((raw && raw.avatar) || "").trim().slice(0, 500),
     plus: !!(raw && raw.plus),
     supporter: !!(raw && raw.supporter),
+    amountCents,
     at: Number((raw && raw.at) || 0) || Date.now(),
   };
+}
+
+function sortSponsorsInPlace() {
+  fund.sponsors = (fund.sponsors || [])
+    .filter((s) => s && s.id && (s.amountCents || 0) > 0)
+    .sort((a, b) => {
+      const byAmount = (b.amountCents || 0) - (a.amountCents || 0);
+      if (byAmount) return byAmount;
+      return (b.at || 0) - (a.at || 0);
+    })
+    .slice(0, SPONSORS_MAX);
 }
 
 function loadFund() {
@@ -82,7 +95,9 @@ function loadFund() {
     const raw = fs.readFileSync(fundPath(), "utf8");
     const parsed = JSON.parse(raw);
     const sponsors = Array.isArray(parsed.sponsors)
-      ? parsed.sponsors.map(normalizeSponsor).filter(Boolean)
+      ? parsed.sponsors
+          .map(normalizeSponsor)
+          .filter((s) => s && s.amountCents > 0)
       : [];
     fund = {
       raisedCents: Math.max(0, Math.floor(Number(parsed.raisedCents) || 0)),
@@ -90,6 +105,7 @@ function loadFund() {
       sponsors,
       updatedAt: Number(parsed.updatedAt) || 0,
     };
+    sortSponsorsInPlace();
   } catch {
     fund = emptyFund();
   }
@@ -164,25 +180,67 @@ function sponsorDisplayName(user) {
 
 function writeSponsor(entry) {
   const next = normalizeSponsor(entry);
-  if (!next) return;
-  if (!next.plus && !next.supporter) {
-    fund.sponsors = fund.sponsors.filter((s) => s.id !== next.id);
-    fund.updatedAt = Date.now();
-    saveFund();
+  if (!next || next.amountCents <= 0) {
+    if (next && next.id) {
+      fund.sponsors = fund.sponsors.filter((s) => s.id !== next.id);
+      fund.updatedAt = Date.now();
+      saveFund();
+    }
     return;
   }
   const i = fund.sponsors.findIndex((s) => s.id === next.id);
-  if (i >= 0) fund.sponsors[i] = { ...fund.sponsors[i], ...next, at: Date.now() };
-  else fund.sponsors.push({ ...next, at: Date.now() });
-  fund.sponsors.sort((a, b) => (b.at || 0) - (a.at || 0));
-  if (fund.sponsors.length > SPONSORS_MAX) fund.sponsors = fund.sponsors.slice(0, SPONSORS_MAX);
+  if (i >= 0) {
+    const prev = fund.sponsors[i];
+    fund.sponsors[i] = {
+      ...prev,
+      ...next,
+      amountCents: Math.max(prev.amountCents || 0, next.amountCents || 0),
+      at: Date.now(),
+    };
+  } else {
+    fund.sponsors.push({ ...next, at: Date.now() });
+  }
+  sortSponsorsInPlace();
   fund.updatedAt = Date.now();
   saveFund();
 }
 
+/** Add paid euros to a signed-in payer. Never invents sponsors from unpaid metadata. */
+function bumpSponsorAmount(userId, amountCents) {
+  const id = String(userId || "").trim();
+  const amount = Math.floor(Number(amountCents) || 0);
+  if (!id || amount <= 0) return;
+  const i = fund.sponsors.findIndex((s) => s.id === id);
+  if (i >= 0) {
+    fund.sponsors[i].amountCents = (fund.sponsors[i].amountCents || 0) + amount;
+    fund.sponsors[i].at = Date.now();
+  } else {
+    fund.sponsors.push({
+      id,
+      name: "Player",
+      avatar: "",
+      plus: false,
+      supporter: false,
+      amountCents: amount,
+      at: Date.now(),
+    });
+  }
+  sortSponsorsInPlace();
+}
+
+/** Refresh name/avatar/flags for an existing paying sponsor only. */
 async function syncSponsor(userId) {
   const id = String(userId || "").trim();
   if (!id) return;
+  const i = fund.sponsors.findIndex((s) => s.id === id);
+  if (i < 0) return;
+  if ((fund.sponsors[i].amountCents || 0) <= 0) {
+    fund.sponsors.splice(i, 1);
+    sortSponsorsInPlace();
+    fund.updatedAt = Date.now();
+    saveFund();
+    return;
+  }
   let user = null;
   try {
     user = await loadClerkUser(id);
@@ -191,87 +249,35 @@ async function syncSponsor(userId) {
   }
   if (!user) return;
   const meta = user.public_metadata || {};
-  writeSponsor({
-    id,
+  fund.sponsors[i] = {
+    ...fund.sponsors[i],
     name: sponsorDisplayName(user),
     avatar: String(user.image_url || "").trim(),
     plus: metaHasActivePlus(meta),
     supporter: !!meta[META_SUPPORTER],
-  });
+  };
+  sortSponsorsInPlace();
+  fund.updatedAt = Date.now();
+  saveFund();
 }
 
-function clerkUsersFromResponse(batch) {
-  if (Array.isArray(batch)) return batch;
-  if (batch && Array.isArray(batch.data)) return batch.data;
-  return [];
-}
-
+/** Only refresh profiles for people who already paid. */
 async function refreshSponsorsFromClerk(force) {
-  if (!force && Date.now() - sponsorsRefreshAt < SPONSORS_REFRESH_MS && fund.sponsors.length) {
-    return;
-  }
+  if (!force && Date.now() - sponsorsRefreshAt < SPONSORS_REFRESH_MS) return;
   const key = String(process.env.CLERK_SECRET_KEY || "").trim();
   if (!key) {
     sponsorsRefreshAt = Date.now();
     return;
   }
-  const found = [];
-  let offset = 0;
-  for (let page = 0; page < 20; page++) {
-    let batch;
+  const paid = fund.sponsors.filter((s) => s && (s.amountCents || 0) > 0);
+  for (const row of paid) {
     try {
-      batch = await clerkApi("GET", `/users?limit=100&offset=${offset}&order_by=-updated_at`);
-    } catch {
-      try {
-        batch = await clerkApi("GET", `/users?limit=100&offset=${offset}`);
-      } catch (err) {
-        console.warn("sponsors clerk list", err && err.message);
-        break;
-      }
+      await syncSponsor(row.id);
+    } catch (err) {
+      console.warn("sponsor profile refresh", err && err.message);
     }
-    const list = clerkUsersFromResponse(batch);
-    if (!list.length) break;
-    for (const user of list) {
-      if (!user || !user.id) continue;
-      const meta = user.public_metadata || {};
-      const plus = metaHasActivePlus(meta);
-      const supporter = !!meta[META_SUPPORTER];
-      if (!plus && !supporter) continue;
-      // One-time backfill: lifetime tippers without an expiry get 30 days of Plus from now.
-      if (supporter && !meta[META_PLUS] && !plusUntilMs(meta)) {
-        try {
-          await patchPlusMetadata(user.id, { plusUntil: Date.now() + DONATE_PLUS_MS });
-        } catch (err) {
-          console.warn("sponsor tip-plus backfill", err && err.message);
-        }
-      }
-      found.push(
-        normalizeSponsor({
-          id: user.id,
-          name: sponsorDisplayName(user),
-          avatar: String(user.image_url || "").trim(),
-          plus: metaHasActivePlus(meta) || (supporter && !plusUntilMs(meta)),
-          supporter,
-          at: Number(user.updated_at) || Date.now(),
-        })
-      );
-    }
-    offset += list.length;
-    if (list.length < 100) break;
   }
-  // Keep newer local timestamps when present
-  const byId = new Map();
-  for (const s of fund.sponsors) byId.set(s.id, s);
-  for (const s of found) {
-    if (!s) continue;
-    const prev = byId.get(s.id);
-    byId.set(s.id, prev ? { ...s, at: Math.max(prev.at || 0, s.at || 0) } : s);
-  }
-  fund.sponsors = [...byId.values()]
-    .filter((s) => s && (s.plus || s.supporter))
-    .sort((a, b) => (b.at || 0) - (a.at || 0))
-    .slice(0, SPONSORS_MAX);
-  fund.updatedAt = Date.now();
+  sortSponsorsInPlace();
   sponsorsRefreshAt = Date.now();
   saveFund();
 }
@@ -282,18 +288,22 @@ async function sponsorsPublic() {
   } catch (err) {
     console.warn("sponsors refresh", err && err.message);
   }
+  sortSponsorsInPlace();
   return {
-    sponsors: fund.sponsors.map((s) => ({
-      id: s.id,
-      name: s.name,
-      avatar: s.avatar,
-      plus: !!s.plus,
-      supporter: !!s.supporter,
-    })),
+    sponsors: fund.sponsors
+      .filter((s) => s && (s.amountCents || 0) > 0)
+      .map((s) => ({
+        id: s.id,
+        name: s.name,
+        avatar: s.avatar,
+        plus: !!s.plus,
+        supporter: !!s.supporter,
+        amountCents: Math.max(0, Math.floor(Number(s.amountCents) || 0)),
+      })),
   };
 }
 
-function creditRaised(sessionId, amountCents) {
+function creditRaised(sessionId, amountCents, payerUserId) {
   const id = String(sessionId || "").trim();
   const amount = Math.floor(Number(amountCents) || 0);
   if (!id || amount <= 0) return false;
@@ -303,6 +313,8 @@ function creditRaised(sessionId, amountCents) {
     fund.processed = fund.processed.slice(-PROCESSED_MAX);
   }
   fund.raisedCents += amount;
+  const uid = String(payerUserId || "").trim();
+  if (uid) bumpSponsorAmount(uid, amount);
   fund.updatedAt = Date.now();
   saveFund();
   return true;
@@ -557,15 +569,16 @@ async function handleCheckoutCompleted(session) {
   const mode = String((session && session.mode) || "").toLowerCase();
   const amount = Math.floor(Number(session.amount_total) || 0);
   const currency = String(session.currency || "").toLowerCase();
-  if (session.payment_status === "paid" && amount > 0 && currency === "eur") {
-    creditRaised(session.id, amount);
-  }
+  const clerkUserId = String(
+    (session && session.metadata && session.metadata.clerkUserId) || session.client_reference_id || ""
+  ).trim();
 
   if (kind === "donate" || mode === "payment") {
-    const clerkUserId = String(
-      (session && session.metadata && session.metadata.clerkUserId) || session.client_reference_id || ""
-    ).trim();
-    if (clerkUserId && session.payment_status === "paid") {
+    const paid = session.payment_status === "paid" && amount > 0 && currency === "eur";
+    if (paid) {
+      creditRaised(session.id, amount, clerkUserId || undefined);
+    }
+    if (clerkUserId && paid) {
       try {
         const user = await loadClerkUser(clerkUserId);
         const meta = (user && user.public_metadata) || {};
@@ -573,6 +586,7 @@ async function handleCheckoutCompleted(session) {
           supporter: true,
           plusUntil: nextDonatePlusUntil(meta),
         });
+        await syncSponsor(clerkUserId);
       } catch (err) {
         console.warn("donate supporter/plus grant", err && err.message);
       }
@@ -580,8 +594,7 @@ async function handleCheckoutCompleted(session) {
     return;
   }
 
-  const clerkUserId =
-    String((session && session.metadata && session.metadata.clerkUserId) || session.client_reference_id || "").trim();
+  // Subscription checkout: attribute money on invoice.paid (avoids double-count with session total).
   if (!clerkUserId) return;
   const customerId = typeof session.customer === "string" ? session.customer : "";
   const subscriptionId = typeof session.subscription === "string" ? session.subscription : "";
@@ -630,7 +643,13 @@ async function handleInvoiceEvent(invoice) {
   const currency = String(invoice.currency || "").toLowerCase();
   const invId = String(invoice.id || "").trim();
   if (amount > 0 && currency === "eur" && invId) {
-    creditRaised(`inv_${invId}`, amount);
+    if (creditRaised(`inv_${invId}`, amount, clerkUserId)) {
+      try {
+        await syncSponsor(clerkUserId);
+      } catch (err) {
+        console.warn("sponsor sync after invoice", err && err.message);
+      }
+    }
   }
 }
 
