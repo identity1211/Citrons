@@ -2926,6 +2926,8 @@ async function ensureClerk(): Promise<any> {
       const fromCallback = isClerkCallbackUrl(callbackHref);
       if (fromCallback || !w.Clerk.user) {
         await activateClerkSession(w.Clerk, fromCallback);
+      } else if (w.Clerk.session && String(w.Clerk.session.status || "") && String(w.Clerk.session.status) !== "active") {
+        await ensureActiveClerkSession(w.Clerk);
       }
       return w.Clerk;
     }
@@ -2942,6 +2944,8 @@ async function ensureClerk(): Promise<any> {
     const fromCallback = isClerkCallbackUrl(callbackHref);
     if (fromCallback || !clerk.user) {
       await activateClerkSession(clerk, fromCallback);
+    } else if (clerk.session && String(clerk.session.status || "") && String(clerk.session.status) !== "active") {
+      await ensureActiveClerkSession(clerk);
     }
     if (clerk.user && isClerkCallbackUrl(window.location.href)) {
       try {
@@ -3100,22 +3104,97 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
   });
 }
 
+function clerkSessionIds(clerk: any): string[] {
+  const ids: string[] = [];
+  const push = (v: unknown) => {
+    const id = typeof v === "string" ? v.trim() : "";
+    if (id && ids.indexOf(id) === -1) ids.push(id);
+  };
+  push(clerk?.session?.id);
+  push(clerk?.client?.lastActiveSessionId);
+  push(clerk?.client?.signIn?.createdSessionId);
+  push(clerk?.client?.signUp?.createdSessionId);
+  const sessions = clerk?.client?.sessions;
+  if (Array.isArray(sessions)) {
+    for (const s of sessions) push(s && s.id);
+  }
+  return ids;
+}
+
+/** Safari often keeps clerk.user from cache while session JWT minting is inactive. */
+async function ensureActiveClerkSession(clerk: any): Promise<any> {
+  if (!clerk) return null;
+  const status = String(clerk.session?.status || "");
+  if (clerk.session && typeof clerk.session.getToken === "function" && (!status || status === "active")) {
+    return clerk.session;
+  }
+  if (typeof clerk.setActive !== "function") return clerk.session || null;
+  for (const id of clerkSessionIds(clerk)) {
+    try {
+      await withTimeout(clerk.setActive({ session: id }), 10000, "Sign-in timed out");
+      if (clerk.session && typeof clerk.session.getToken === "function") return clerk.session;
+    } catch {
+      /* try next */
+    }
+  }
+  return clerk.session || null;
+}
+
 async function clerkSessionToken(clerk: any): Promise<string> {
-  const session = clerk && clerk.session;
-  if (!session || typeof session.getToken !== "function") return "";
-  // Prefer cached token first — Safari iOS often stalls on cold / skipCache getToken.
-  try {
-    const cached = await withTimeout(session.getToken(), 8000, "Sign-in timed out");
-    if (cached) return String(cached);
-  } catch {
-    /* try again */
+  if (!clerk) return "";
+  let lastErr: Error | null = null;
+  const tryToken = async (session: any, opts?: Record<string, unknown>) => {
+    if (!session || typeof session.getToken !== "function") return "";
+    const token = await withTimeout(
+      opts ? session.getToken(opts) : session.getToken(),
+      12000,
+      "Sign-in timed out"
+    );
+    return token ? String(token) : "";
+  };
+
+  // 1) Active / cached session
+  let session = await ensureActiveClerkSession(clerk);
+  for (const opts of [undefined, { skipCache: true }, { leewayInSeconds: 60 }] as (Record<string, unknown> | undefined)[]) {
+    try {
+      const token = await tryToken(session, opts);
+      if (token) return token;
+    } catch (e: any) {
+      lastErr = e instanceof Error ? e : new Error(String(e?.message || e));
+    }
   }
-  try {
-    const fresh = await withTimeout(session.getToken({ skipCache: true }), 8000, "Sign-in timed out");
-    return String(fresh || "");
-  } catch {
-    return "";
+
+  // 2) Force re-activate even when clerk.user already exists (Safari iOS)
+  if (typeof clerk.setActive === "function") {
+    for (const id of clerkSessionIds(clerk)) {
+      try {
+        await withTimeout(clerk.setActive({ session: id }), 10000, "Sign-in timed out");
+        session = clerk.session;
+        const token = await tryToken(session, { skipCache: true });
+        if (token) return token;
+      } catch (e: any) {
+        lastErr = e instanceof Error ? e : new Error(String(e?.message || e));
+      }
+    }
   }
+
+  // 3) Touch then mint
+  try {
+    session = clerk.session;
+    if (session && typeof session.touch === "function") {
+      await withTimeout(session.touch(), 8000, "Sign-in timed out");
+    }
+    const token = await tryToken(clerk.session, { skipCache: true });
+    if (token) return token;
+  } catch (e: any) {
+    lastErr = e instanceof Error ? e : new Error(String(e?.message || e));
+  }
+
+  if (lastErr && /timed out/i.test(lastErr.message)) throw lastErr;
+  if (clerk.user) {
+    throw new Error("Couldn't refresh your session token. Reload the page, or sign out and sign in again.");
+  }
+  return "";
 }
 
 async function fetchBillingJson(
@@ -3161,20 +3240,74 @@ function navigateOffsite(url: string) {
   }
 }
 
-/** If Safari never leaves the page, surface an error instead of leaving the button stuck. */
-async function leaveForCheckout(url: string) {
-  navigateOffsite(url);
+/** Open during the click gesture so Safari allows later navigation after await. */
+function openCheckoutBridge(): Window | null {
+  try {
+    const w = window.open("", "_blank");
+    if (w) {
+      try {
+        w.opener = null;
+      } catch {
+        /* ignore */
+      }
+      try {
+        w.document.title = "Opening checkout…";
+      } catch {
+        /* ignore */
+      }
+    }
+    return w;
+  } catch {
+    return null;
+  }
+}
+
+/** Prefer gesture-opened tab on iOS; fall back to same-tab replace. */
+async function leaveForCheckout(url: string, bridge?: Window | null) {
+  const href = String(url || "");
+  if (!href) throw new Error("Checkout URL missing");
+
+  if (bridge && !bridge.closed) {
+    try {
+      bridge.location.href = href;
+      await new Promise((r) => window.setTimeout(r, 400));
+      try {
+        const loc = String(bridge.location.href || "");
+        if (loc && loc !== "about:blank") return;
+      } catch {
+        // Cross-origin after Stripe load — navigation succeeded.
+        return;
+      }
+    } catch {
+      try {
+        bridge.close();
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  navigateOffsite(href);
   await new Promise((r) => window.setTimeout(r, 2800));
   throw new Error("Couldn't open Stripe. Disable content blockers for citrons.lat and try again.");
+}
+
+function billingAuthError(clerk: any, serverMsg?: string): Error {
+  const msg = String(serverMsg || "").trim();
+  if (msg && !/^sign in required$/i.test(msg)) return new Error(msg);
+  if (clerk && clerk.user) {
+    return new Error("Couldn't verify your sign-in for checkout. Reload the page, or sign out and sign in again.");
+  }
+  return new Error("Sign in required");
 }
 
 async function startPlusCheckout(): Promise<string> {
   const clerk = await withTimeout(ensureClerk(), 15000, "Clerk timed out — reload and try again");
   const token = await clerkSessionToken(clerk);
-  if (!token) throw new Error("Sign in required");
+  if (!token) throw billingAuthError(clerk);
   const base = appUrl();
   const join = base.includes("?") ? "&" : "?";
-  const { ok, data } = await fetchBillingJson(
+  const { ok, status, data } = await fetchBillingJson(
     "/billing/checkout",
     {
       method: "POST",
@@ -3183,21 +3316,25 @@ async function startPlusCheckout(): Promise<string> {
         Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({
+        clerkToken: token,
         successUrl: `${base}${join}plus=success`,
         cancelUrl: `${base}${join}plus=cancel`,
       }),
     },
     20000
   );
-  if (!ok || !data.url) throw new Error(data.error || "Checkout failed");
+  if (!ok || !data.url) {
+    if (status === 401) throw billingAuthError(clerk, data.error);
+    throw new Error(data.error || "Checkout failed");
+  }
   return String(data.url);
 }
 
 async function openPlusPortal(): Promise<string> {
   const clerk = await withTimeout(ensureClerk(), 15000, "Clerk timed out — reload and try again");
   const token = await clerkSessionToken(clerk);
-  if (!token) throw new Error("Sign in required");
-  const { ok, data } = await fetchBillingJson(
+  if (!token) throw billingAuthError(clerk);
+  const { ok, status, data } = await fetchBillingJson(
     "/billing/portal",
     {
       method: "POST",
@@ -3205,11 +3342,14 @@ async function openPlusPortal(): Promise<string> {
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({ returnUrl: appUrl() }),
+      body: JSON.stringify({ clerkToken: token, returnUrl: appUrl() }),
     },
     20000
   );
-  if (!ok || !data.url) throw new Error(data.error || "Portal failed");
+  if (!ok || !data.url) {
+    if (status === 401) throw billingAuthError(clerk, data.error);
+    throw new Error(data.error || "Portal failed");
+  }
   return String(data.url);
 }
 
@@ -3217,7 +3357,11 @@ async function startDonateCheckout(amountCents: number): Promise<string> {
   let token = "";
   try {
     const clerk = await withTimeout(ensureClerk(), 12000, "Clerk timed out — reload and try again");
-    token = await clerkSessionToken(clerk);
+    try {
+      token = await clerkSessionToken(clerk);
+    } catch {
+      /* tip still works as guest if session token cannot be minted */
+    }
   } catch {
     /* guest donate ok */
   }
@@ -3945,12 +4089,22 @@ function ProfileButton() {
                     <button
                       type="button"
                       disabled={isBusy}
-                      onClick={() =>
+                      onClick={() => {
+                        const bridge = openCheckoutBridge();
                         run(async () => {
-                          const url = await openPlusPortal();
-                          await leaveForCheckout(url);
-                        }, "portal")
-                      }
+                          try {
+                            const url = await openPlusPortal();
+                            await leaveForCheckout(url, bridge);
+                          } catch (e) {
+                            try {
+                              bridge?.close();
+                            } catch {
+                              /* ignore */
+                            }
+                            throw e;
+                          }
+                        }, "portal");
+                      }}
                       style={{ ...LOBBY_GOLD_BTN, maxWidth: "100%", height: 40, fontSize: 14, marginBottom: 4 }}
                     >
                       {busy === "portal" ? "Opening…" : "Manage subscription"}
@@ -3971,12 +4125,22 @@ function ProfileButton() {
                   <button
                     type="button"
                     disabled={isBusy}
-                    onClick={() =>
+                    onClick={() => {
+                      const bridge = openCheckoutBridge();
                       run(async () => {
-                        const url = await startPlusCheckout();
-                        await leaveForCheckout(url);
-                      }, "checkout")
-                    }
+                        try {
+                          const url = await startPlusCheckout();
+                          await leaveForCheckout(url, bridge);
+                        } catch (e) {
+                          try {
+                            bridge?.close();
+                          } catch {
+                            /* ignore */
+                          }
+                          throw e;
+                        }
+                      }, "checkout");
+                    }}
                     style={{ ...LOBBY_GOLD_BTN, maxWidth: "100%", height: 40, fontSize: 14, marginBottom: 4 }}
                   >
                     {busy === "checkout" ? "Opening checkout…" : `Subscribe · ${PLUS_PRICE_LABEL}`}
@@ -8378,10 +8542,17 @@ function DonateButton({ compact }: { compact?: boolean }) {
   async function pay(cents: number) {
     setBusy(true);
     setMsg("");
+    const bridge = openCheckoutBridge();
     try {
       const url = await startDonateCheckout(cents);
-      await leaveForCheckout(url);
+      await leaveForCheckout(url, bridge);
+      setBusy(false);
     } catch (e) {
+      try {
+        bridge?.close();
+      } catch {
+        /* ignore */
+      }
       setMsg(clerkErrorText(e));
       setBusy(false);
     }
@@ -10446,9 +10617,9 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
 
   async function clerkPayload() {
     const clerk = await ensureClerk();
-    const token = clerk.session ? await clerk.session.getToken() : "";
+    const token = await clerkSessionToken(clerk);
     const u = clerk.user;
-    if (!token || !u) throw new Error("Sign in with Google first");
+    if (!token || !u) throw billingAuthError(clerk);
     const nick = clerkNickname(u);
     persistName(nick);
     return { name: nick, avatar: u.imageUrl || "", clerkToken: token };
