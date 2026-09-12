@@ -3052,9 +3052,13 @@ async function clerkSessionHasPlus(clerk?: any): Promise<boolean> {
 
 async function fetchBillingStatus(clerkToken: string): Promise<{ plus?: boolean } | null> {
   try {
+    const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const t = ctrl ? window.setTimeout(() => ctrl.abort(), 8000) : 0;
     const res = await fetch(httpUrlFromWs(defaultWsUrl(), "/billing/status"), {
       headers: { Authorization: `Bearer ${clerkToken}` },
+      signal: ctrl ? ctrl.signal : undefined,
     });
+    if (t) window.clearTimeout(t);
     if (!res.ok) return null;
     return await res.json();
   } catch {
@@ -3552,12 +3556,12 @@ function PlayerStatsBody({ userId }: { userId: string }) {
 }
 
 function ProfileButton() {
-  const { loaded, user, isPlus, setIsPlus, error } = useClerkAuth();
+  const { loaded, user, isPlus, setIsPlus, isSupporter, setIsSupporter, error } = useClerkAuth();
   const shortLand = useShortLandscape();
   const [open, setOpen] = useState(false);
   const [pane, setPane] = useState<"profile" | "edit" | "stats" | "plus">("profile");
   const [nick, setNick] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState("");
   const [msg, setMsg] = useState("");
   const fileRef = useRef<HTMLInputElement | null>(null);
 
@@ -3636,15 +3640,15 @@ function ProfileButton() {
     };
   }, [setIsPlus]);
 
-  async function run(fn: () => Promise<void>) {
-    setBusy(true);
+  async function run(fn: () => Promise<void>, kind = "work") {
+    setBusy(kind);
     setMsg("");
     try {
       await fn();
     } catch (e) {
       setMsg(clerkErrorText(e));
     } finally {
-      setBusy(false);
+      setBusy("");
     }
   }
 
@@ -3652,6 +3656,7 @@ function ProfileButton() {
   const paneTitle =
     pane === "stats" ? "Stats" : pane === "plus" ? "Citrons Plus" : pane === "edit" ? "Edit profile" : "Profile";
   const showBack = !!user && pane !== "profile";
+  const isBusy = !!busy;
 
   return (
     <>
@@ -3823,35 +3828,35 @@ function ProfileButton() {
                 {isPlus ? (
                   <button
                     type="button"
-                    disabled={busy}
+                    disabled={isBusy}
                     onClick={() =>
                       run(async () => {
                         const url = await openPlusPortal();
                         window.location.assign(url);
-                      })
+                      }, "portal")
                     }
                     style={{ ...LOBBY_GOLD_BTN, maxWidth: "100%", height: 40, fontSize: 14, marginBottom: 4 }}
                   >
-                    {busy ? "Opening…" : "Manage subscription"}
+                    {busy === "portal" ? "Opening…" : "Manage subscription"}
                   </button>
                 ) : (
                   <button
                     type="button"
-                    disabled={busy}
+                    disabled={isBusy}
                     onClick={() =>
                       run(async () => {
                         const url = await startPlusCheckout();
                         window.location.assign(url);
-                      })
+                      }, "checkout")
                     }
                     style={{ ...LOBBY_GOLD_BTN, maxWidth: "100%", height: 40, fontSize: 14, marginBottom: 4 }}
                   >
-                    {busy ? "Opening checkout…" : `Subscribe · ${PLUS_PRICE_LABEL}`}
+                    {busy === "checkout" ? "Opening checkout…" : `Subscribe · ${PLUS_PRICE_LABEL}`}
                   </button>
                 )}
                 <button
                   type="button"
-                  disabled={busy}
+                  disabled={isBusy}
                   onClick={() =>
                     run(async () => {
                       const clerk = await ensureClerk();
@@ -3860,10 +3865,19 @@ function ProfileButton() {
                       } catch {
                         /* ignore */
                       }
-                      const plus = await clerkSessionHasPlus(clerk);
+                      const u = clerk.user;
+                      setIsSupporter(userPublicMetaSupporter(u));
+                      let plus = userPublicMetaPlus(u);
+                      if (!plus) plus = await clerkSessionHasPlus(clerk);
                       setIsPlus(plus);
-                      setMsg(plus ? "Plus is active" : "Not subscribed yet");
-                    })
+                      setMsg(
+                        plus
+                          ? "Plus is active"
+                          : userPublicMetaSupporter(u)
+                            ? "Supporter active (not Plus)"
+                            : "Not subscribed yet"
+                      );
+                    }, "refresh")
                   }
                   style={{
                     ...PROFILE_MUTED_BTN,
@@ -3876,7 +3890,7 @@ function ProfileButton() {
                     textUnderlineOffset: 2,
                   }}
                 >
-                  Refresh status
+                  {busy === "refresh" ? "Refreshing…" : "Refresh status"}
                 </button>
               </>
             ) : user && pane === "edit" ? (
@@ -3893,7 +3907,7 @@ function ProfileButton() {
                 />
                 <button
                   type="button"
-                  disabled={busy}
+                  disabled={isBusy}
                   onClick={() =>
                     run(async () => {
                       const next = nick.replace(/\s+/g, " ").trim().slice(0, 18) || "Player";
@@ -3907,15 +3921,15 @@ function ProfileButton() {
                         /* ignore */
                       }
                       setMsg("Nickname saved");
-                    })
+                    }, "save")
                   }
                   style={{ ...LOBBY_GOLD_BTN, maxWidth: "100%", height: 36, fontSize: 14, marginBottom: 8 }}
                 >
-                  {busy ? "Saving…" : "Save nickname"}
+                  {busy === "save" ? "Saving…" : "Save nickname"}
                 </button>
                 <button
                   type="button"
-                  disabled={busy}
+                  disabled={isBusy}
                   onClick={() => fileRef.current?.click()}
                   style={PROFILE_GHOST}
                 >
@@ -3937,7 +3951,7 @@ function ProfileButton() {
                     void run(async () => {
                       await user.setProfileImage({ file });
                       setMsg("Avatar updated");
-                    });
+                    }, "avatar");
                   }}
                 />
               </>
@@ -4024,7 +4038,7 @@ function ProfileButton() {
 
                 <button
                   type="button"
-                  disabled={busy}
+                  disabled={isBusy}
                   onClick={() =>
                     run(async () => {
                       const clerk = await ensureClerk();
@@ -4034,7 +4048,7 @@ function ProfileButton() {
                       if (!window.location.href.startsWith(after)) {
                         window.location.replace(after);
                       }
-                    })
+                    }, "signout")
                   }
                   style={{ ...PROFILE_DANGER_BTN, marginBottom: 8 }}
                 >
@@ -4051,15 +4065,15 @@ function ProfileButton() {
                 </div>
                 <button
                   type="button"
-                  disabled={busy || !loaded}
+                  disabled={isBusy || !loaded}
                   onClick={() =>
                     run(async () => {
                       await signInWithGoogle();
-                    })
+                    }, "signin")
                   }
                   style={{ ...LOBBY_GOLD_BTN, maxWidth: "100%", height: 42, fontSize: 15, marginBottom: 10 }}
                 >
-                  {busy ? "Opening Google…" : "Sign in with Google"}
+                  {busy === "signin" ? "Opening Google…" : "Sign in with Google"}
                 </button>
                 <button type="button" onClick={() => setOpen(false)} style={PROFILE_MUTED_BTN}>
                   Close
