@@ -1120,6 +1120,20 @@ function ensureKeyframes() {
     }
     .emoji-rail::-webkit-scrollbar { display: none; }
     .emoji-rail button { scroll-snap-align: start; flex: 0 0 auto; min-width: 40px; }
+    .look-rail {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      scroll-snap-type: x proximity;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+      overscroll-behavior-x: contain;
+      padding: 2px 2px 0;
+      margin: 0 -2px;
+    }
+    .look-rail::-webkit-scrollbar { display: none; }
+    .look-rail > button { scroll-snap-align: start; flex: 0 0 auto; }
     .chat-ime-bar {
       position: fixed;
       z-index: 140;
@@ -1186,12 +1200,6 @@ function ensureKeyframes() {
       animation: matchMenuIn 0.18s ease-out both;
       transform-origin: top right;
     }
-    .skin-menu-fly {
-      animation: matchMenuIn 0.18s ease-out both;
-      transform-origin: top center;
-      overscroll-behavior: contain;
-      -webkit-overflow-scrolling: touch;
-    }
     .ios-hint-pulse { animation: iosHintPulse 1.25s ease-in-out infinite; }
     @keyframes iosHintPulse {
       0%, 100% { transform: scale(1); }
@@ -1203,7 +1211,6 @@ function ensureKeyframes() {
       .chat-toast { animation: none !important; }
       .emoji-react-fly { animation: none !important; opacity: 0 !important; }
       .match-menu-fly { animation: none !important; }
-      .skin-menu-fly { animation: none !important; }
       .ios-hint-pulse { animation: none !important; }
     }
   `;
@@ -4142,7 +4149,7 @@ function PlayerStatsBody({ userId }: { userId: string }) {
   );
 }
 
-function ProfileButton() {
+function ProfileButton({ chip = true }: { chip?: boolean } = {}) {
   const { loaded, user, isPlus, setIsPlus, isSupporter, setIsSupporter, error } = useClerkAuth();
   const shortLand = useShortLandscape();
   const [open, setOpen] = useState(false);
@@ -4247,66 +4254,68 @@ function ProfileButton() {
 
   return (
     <>
-      <div
-        style={{
-          position: "absolute",
-          top: FELT_INSET_TOP,
-          right: FELT_INSET_RIGHT,
-          zIndex: 20,
-          pointerEvents: "auto",
-        }}
-      >
-        {user ? (
-          <span style={{ position: "relative", display: "inline-flex" }}>
-            <AvatarBubble src={user.imageUrl} name={nickName} size={40} onClick={() => setOpen(true)} />
-            {isPlus ? (
-              <span
-                style={{
-                  position: "absolute",
-                  right: -4,
-                  bottom: -4,
-                  fontSize: 9,
-                  fontWeight: 800,
-                  letterSpacing: 0.4,
-                  textTransform: "uppercase",
-                  color: "#1a2e1a",
-                  background: "#f1c40f",
-                  borderRadius: 6,
-                  padding: "2px 4px",
-                  boxShadow: "0 2px 6px rgba(0,0,0,0.35)",
-                  pointerEvents: "none",
-                }}
-              >
-                Plus
-              </span>
-            ) : null}
-          </span>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setOpen(true)}
-            style={{
-              ...LOBBY_CORNER_BTN,
-              position: "static",
-              left: "auto",
-              top: "auto",
-              background: "#f1c40f",
-              color: "#1a2e1a",
-              border: "none",
-              boxShadow: "0 4px 12px rgba(0,0,0,0.28)",
-            }}
-          >
-            {loaded ? "Sign in" : "…"}
-          </button>
-        )}
-      </div>
+      {chip ? (
+        <div
+          style={{
+            position: "absolute",
+            top: FELT_INSET_TOP,
+            right: FELT_INSET_RIGHT,
+            zIndex: 20,
+            pointerEvents: "auto",
+          }}
+        >
+          {user ? (
+            <span style={{ position: "relative", display: "inline-flex" }}>
+              <AvatarBubble src={user.imageUrl} name={nickName} size={40} onClick={() => setOpen(true)} />
+              {isPlus ? (
+                <span
+                  style={{
+                    position: "absolute",
+                    right: -4,
+                    bottom: -4,
+                    fontSize: 9,
+                    fontWeight: 800,
+                    letterSpacing: 0.4,
+                    textTransform: "uppercase",
+                    color: "#1a2e1a",
+                    background: "#f1c40f",
+                    borderRadius: 6,
+                    padding: "2px 4px",
+                    boxShadow: "0 2px 6px rgba(0,0,0,0.35)",
+                    pointerEvents: "none",
+                  }}
+                >
+                  Plus
+                </span>
+              ) : null}
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setOpen(true)}
+              style={{
+                ...LOBBY_CORNER_BTN,
+                position: "static",
+                left: "auto",
+                top: "auto",
+                background: "#f1c40f",
+                color: "#1a2e1a",
+                border: "none",
+                boxShadow: "0 4px 12px rgba(0,0,0,0.28)",
+              }}
+            >
+              {loaded ? "Sign in" : "…"}
+            </button>
+          )}
+        </div>
+      ) : null}
       {open && (
         <div
           onClick={() => setOpen(false)}
           style={{
-            position: "absolute",
+            position: chip ? "absolute" : "fixed",
             inset: 0,
-            zIndex: 80,
+            zIndex: 220,
             pointerEvents: "auto",
             background: "rgba(0,0,0,0.48)",
             display: "flex",
@@ -4999,16 +5008,18 @@ const FELT_TEXTURE =
   "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px), repeating-linear-gradient(90deg, transparent, transparent 2px, rgba(255,255,255,0.02) 2px, rgba(255,255,255,0.02) 4px)";
 const WOOD_EDGE = "#3e2723";
 const PELI_SKIN_SRC = "skins/peli.jpg";
+const LIFETIME_SKIN_SRC = "skins/lifetime.jpg";
 
-type TableSkinId = "felt" | "peli";
+type TableSkinId = "felt" | "peli" | "lifetime";
 
 const TABLE_SKINS: { id: TableSkinId; name: string; src?: string }[] = [
   { id: "felt", name: "Felt" },
   { id: "peli", name: "Peli case", src: PELI_SKIN_SRC },
+  { id: "lifetime", name: "Lifetime", src: LIFETIME_SKIN_SRC },
 ];
 
 function isTableSkin(id: unknown): id is TableSkinId {
-  return id === "felt" || id === "peli";
+  return id === "felt" || id === "peli" || id === "lifetime";
 }
 
 function feltShellStyle(skin: TableSkinId): CSSProperties {
@@ -5022,6 +5033,18 @@ function feltShellStyle(skin: TableSkinId): CSSProperties {
       boxShadow: "inset 0 0 0 10px #0a0a0a, inset 0 0 0 12px #2a2a2a",
       ["--felt" as string]: "#1a1a1a",
       ["--wood" as string]: "#0a0a0a",
+    };
+  }
+  if (skin === "lifetime") {
+    return {
+      backgroundColor: "#2c2c2a",
+      backgroundImage: `url(${LIFETIME_SKIN_SRC})`,
+      backgroundSize: "cover",
+      backgroundPosition: "center",
+      backgroundRepeat: "no-repeat",
+      boxShadow: "inset 0 0 0 10px #1a1a18, inset 0 0 0 12px #4a4a46",
+      ["--felt" as string]: "#d8d4cc",
+      ["--wood" as string]: "#1a1a18",
     };
   }
   return {
@@ -5042,6 +5065,16 @@ function tableBoardStyle(skin: TableSkinId, short: boolean): CSSProperties {
       backgroundPosition: "center 28%",
       backgroundRepeat: "no-repeat",
       border: short ? "6px solid #0d0d0d" : "10px solid #0d0d0d",
+    };
+  }
+  if (skin === "lifetime") {
+    return {
+      backgroundColor: "#c8c4bc",
+      backgroundImage: `url(${LIFETIME_SKIN_SRC})`,
+      backgroundSize: "cover",
+      backgroundPosition: "center",
+      backgroundRepeat: "no-repeat",
+      border: short ? "6px solid #3a3a36" : "10px solid #3a3a36",
     };
   }
   return {
@@ -5127,208 +5160,12 @@ function tablePreviewStyle(id: TableSkinId): CSSProperties {
       background: `#1a1a1a url(${PELI_SKIN_SRC}) center 30% / cover no-repeat`,
     };
   }
-  return { background: FELT_BG };
-}
-
-function YellowChevron() {
-  return (
-    <span
-      style={{
-        width: 0,
-        height: 0,
-        borderLeft: "6px solid transparent",
-        borderRight: "6px solid transparent",
-        borderTop: "8px solid #f1c40f",
-        display: "block",
-        flexShrink: 0,
-      }}
-    />
-  );
-}
-
-function SkinMenu({
-  value,
-  options,
-  disabled,
-  onChange,
-}: {
-  value: string;
-  options: { id: string; name: string; preview: CSSProperties }[];
-  disabled?: boolean;
-  onChange?: (id: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [flyMaxH, setFlyMaxH] = useState(240);
-  const [openUp, setOpenUp] = useState(false);
-  const wrapRef = useRef<HTMLDivElement | null>(null);
-  const flyRef = useRef<HTMLDivElement | null>(null);
-  const current = options.find((o) => o.id === value) || options[0];
-
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+  if (id === "lifetime") {
+    return {
+      background: `#c8c4bc url(${LIFETIME_SKIN_SRC}) center / cover no-repeat`,
     };
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, [open]);
-
-  useLayoutEffect(() => {
-    if (!open || !wrapRef.current) return;
-    const place = () => {
-      const rect = wrapRef.current!.getBoundingClientRect();
-      const gap = 8;
-      const below = Math.max(0, window.innerHeight - rect.bottom - gap - 8);
-      const above = Math.max(0, rect.top - gap - 8);
-      const preferUp = below < 168 && above > below;
-      const room = preferUp ? above : below;
-      setOpenUp(preferUp);
-      setFlyMaxH(Math.max(120, Math.min(300, room || 240)));
-    };
-    place();
-    window.addEventListener("resize", place);
-    window.visualViewport?.addEventListener("resize", place);
-    return () => {
-      window.removeEventListener("resize", place);
-      window.visualViewport?.removeEventListener("resize", place);
-    };
-  }, [open, options.length]);
-
-  function trapScroll(e: { stopPropagation: () => void }) {
-    e.stopPropagation();
   }
-
-  return (
-    <div ref={wrapRef} style={{ position: "relative", zIndex: open ? 40 : 2, flex: 1, minWidth: 0 }}>
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={() => {
-          if (!disabled) setOpen((v) => !v);
-        }}
-        style={{
-          width: "100%",
-          height: 52,
-          borderRadius: 10,
-          border: open ? "2px solid #f1c40f" : "1.5px solid rgba(255,255,255,0.28)",
-          padding: 0,
-          overflow: "hidden",
-          cursor: disabled ? "default" : "pointer",
-          display: "flex",
-          alignItems: "stretch",
-          background: "transparent",
-        }}
-      >
-        <span
-          style={{
-            flex: 1,
-            minWidth: 0,
-            ...current.preview,
-            position: "relative",
-            display: "block",
-          }}
-        >
-          <span
-            style={{
-              position: "absolute",
-              left: 8,
-              bottom: 6,
-              color: "#f5f0e6",
-              fontSize: 11,
-              fontWeight: 800,
-              textShadow: "0 1px 4px rgba(0,0,0,0.8)",
-            }}
-          >
-            {current.name}
-          </span>
-        </span>
-        <span
-          style={{
-            width: 28,
-            flexShrink: 0,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            background: "rgba(0,0,0,0.42)",
-            borderLeft: "1px solid rgba(255,255,255,0.18)",
-          }}
-        >
-          <YellowChevron />
-        </span>
-      </button>
-      {open ? (
-        <div
-          ref={flyRef}
-          className="skin-menu-fly"
-          onWheel={trapScroll}
-          onTouchMove={trapScroll}
-          onScroll={trapScroll}
-          style={{
-            position: "absolute",
-            left: 0,
-            right: 0,
-            ...(openUp
-              ? { bottom: "calc(100% + 4px)", top: "auto" }
-              : { top: "calc(100% + 4px)", bottom: "auto" }),
-            maxHeight: flyMaxH,
-            overflowX: "hidden",
-            overflowY: "auto",
-            overscrollBehavior: "contain",
-            WebkitOverflowScrolling: "touch",
-            touchAction: "pan-y",
-            borderRadius: 10,
-            border: "1px solid rgba(241,196,15,0.45)",
-            background: "rgba(8, 18, 10, 0.96)",
-            boxShadow: "0 12px 28px rgba(0,0,0,0.45)",
-            padding: 6,
-            display: "flex",
-            flexDirection: "column",
-            gap: 6,
-            boxSizing: "border-box",
-          }}
-        >
-          {options.map((opt) => {
-            const on = opt.id === value;
-            return (
-              <button
-                key={opt.id}
-                type="button"
-                onClick={() => {
-                  onChange?.(opt.id);
-                  setOpen(false);
-                }}
-                style={{
-                  height: 48,
-                  flex: "0 0 auto",
-                  borderRadius: 8,
-                  border: on ? "2px solid #f1c40f" : "1.5px solid rgba(255,255,255,0.22)",
-                  padding: 0,
-                  overflow: "hidden",
-                  cursor: "pointer",
-                  ...opt.preview,
-                  position: "relative",
-                }}
-              >
-                <span
-                  style={{
-                    position: "absolute",
-                    left: 8,
-                    bottom: 6,
-                    color: "#f5f0e6",
-                    fontSize: 11,
-                    fontWeight: 800,
-                    textShadow: "0 1px 4px rgba(0,0,0,0.8)",
-                  }}
-                >
-                  {opt.name}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      ) : null}
-    </div>
-  );
+  return { background: FELT_BG };
 }
 
 function LobbyStylePickers({
@@ -5344,47 +5181,141 @@ function LobbyStylePickers({
   onTable?: (id: TableSkinId) => void;
   onBack?: (id: CardBackId) => void;
 }) {
-  const sectionLabel: CSSProperties = {
+  const rowLabel: CSSProperties = {
     fontSize: 11,
     fontWeight: 800,
     letterSpacing: 1.3,
     textTransform: "uppercase",
     color: "rgba(255,255,255,0.62)",
-    marginBottom: 8,
+    marginBottom: 6,
     textAlign: "left",
   };
+  const nameUnder: CSSProperties = {
+    marginTop: 4,
+    fontSize: 10,
+    fontWeight: 700,
+    letterSpacing: 0.2,
+    color: "rgba(245,240,230,0.72)",
+    textAlign: "center",
+    lineHeight: 1.2,
+    maxWidth: "100%",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  };
+  const selectedName: CSSProperties = {
+    ...nameUnder,
+    color: "#f1c40f",
+  };
+
   return (
     <div style={{ width: "100%", flexShrink: 0, position: "relative", zIndex: 12 }}>
-      <div style={{ display: "flex", gap: 8 }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={sectionLabel}>Table</div>
-          <SkinMenu
-            value={table}
-            disabled={disabled}
-            onChange={(id) => onTable?.(id as TableSkinId)}
-            options={TABLE_SKINS.map((s) => ({
-              id: s.id,
-              name: s.name,
-              preview: tablePreviewStyle(s.id),
-            }))}
-          />
-        </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={sectionLabel}>Card back</div>
-          <SkinMenu
-            value={back}
-            disabled={disabled}
-            onChange={(id) => onBack?.(id as CardBackId)}
-            options={CARD_BACKS.map((s) => ({
-              id: s.id,
-              name: s.name,
-              preview: cardBackFill(s.id),
-            }))}
-          />
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 800,
+          letterSpacing: 1.3,
+          textTransform: "uppercase",
+          color: "rgba(255,255,255,0.62)",
+          marginBottom: 8,
+          textAlign: "left",
+        }}
+      >
+        Look
+      </div>
+
+      <div style={{ marginBottom: 10 }}>
+        <div style={rowLabel}>Table</div>
+        <div className="look-rail" role="listbox" aria-label="Table skin" aria-disabled={disabled || undefined}>
+          {TABLE_SKINS.map((s) => {
+            const on = s.id === table;
+            return (
+              <button
+                key={s.id}
+                type="button"
+                role="option"
+                aria-selected={on}
+                disabled={disabled}
+                onClick={() => {
+                  if (!disabled) onTable?.(s.id);
+                }}
+                style={{
+                  width: 76,
+                  padding: 0,
+                  border: "none",
+                  background: "transparent",
+                  cursor: disabled ? "default" : "pointer",
+                  opacity: disabled && !on ? 0.55 : 1,
+                }}
+              >
+                <span
+                  style={{
+                    display: "block",
+                    width: 72,
+                    height: 44,
+                    margin: "0 auto",
+                    borderRadius: 10,
+                    border: on ? "2px solid #f1c40f" : "1.5px solid rgba(255,255,255,0.28)",
+                    boxShadow: on ? "0 0 0 1px rgba(241,196,15,0.35)" : "none",
+                    overflow: "hidden",
+                    boxSizing: "border-box",
+                    ...tablePreviewStyle(s.id),
+                  }}
+                />
+                <span style={on ? selectedName : nameUnder}>{s.name}</span>
+              </button>
+            );
+          })}
         </div>
       </div>
+
+      <div>
+        <div style={rowLabel}>Card back</div>
+        <div className="look-rail" role="listbox" aria-label="Card back" aria-disabled={disabled || undefined}>
+          {CARD_BACKS.map((s) => {
+            const on = s.id === back;
+            return (
+              <button
+                key={s.id}
+                type="button"
+                role="option"
+                aria-selected={on}
+                disabled={disabled}
+                onClick={() => {
+                  if (!disabled) onBack?.(s.id);
+                }}
+                style={{
+                  width: 48,
+                  padding: 0,
+                  border: "none",
+                  background: "transparent",
+                  cursor: disabled ? "default" : "pointer",
+                  opacity: disabled && !on ? 0.55 : 1,
+                }}
+              >
+                <span
+                  style={{
+                    display: "block",
+                    width: 40,
+                    height: 56,
+                    margin: "0 auto",
+                    borderRadius: 7,
+                    border: on ? "2px solid #f1c40f" : "1.5px solid rgba(255,255,255,0.28)",
+                    boxShadow: on ? "0 0 0 1px rgba(241,196,15,0.35)" : "none",
+                    overflow: "hidden",
+                    boxSizing: "border-box",
+                    ...cardBackFill(s.id),
+                  }}
+                />
+                <span style={on ? selectedName : nameUnder}>{s.name}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       {disabled ? (
-        <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", marginTop: 6, textAlign: "left" }}>
+        <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", marginTop: 8, textAlign: "left" }}>
           Host chooses the table and card back
         </div>
       ) : null}
@@ -7954,7 +7885,7 @@ function Table({
       style={{
         width: "100%",
         height: "100%",
-        background: tableSkin === "peli" ? "#111" : "#145230",
+        background: tableSkin === "peli" ? "#111" : tableSkin === "lifetime" ? "#2c2c2a" : "#145230",
         position: "relative",
         overflow: "hidden",
         boxSizing: "border-box",
@@ -12619,6 +12550,8 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   if (screen === "table" && view) {
     return (
       <>
+        {/* Headless profile host so locked reacts can open Plus mid-match. */}
+        <ProfileButton chip={false} />
         {droppedOverlay}
         {error ? (
           <div
@@ -14051,6 +13984,7 @@ function CardGame() {
 
   return (
     <VisualFrame>
+    <ProfileButton chip={false} />
     <Table
       players={players}
       drawDeck={drawDeck}

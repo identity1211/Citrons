@@ -207,10 +207,11 @@ async function userHasSupporter(userId) {
   if (!clerkSecret()) return false;
   try {
     const data = await clerkApi("GET", `/users/${encodeURIComponent(id)}`);
-    const supporter = !!(data && data.public_metadata && data.public_metadata[META_SUPPORTER]);
+    const meta = (data && data.public_metadata) || {};
+    const supporter = !!meta[META_SUPPORTER];
     setSupporterCache(id, supporter);
-    const plus = !!(data && data.public_metadata && data.public_metadata[META_PLUS]);
-    setPlusCache(id, plus);
+    // Must include tip grants (citrons_plus_until), not only citrons_plus.
+    setPlusCache(id, metaHasActivePlus(meta));
     return supporter;
   } catch (err) {
     console.warn("clerk userHasSupporter", err && err.message);
