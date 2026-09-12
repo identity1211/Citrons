@@ -3565,6 +3565,17 @@ function ProfileButton() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    const onOpenPlus = () => {
+      setOpen(true);
+      setPane("plus");
+      setMsg("");
+    };
+    window.addEventListener("citrons-open-plus", onOpenPlus);
+    return () => window.removeEventListener("citrons-open-plus", onOpenPlus);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
     const q = new URLSearchParams(window.location.search).get("plus");
     if (q !== "success" && q !== "cancel") return;
     let cancelled = false;
@@ -7983,6 +7994,44 @@ function formatEuroCents(cents: number): string {
   return n.toLocaleString("en-US", { style: "currency", currency: "EUR", minimumFractionDigits: n % 1 ? 2 : 0 });
 }
 
+function openPlusFromLobby() {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent("citrons-open-plus"));
+}
+
+function LobbySupportChips() {
+  const { isPlus } = useClerkAuth();
+  const chipBase: CSSProperties = {
+    flexShrink: 0,
+    borderRadius: 999,
+    padding: "3px 10px",
+    fontSize: 11,
+    fontWeight: 800,
+    letterSpacing: 0.4,
+    textTransform: "uppercase",
+    cursor: "pointer",
+    lineHeight: 1.2,
+  };
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+      <DonateButton compact />
+      <button
+        type="button"
+        onClick={openPlusFromLobby}
+        style={{
+          ...chipBase,
+          border: isPlus ? "1px solid rgba(255,255,255,0.3)" : "1px solid rgba(241,196,15,0.75)",
+          background: isPlus ? "rgba(255,255,255,0.08)" : "rgba(241,196,15,0.22)",
+          color: isPlus ? "rgba(245,240,230,0.92)" : "#f1c40f",
+          boxShadow: isPlus ? "none" : "0 0 10px rgba(241,196,15,0.22)",
+        }}
+      >
+        {isPlus ? "Manage" : "Plus · €2.99"}
+      </button>
+    </div>
+  );
+}
+
 function FundraiserMeter({ compact }: { compact?: boolean }) {
   const [raised, setRaised] = useState<number | null>(null);
   const [goal, setGoal] = useState(3000);
@@ -8028,12 +8077,14 @@ function FundraiserMeter({ compact }: { compact?: boolean }) {
     return () => window.clearTimeout(t);
   }, []);
 
+  const chips = <LobbySupportChips />;
+
   if (raised === null) {
     return (
       <div
         style={{
           marginTop: compact ? 6 : 10,
-          width: compact ? "min(240px, 90%)" : "min(280px, 86vw)",
+          width: compact ? "min(280px, 94%)" : "min(320px, 92vw)",
           marginLeft: "auto",
           marginRight: "auto",
           textAlign: "center",
@@ -8041,7 +8092,7 @@ function FundraiserMeter({ compact }: { compact?: boolean }) {
           justifyContent: "center",
         }}
       >
-        <DonateButton compact />
+        {chips}
       </div>
     );
   }
@@ -8050,7 +8101,7 @@ function FundraiserMeter({ compact }: { compact?: boolean }) {
     <div
       style={{
         marginTop: compact ? 6 : 10,
-        width: compact ? "min(240px, 90%)" : "min(280px, 86vw)",
+        width: compact ? "min(280px, 94%)" : "min(320px, 92vw)",
         marginLeft: "auto",
         marginRight: "auto",
         textAlign: "center",
@@ -8063,6 +8114,7 @@ function FundraiserMeter({ compact }: { compact?: boolean }) {
           justifyContent: "space-between",
           gap: 8,
           marginBottom: 5,
+          flexWrap: "wrap",
         }}
       >
         <div
@@ -8073,13 +8125,13 @@ function FundraiserMeter({ compact }: { compact?: boolean }) {
             color: "rgba(245,240,230,0.78)",
             textShadow: "0 1px 8px rgba(0,0,0,0.35)",
             textAlign: "left",
-            flex: 1,
+            flex: "1 1 120px",
             minWidth: 0,
           }}
         >
           {formatEuroCents(raised)} / {formatEuroCents(goal)} raised
         </div>
-        <DonateButton compact />
+        {chips}
       </div>
       <div
         style={{
@@ -8134,9 +8186,9 @@ function DonateButton({ compact }: { compact?: boolean }) {
           compact
             ? {
                 flexShrink: 0,
-                border: "1px solid rgba(241,196,15,0.45)",
-                background: "rgba(241,196,15,0.12)",
-                color: "#f1c40f",
+                border: "1px solid rgba(255,255,255,0.32)",
+                background: "rgba(0,0,0,0.18)",
+                color: "rgba(245,240,230,0.9)",
                 borderRadius: 999,
                 padding: "3px 10px",
                 fontSize: 11,
