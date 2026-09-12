@@ -4,7 +4,11 @@ use warnings;
 use utf8;
 use Encode qw(decode encode);
 
-my $src = "/Users/denis/Downloads/projects/c-Users-Deniss-Desktop-Citron/canvases/card-game.canvas.tsx";
+use File::Basename qw(dirname);
+use File::Spec;
+
+my $root = dirname(dirname(File::Spec->rel2abs(__FILE__)));
+my $src = File::Spec->catfile($root, "canvases", "card-game.canvas.tsx");
 open my $in, "<:raw", $src or die $!;
 local $/;
 my $game = decode("UTF-8", <$in>);
@@ -167,7 +171,7 @@ if (rootEl) {
 </html>
 HTML
 
-my $out = "/Users/denis/Downloads/projects/c-Users-Deniss-Desktop-Citron/docs/index.html";
+my $out = File::Spec->catfile($root, "docs", "index.html");
 open my $fh, ">:raw", $out or die $!;
 print $fh encode("UTF-8", $html);
 close $fh;
