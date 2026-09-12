@@ -5890,7 +5890,17 @@ function RoomChat({
   );
 }
 
+const REACT_WIDE_EYES = ":wide_eyes:";
+const CUSTOM_REACT_SRC: Record<string, string> = {
+  [REACT_WIDE_EYES]: "react-wide-eyes.png",
+};
+
+const GATED_REACT_EMOJIS = new Set(["🖕", REACT_WIDE_EYES]);
+
+/** Gated reacts first so Plus/Tip stickers show at the start of the rail. */
 const REACT_EMOJIS = [
+  "🖕",
+  REACT_WIDE_EYES,
   "🍋",
   "😂",
   "⁶🤷⁷",
@@ -5922,13 +5932,32 @@ const REACT_EMOJIS = [
   "🥴",
   "😬",
   "🤙",
-  "🖕",
 ];
-
-const GATED_REACT_EMOJIS = new Set(["🖕"]);
 
 type ReactBurst = { id: string; emoji: string; fromId: string };
 type EmojiFly = { id: string; emoji: string; x: number; rot: number };
+
+function ReactFace({ face, size = 26 }: { face: string; size?: number }) {
+  const src = CUSTOM_REACT_SRC[face];
+  if (src) {
+    return (
+      <img
+        src={src}
+        alt=""
+        draggable={false}
+        style={{
+          width: size,
+          height: size,
+          objectFit: "contain",
+          display: "block",
+          pointerEvents: "none",
+          userSelect: "none",
+        }}
+      />
+    );
+  }
+  return <>{face}</>;
+}
 
 function driftFromId(id: string) {
   let n = 0;
@@ -5981,7 +6010,8 @@ function EmojiDock({ onPick }: { onPick: (emoji: string) => void }) {
           ) : null}
           <div className="emoji-rail">
             {REACT_EMOJIS.map((face) => {
-              const wide = [...face].length >= 3;
+              const custom = !!CUSTOM_REACT_SRC[face];
+              const wide = !custom && [...face].length >= 3;
               const gated = GATED_REACT_EMOJIS.has(face);
               const locked = gated && !unlocked;
               return (
@@ -5991,14 +6021,14 @@ function EmojiDock({ onPick }: { onPick: (emoji: string) => void }) {
                 onClick={(e) => {
                   e.stopPropagation();
                   if (locked) {
-                    setGateHint("Plus or a tip (30 days) unlocks 🖕");
+                    setGateHint("Plus or a tip (30 days) unlocks these reacts");
                     openPlusFromLobby();
                     return;
                   }
                   setGateHint("");
                   onPick(face);
                 }}
-                aria-label={locked ? `Locked react ${face}` : `React ${face}`}
+                aria-label={locked ? "Locked Plus react" : custom ? "React wide eyes" : `React ${face}`}
                 title={locked ? "Plus or Donate" : undefined}
                 style={{
                   position: "relative",
@@ -6008,14 +6038,17 @@ function EmojiDock({ onPick }: { onPick: (emoji: string) => void }) {
                   border: locked ? "1px solid rgba(241,196,15,0.45)" : "none",
                   background: locked ? "rgba(241,196,15,0.08)" : "transparent",
                   fontSize: wide ? 16 : 26,
-                  lineHeight: "40px",
+                  lineHeight: custom ? 1 : "40px",
                   cursor: "pointer",
                   padding: 0,
                   whiteSpace: "nowrap",
                   opacity: locked ? 0.55 : 1,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
                 }}
               >
-                {face}
+                <ReactFace face={face} size={custom ? 32 : wide ? 16 : 26} />
                 {locked ? (
                   <span
                     aria-hidden
@@ -6088,10 +6121,11 @@ function EmojiFlyLayer({ flies }: { flies: EmojiFly[] }) {
             ["--ex" as string]: `${fly.x}px`,
             ["--ey" as string]: "-78vh",
             ["--erot" as string]: `${fly.rot}deg`,
-            textShadow: "0 6px 16px rgba(0,0,0,0.35)",
+            textShadow: CUSTOM_REACT_SRC[fly.emoji] ? "none" : "0 6px 16px rgba(0,0,0,0.35)",
+            filter: CUSTOM_REACT_SRC[fly.emoji] ? "drop-shadow(0 6px 16px rgba(0,0,0,0.35))" : undefined,
           }}
         >
-          {fly.emoji}
+          <ReactFace face={fly.emoji} size={CUSTOM_REACT_SRC[fly.emoji] ? 48 : 42} />
         </div>
       ))}
     </div>
@@ -9119,7 +9153,7 @@ function DonateButton({ compact }: { compact?: boolean }) {
             <div style={{ fontSize: 13, lineHeight: 1.4, color: "rgba(245,240,230,0.75)", marginBottom: 12 }}>
               One-time tip in EUR — no subscription. Helps us reach the €30 goal.
               {user
-                ? " Signed-in tips unlock Plus perks for 30 days (and 🖕)."
+                ? " Signed-in tips unlock Plus perks for 30 days (and gated reacts)."
                 : " Sign in before tipping to unlock Plus for 30 days."}
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>

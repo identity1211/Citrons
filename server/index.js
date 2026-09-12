@@ -36,6 +36,8 @@ const REACT_GAP_MS = 450;
 const KICK_VOTE_MS = 20000;
 const KICK_COOLDOWN_MS = 12000;
 const REACT_EMOJIS = new Set([
+  "🖕",
+  ":wide_eyes:",
   "🍋",
   "😂",
   "⁶🤷⁷",
@@ -67,10 +69,9 @@ const REACT_EMOJIS = new Set([
   "🥴",
   "😬",
   "🤙",
-  "🖕",
 ]);
 
-const GATED_REACT_EMOJIS = new Set(["🖕"]);
+const GATED_REACT_EMOJIS = new Set(["🖕", ":wide_eyes:"]);
 
 const rooms = new Map();
 const browsers = new Set();
