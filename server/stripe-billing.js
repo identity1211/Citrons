@@ -53,7 +53,7 @@ function fundPath() {
 }
 
 function emptyFund() {
-  return { raisedCents: 0, processed: [], sponsors: [], updatedAt: 0 };
+  return { raisedCents: 0, processed: [], sponsors: [], sponsorsPaidBackfill: false, updatedAt: 0 };
 }
 
 let fund = emptyFund();
@@ -103,6 +103,7 @@ function loadFund() {
       raisedCents: Math.max(0, Math.floor(Number(parsed.raisedCents) || 0)),
       processed: Array.isArray(parsed.processed) ? parsed.processed.map(String).slice(-PROCESSED_MAX) : [],
       sponsors,
+      sponsorsPaidBackfill: !!parsed.sponsorsPaidBackfill,
       updatedAt: Number(parsed.updatedAt) || 0,
     };
     sortSponsorsInPlace();
@@ -284,6 +285,14 @@ async function refreshSponsorsFromClerk(force) {
 
 async function sponsorsPublic() {
   try {
+    const hasPaid = fund.sponsors.some((s) => s && (s.amountCents || 0) > 0);
+    if (!fund.sponsorsPaidBackfill || !hasPaid) {
+      await rebuildSponsorsFromStripe();
+    }
+  } catch (err) {
+    console.warn("sponsors stripe backfill", err && err.message);
+  }
+  try {
     await refreshSponsorsFromClerk(false);
   } catch (err) {
     console.warn("sponsors refresh", err && err.message);
@@ -301,6 +310,146 @@ async function sponsorsPublic() {
         amountCents: Math.max(0, Math.floor(Number(s.amountCents) || 0)),
       })),
   };
+}
+
+/**
+ * Rebuild per-user paid totals from Stripe history.
+ * Tips = paid checkout sessions (mode=payment); Plus = paid invoices.
+ * Does not change raisedCents / processed — only sponsors[].amountCents.
+ */
+async function rebuildSponsorsFromStripe() {
+  const stripe = getStripe();
+  if (!stripe) {
+    fund.sponsorsPaidBackfill = true;
+    saveFund();
+    return;
+  }
+
+  const totals = new Map(); // userId -> { amountCents, at }
+  const add = (userId, amountCents, at) => {
+    const id = String(userId || "").trim();
+    const amount = Math.floor(Number(amountCents) || 0);
+    if (!id || amount <= 0) return;
+    const prev = totals.get(id) || { amountCents: 0, at: 0 };
+    totals.set(id, {
+      amountCents: prev.amountCents + amount,
+      at: Math.max(prev.at || 0, Number(at) || 0),
+    });
+  };
+
+  // One-time tips / donate checkouts
+  let startingAfter;
+  for (let page = 0; page < 30; page++) {
+    const params = { limit: 100 };
+    if (startingAfter) params.starting_after = startingAfter;
+    const list = await stripe.checkout.sessions.list(params);
+    for (const session of list.data || []) {
+      if (String(session.payment_status || "") !== "paid") continue;
+      if (String(session.currency || "").toLowerCase() !== "eur") continue;
+      const mode = String(session.mode || "").toLowerCase();
+      // Subscription money is counted via invoices to avoid double-counting.
+      if (mode === "subscription") continue;
+      const amount = Math.floor(Number(session.amount_total) || 0);
+      if (amount <= 0) continue;
+      const uid = String(
+        (session.metadata && session.metadata.clerkUserId) || session.client_reference_id || ""
+      ).trim();
+      if (!uid) continue;
+      add(uid, amount, (session.created || 0) * 1000);
+    }
+    if (!list.has_more || !(list.data && list.data.length)) break;
+    startingAfter = list.data[list.data.length - 1].id;
+  }
+
+  // Subscription invoices
+  startingAfter = undefined;
+  const subClerkCache = new Map();
+  for (let page = 0; page < 30; page++) {
+    const params = { limit: 100, status: "paid" };
+    if (startingAfter) params.starting_after = startingAfter;
+    const list = await stripe.invoices.list(params);
+    for (const invoice of list.data || []) {
+      if (String(invoice.currency || "").toLowerCase() !== "eur") continue;
+      const amount = Math.floor(Number(invoice.amount_paid) || 0);
+      if (amount <= 0) continue;
+      const subscriptionId =
+        typeof invoice.subscription === "string"
+          ? invoice.subscription
+          : invoice.subscription && invoice.subscription.id
+            ? invoice.subscription.id
+            : "";
+      let uid = String(
+        (invoice.subscription_details &&
+          invoice.subscription_details.metadata &&
+          invoice.subscription_details.metadata.clerkUserId) ||
+          (invoice.metadata && invoice.metadata.clerkUserId) ||
+          ""
+      ).trim();
+      if (!uid && subscriptionId) {
+        if (subClerkCache.has(subscriptionId)) {
+          uid = subClerkCache.get(subscriptionId);
+        } else {
+          try {
+            const sub = await stripe.subscriptions.retrieve(subscriptionId);
+            uid = String((sub.metadata && sub.metadata.clerkUserId) || "").trim();
+          } catch (err) {
+            console.warn("sponsors backfill sub", err && err.message);
+            uid = "";
+          }
+          subClerkCache.set(subscriptionId, uid);
+        }
+      }
+      if (!uid) continue;
+      add(uid, amount, (invoice.created || 0) * 1000);
+    }
+    if (!list.has_more || !(list.data && list.data.length)) break;
+    startingAfter = list.data[list.data.length - 1].id;
+  }
+
+  const prevById = new Map();
+  for (const s of fund.sponsors || []) {
+    if (s && s.id) prevById.set(s.id, s);
+  }
+
+  const next = [];
+  for (const [id, row] of totals.entries()) {
+    const prev = prevById.get(id);
+    let name = (prev && prev.name) || "Player";
+    let avatar = (prev && prev.avatar) || "";
+    let plus = !!(prev && prev.plus);
+    let supporter = !!(prev && prev.supporter);
+    try {
+      const user = await loadClerkUser(id);
+      if (user) {
+        const meta = user.public_metadata || {};
+        name = sponsorDisplayName(user);
+        avatar = String(user.image_url || "").trim();
+        plus = metaHasActivePlus(meta);
+        supporter = !!meta[META_SUPPORTER];
+      }
+    } catch {
+      /* keep previous */
+    }
+    next.push(
+      normalizeSponsor({
+        id,
+        name,
+        avatar,
+        plus,
+        supporter,
+        amountCents: row.amountCents,
+        at: row.at || Date.now(),
+      })
+    );
+  }
+
+  fund.sponsors = next.filter(Boolean);
+  fund.sponsorsPaidBackfill = true;
+  fund.updatedAt = Date.now();
+  sortSponsorsInPlace();
+  saveFund();
+  sponsorsRefreshAt = 0;
+  console.log("sponsors stripe backfill", fund.sponsors.length, "payers");
 }
 
 function creditRaised(sessionId, amountCents, payerUserId) {
