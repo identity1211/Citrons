@@ -3072,64 +3072,152 @@ async function clerkSessionHasPlus(clerk?: any): Promise<boolean> {
 
 async function fetchBillingStatus(clerkToken: string): Promise<{ plus?: boolean } | null> {
   try {
-    const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
-    const t = ctrl ? window.setTimeout(() => ctrl.abort(), 8000) : 0;
-    const res = await fetch(httpUrlFromWs(defaultWsUrl(), "/billing/status"), {
-      headers: { Authorization: `Bearer ${clerkToken}` },
-      signal: ctrl ? ctrl.signal : undefined,
-    });
-    if (t) window.clearTimeout(t);
-    if (!res.ok) return null;
-    return await res.json();
+    const { ok, data } = await fetchBillingJson(
+      "/billing/status",
+      { headers: { Authorization: `Bearer ${clerkToken}` } },
+      8000
+    );
+    if (!ok) return null;
+    return data;
   } catch {
     return null;
   }
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const t = window.setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      (v) => {
+        window.clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        window.clearTimeout(t);
+        reject(e);
+      }
+    );
+  });
+}
+
+async function clerkSessionToken(clerk: any): Promise<string> {
+  const session = clerk && clerk.session;
+  if (!session || typeof session.getToken !== "function") return "";
+  // Prefer cached token first — Safari iOS often stalls on cold / skipCache getToken.
+  try {
+    const cached = await withTimeout(session.getToken(), 8000, "Sign-in timed out");
+    if (cached) return String(cached);
+  } catch {
+    /* try again */
+  }
+  try {
+    const fresh = await withTimeout(session.getToken({ skipCache: true }), 8000, "Sign-in timed out");
+    return String(fresh || "");
+  } catch {
+    return "";
+  }
+}
+
+async function fetchBillingJson(
+  path: string,
+  init: RequestInit,
+  ms = 20000
+): Promise<{ ok: boolean; status: number; data: any }> {
+  const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const t = ctrl ? window.setTimeout(() => ctrl.abort(), ms) : 0;
+  try {
+    const res = await fetch(httpUrlFromWs(defaultWsUrl(), path), {
+      ...init,
+      signal: ctrl ? ctrl.signal : undefined,
+    });
+    const data = await res.json().catch(() => ({}));
+    return { ok: res.ok, status: res.status, data };
+  } catch (e: any) {
+    if (e && (e.name === "AbortError" || /aborted/i.test(String(e.message || "")))) {
+      throw new Error("Network timed out — try again");
+    }
+    throw e;
+  } finally {
+    if (t) window.clearTimeout(t);
+  }
+}
+
+/** Safari iOS can stall on location.assign after an await; replace/href are more reliable. */
+function navigateOffsite(url: string) {
+  const href = String(url || "");
+  if (!href) return;
+  try {
+    window.location.replace(href);
+  } catch {
+    try {
+      window.location.href = href;
+    } catch {
+      try {
+        window.location.assign(href);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
+/** If Safari never leaves the page, surface an error instead of leaving the button stuck. */
+async function leaveForCheckout(url: string) {
+  navigateOffsite(url);
+  await new Promise((r) => window.setTimeout(r, 2800));
+  throw new Error("Couldn't open Stripe. Disable content blockers for citrons.lat and try again.");
+}
+
 async function startPlusCheckout(): Promise<string> {
-  const clerk = await ensureClerk();
-  const token = clerk.session ? await clerk.session.getToken() : "";
+  const clerk = await withTimeout(ensureClerk(), 15000, "Clerk timed out — reload and try again");
+  const token = await clerkSessionToken(clerk);
   if (!token) throw new Error("Sign in required");
   const base = appUrl();
   const join = base.includes("?") ? "&" : "?";
-  const res = await fetch(httpUrlFromWs(defaultWsUrl(), "/billing/checkout"), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
+  const { ok, data } = await fetchBillingJson(
+    "/billing/checkout",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        successUrl: `${base}${join}plus=success`,
+        cancelUrl: `${base}${join}plus=cancel`,
+      }),
     },
-    body: JSON.stringify({
-      successUrl: `${base}${join}plus=success`,
-      cancelUrl: `${base}${join}plus=cancel`,
-    }),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok || !data.url) throw new Error(data.error || "Checkout failed");
+    20000
+  );
+  if (!ok || !data.url) throw new Error(data.error || "Checkout failed");
   return String(data.url);
 }
 
 async function openPlusPortal(): Promise<string> {
-  const clerk = await ensureClerk();
-  const token = clerk.session ? await clerk.session.getToken() : "";
+  const clerk = await withTimeout(ensureClerk(), 15000, "Clerk timed out — reload and try again");
+  const token = await clerkSessionToken(clerk);
   if (!token) throw new Error("Sign in required");
-  const res = await fetch(httpUrlFromWs(defaultWsUrl(), "/billing/portal"), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
+  const { ok, data } = await fetchBillingJson(
+    "/billing/portal",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ returnUrl: appUrl() }),
     },
-    body: JSON.stringify({ returnUrl: appUrl() }),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok || !data.url) throw new Error(data.error || "Portal failed");
+    20000
+  );
+  if (!ok || !data.url) throw new Error(data.error || "Portal failed");
   return String(data.url);
 }
 
 async function startDonateCheckout(amountCents: number): Promise<string> {
   let token = "";
   try {
-    const clerk = await ensureClerk();
-    token = clerk.session ? String((await clerk.session.getToken()) || "") : "";
+    const clerk = await withTimeout(ensureClerk(), 12000, "Clerk timed out — reload and try again");
+    token = await clerkSessionToken(clerk);
   } catch {
     /* guest donate ok */
   }
@@ -3137,18 +3225,21 @@ async function startDonateCheckout(amountCents: number): Promise<string> {
   const join = base.includes("?") ? "&" : "?";
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (token) headers.Authorization = `Bearer ${token}`;
-  const res = await fetch(httpUrlFromWs(defaultWsUrl(), "/billing/donate"), {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      amountCents,
-      clerkToken: token || undefined,
-      successUrl: `${base}${join}donate=success`,
-      cancelUrl: `${base}${join}donate=cancel`,
-    }),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok || !data.url) throw new Error(data.error || "Donate failed");
+  const { ok, data } = await fetchBillingJson(
+    "/billing/donate",
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        amountCents,
+        clerkToken: token || undefined,
+        successUrl: `${base}${join}donate=success`,
+        cancelUrl: `${base}${join}donate=cancel`,
+      }),
+    },
+    20000
+  );
+  if (!ok || !data.url) throw new Error(data.error || "Donate failed");
   return String(data.url);
 }
 
@@ -3857,7 +3948,7 @@ function ProfileButton() {
                       onClick={() =>
                         run(async () => {
                           const url = await openPlusPortal();
-                          window.location.assign(url);
+                          await leaveForCheckout(url);
                         }, "portal")
                       }
                       style={{ ...LOBBY_GOLD_BTN, maxWidth: "100%", height: 40, fontSize: 14, marginBottom: 4 }}
@@ -3883,7 +3974,7 @@ function ProfileButton() {
                     onClick={() =>
                       run(async () => {
                         const url = await startPlusCheckout();
-                        window.location.assign(url);
+                        await leaveForCheckout(url);
                       }, "checkout")
                     }
                     style={{ ...LOBBY_GOLD_BTN, maxWidth: "100%", height: 40, fontSize: 14, marginBottom: 4 }}
@@ -8289,7 +8380,7 @@ function DonateButton({ compact }: { compact?: boolean }) {
     setMsg("");
     try {
       const url = await startDonateCheckout(cents);
-      window.location.assign(url);
+      await leaveForCheckout(url);
     } catch (e) {
       setMsg(clerkErrorText(e));
       setBusy(false);
