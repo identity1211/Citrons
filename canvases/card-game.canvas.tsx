@@ -3027,10 +3027,30 @@ function claimsIndicatePlus(payload: any): boolean {
   return false;
 }
 
-function userPublicMetaPlus(user: any): boolean {
+function userPublicMetaPlusUntil(user: any): number {
+  const meta = (user && (user.publicMetadata || user.public_metadata)) || {};
+  const v = meta.citrons_plus_until ?? meta.citronsPlusUntil;
+  const n = typeof v === "string" && /^\d+$/.test(v) ? Number(v) : Number(v);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+}
+
+function userPublicMetaSubscriptionPlus(user: any): boolean {
   const meta = (user && (user.publicMetadata || user.public_metadata)) || {};
   const v = meta.citrons_plus ?? meta.citronsPlus;
   return v === true || v === 1 || v === "1" || String(v).toLowerCase() === "true";
+}
+
+function userPublicMetaPlus(user: any): boolean {
+  if (userPublicMetaSubscriptionPlus(user)) return true;
+  return userPublicMetaPlusUntil(user) > Date.now();
+}
+
+function formatPlusUntil(ms: number): string {
+  try {
+    return new Date(ms).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  } catch {
+    return "";
+  }
 }
 
 function userPublicMetaSupporter(user: any): boolean {
@@ -4057,8 +4077,12 @@ function ProfileButton() {
                     }}
                   >
                     {isPlus
-                      ? "You're on Plus. Manage billing in the Stripe portal — cancel anytime."
-                      : "Extra card backs, tables, and more as we roll them out."}
+                      ? userHasStripeCustomer(user)
+                        ? "You're on Plus. Manage billing in the Stripe portal — cancel anytime."
+                        : userPublicMetaPlusUntil(user) > Date.now()
+                          ? `Plus from your tip — active until ${formatPlusUntil(userPublicMetaPlusUntil(user))}.`
+                          : "You're on Plus."
+                      : "Extra card backs, tables, and more as we roll them out. A tip also unlocks Plus for 30 days."}
                   </div>
                 </div>
                 {isPlus ? (
@@ -4096,6 +4120,35 @@ function ProfileButton() {
                     >
                       {busy === "portal" ? "Opening…" : "Manage subscription"}
                     </button>
+                  ) : userPublicMetaPlusUntil(user) > Date.now() && !userPublicMetaSubscriptionPlus(user) ? (
+                    <>
+                      <div
+                        style={{
+                          marginBottom: 8,
+                          fontSize: 12,
+                          lineHeight: 1.35,
+                          color: "rgba(245,240,230,0.7)",
+                        }}
+                      >
+                        Tip Plus expires {formatPlusUntil(userPublicMetaPlusUntil(user))}. Subscribe anytime to keep
+                        Plus.
+                      </div>
+                      <button
+                        type="button"
+                        disabled={isBusy}
+                        onClick={() =>
+                          run(async () => {
+                            setMsg("Preparing checkout…");
+                            const url = await startPlusCheckout();
+                            setMsg("Opening Stripe…");
+                            await leaveForCheckout(url);
+                          }, "checkout")
+                        }
+                        style={{ ...LOBBY_GOLD_BTN, maxWidth: "100%", height: 40, fontSize: 14, marginBottom: 4 }}
+                      >
+                        {busy === "checkout" ? "Opening checkout…" : `Subscribe · ${PLUS_PRICE_LABEL}`}
+                      </button>
+                    </>
                   ) : (
                     <div
                       style={{
@@ -5573,8 +5626,8 @@ function driftFromId(id: string) {
 }
 
 function EmojiDock({ onPick }: { onPick: (emoji: string) => void }) {
-  const { isPlus, isSupporter } = useClerkAuth();
-  const unlocked = isPlus || isSupporter;
+  const { isPlus } = useClerkAuth();
+  const unlocked = isPlus;
   const [open, setOpen] = useState(false);
   const [gateHint, setGateHint] = useState("");
   return (
@@ -5626,7 +5679,7 @@ function EmojiDock({ onPick }: { onPick: (emoji: string) => void }) {
                 type="button"
                 onClick={() => {
                   if (locked) {
-                    setGateHint("Plus or a tip unlocks 🖕");
+                    setGateHint("Plus or a tip (30 days) unlocks 🖕");
                     openPlusFromLobby();
                     return;
                   }
@@ -8505,6 +8558,177 @@ function FundraiserMeter({ compact }: { compact?: boolean }) {
       >
         <LobbySupportChips />
       </div>
+      <SponsorsStrip compact={compact} />
+    </div>
+  );
+}
+
+type SponsorRow = {
+  id: string;
+  name: string;
+  avatar: string;
+  plus: boolean;
+  supporter: boolean;
+};
+
+function SponsorsStrip({ compact }: { compact?: boolean }) {
+  const [sponsors, setSponsors] = useState<SponsorRow[] | null>(null);
+
+  useEffect(() => {
+    let stop = false;
+    void (async () => {
+      try {
+        const res = await fetch(httpUrlFromWs(defaultWsUrl(), "/billing/sponsors"));
+        const data = await res.json();
+        if (stop) return;
+        const list = Array.isArray(data && data.sponsors) ? data.sponsors : [];
+        setSponsors(
+          list
+            .map((s: any) => ({
+              id: String(s.id || ""),
+              name: String(s.name || "Player").slice(0, 18) || "Player",
+              avatar: String(s.avatar || ""),
+              plus: !!s.plus,
+              supporter: !!s.supporter,
+            }))
+            .filter((s: SponsorRow) => s.id && (s.plus || s.supporter))
+        );
+      } catch {
+        if (!stop) setSponsors([]);
+      }
+    })();
+    return () => {
+      stop = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const q = new URLSearchParams(window.location.search);
+    if (q.get("donate") !== "success" && q.get("plus") !== "success") return;
+    const t = window.setTimeout(() => {
+      void fetch(httpUrlFromWs(defaultWsUrl(), "/billing/sponsors"))
+        .then((r) => r.json())
+        .then((data) => {
+          const list = Array.isArray(data && data.sponsors) ? data.sponsors : [];
+          setSponsors(
+            list
+              .map((s: any) => ({
+                id: String(s.id || ""),
+                name: String(s.name || "Player").slice(0, 18) || "Player",
+                avatar: String(s.avatar || ""),
+                plus: !!s.plus,
+                supporter: !!s.supporter,
+              }))
+              .filter((s: SponsorRow) => s.id && (s.plus || s.supporter))
+          );
+        })
+        .catch(() => {});
+    }, 1200);
+    return () => window.clearTimeout(t);
+  }, []);
+
+  if (sponsors === null) return null;
+  if (sponsors.length === 0) {
+    return (
+      <div
+        style={{
+          marginTop: compact ? 8 : 10,
+          fontSize: 11,
+          lineHeight: 1.35,
+          color: "rgba(245,240,230,0.48)",
+          letterSpacing: 0.2,
+        }}
+      >
+        Sponsors will show here
+      </div>
+    );
+  }
+
+  return (
+    <div
+      style={{
+        marginTop: compact ? 8 : 10,
+        width: "100%",
+        textAlign: "center",
+      }}
+    >
+      <div
+        style={{
+          fontSize: 10,
+          fontWeight: 800,
+          letterSpacing: 0.8,
+          textTransform: "uppercase",
+          color: "rgba(245,240,230,0.55)",
+          marginBottom: 6,
+        }}
+      >
+        Sponsors
+      </div>
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          justifyContent: "center",
+          gap: compact ? 6 : 8,
+          maxHeight: compact ? 72 : 96,
+          overflowY: "auto",
+          WebkitOverflowScrolling: "touch",
+          paddingBottom: 2,
+        }}
+      >
+        {sponsors.map((s) => {
+          const badge =
+            s.plus && s.supporter ? "Plus · Tip" : s.plus ? "Plus" : "Tip";
+          return (
+            <div
+              key={s.id}
+              title={`${s.name} · ${badge}`}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                maxWidth: compact ? 118 : 140,
+                padding: "3px 8px 3px 3px",
+                borderRadius: 999,
+                background: "rgba(0,0,0,0.22)",
+                border: s.plus
+                  ? "1px solid rgba(241,196,15,0.45)"
+                  : "1px solid rgba(255,255,255,0.14)",
+              }}
+            >
+              <AvatarBubble src={s.avatar} name={s.name} size={compact ? 22 : 24} />
+              <div style={{ minWidth: 0, textAlign: "left" }}>
+                <div
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: "#f5f0e6",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    lineHeight: 1.15,
+                  }}
+                >
+                  {s.name}
+                </div>
+                <div
+                  style={{
+                    fontSize: 9,
+                    fontWeight: 800,
+                    letterSpacing: 0.4,
+                    textTransform: "uppercase",
+                    color: s.plus ? "#f1c40f" : "rgba(245,240,230,0.55)",
+                    lineHeight: 1.1,
+                  }}
+                >
+                  {badge}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -8588,7 +8812,9 @@ function DonateButton({ compact }: { compact?: boolean }) {
             </div>
             <div style={{ fontSize: 13, lineHeight: 1.4, color: "rgba(245,240,230,0.75)", marginBottom: 12 }}>
               One-time tip in EUR — no subscription. Helps us reach the €30 goal.
-              {user ? " Signed-in tips also unlock 🖕 in reactions." : " Sign in first if you want 🖕 unlocked."}
+              {user
+                ? " Signed-in tips unlock Plus perks for 30 days (and 🖕)."
+                : " Sign in before tipping to unlock Plus for 30 days."}
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
               {DONATE_PRESETS.map((cents) => (

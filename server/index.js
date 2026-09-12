@@ -1658,6 +1658,19 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (path === "/billing/sponsors" && req.method === "GET") {
+    void (async () => {
+      try {
+        const out = await stripeBilling.sponsorsPublic();
+        json(200, out);
+      } catch (err) {
+        console.warn("billing sponsors", err && err.message);
+        json(200, { sponsors: [] });
+      }
+    })();
+    return;
+  }
+
   if (path === "/billing/portal" && req.method === "POST") {
     void (async () => {
       try {

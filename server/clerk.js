@@ -5,6 +5,7 @@ const crypto = require("crypto");
 const DEFAULT_CLERK_PK = process.env.CLERK_PUBLISHABLE_KEY || "pk_live_Y2xlcmsuY2l0cm9ucy5sYXQk";
 const META_PLUS = "citrons_plus";
 const META_SUPPORTER = "citrons_supporter";
+const META_PLUS_UNTIL = "citrons_plus_until";
 const PLUS_PLAN = "plus";
 const PLUS_FEATURE = "plus_perks";
 
@@ -161,9 +162,22 @@ async function clerkApi(method, urlPath) {
   return res.json();
 }
 
+function plusUntilMs(meta) {
+  if (!meta || typeof meta !== "object") return 0;
+  const v = meta[META_PLUS_UNTIL] ?? meta.citronsPlusUntil;
+  const n = typeof v === "string" && /^\d+$/.test(v) ? Number(v) : Number(v);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+}
+
+function metaHasActivePlus(meta) {
+  if (!meta || typeof meta !== "object") return false;
+  const flag = meta[META_PLUS] ?? meta.citronsPlus;
+  if (flag === true || flag === 1 || flag === "1" || String(flag).toLowerCase() === "true") return true;
+  return plusUntilMs(meta) > Date.now();
+}
+
 /**
- * Plus from Stripe → Clerk publicMetadata.citrons_plus (primary),
- * with JWT claim / short cache fallbacks.
+ * Plus from Stripe subscription (citrons_plus) or a tip grant (citrons_plus_until).
  */
 async function userHasPlus(userId) {
   const id = String(userId || "").trim();
@@ -173,9 +187,10 @@ async function userHasPlus(userId) {
   if (!clerkSecret()) return false;
   try {
     const data = await clerkApi("GET", `/users/${encodeURIComponent(id)}`);
-    const plus = !!(data && data.public_metadata && data.public_metadata[META_PLUS]);
+    const meta = (data && data.public_metadata) || {};
+    const plus = metaHasActivePlus(meta);
     setPlusCache(id, plus);
-    const supporter = !!(data && data.public_metadata && data.public_metadata[META_SUPPORTER]);
+    const supporter = !!(meta[META_SUPPORTER]);
     setSupporterCache(id, supporter);
     return plus;
   } catch (err) {
@@ -203,12 +218,9 @@ async function userHasSupporter(userId) {
   }
 }
 
-/** Gated emojis: Plus subscriber or anyone who donated while signed in. */
+/** Gated emojis / Plus perks: subscription or active tip grant (30 days). */
 async function userHasEmojiPerks(userId) {
-  const id = String(userId || "").trim();
-  if (!id) return false;
-  if (await userHasPlus(id)) return true;
-  return userHasSupporter(id);
+  return userHasPlus(userId);
 }
 
 function clerkConfigured() {
@@ -230,4 +242,7 @@ module.exports = {
   PLUS_FEATURE,
   META_PLUS,
   META_SUPPORTER,
+  META_PLUS_UNTIL,
+  metaHasActivePlus,
+  plusUntilMs,
 };

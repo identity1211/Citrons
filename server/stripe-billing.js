@@ -8,12 +8,16 @@ const clerk = require("./clerk");
 const APP_ORIGIN = "https://citrons.lat";
 const META_PLUS = "citrons_plus";
 const META_SUPPORTER = "citrons_supporter";
+const META_PLUS_UNTIL = "citrons_plus_until";
 const META_CUSTOMER = "stripeCustomerId";
 const META_SUB = "stripeSubscriptionId";
 const GOAL_CENTS = 3000; // €30
 const DONATE_MIN_CENTS = 100; // €1
 const DONATE_MAX_CENTS = 10000; // €100
+const DONATE_PLUS_MS = 30 * 24 * 60 * 60 * 1000; // 30 days of Plus perks per tip
 const PROCESSED_MAX = 400;
+const SPONSORS_MAX = 60;
+const SPONSORS_REFRESH_MS = 10 * 60 * 1000;
 
 function stripeSecret() {
   return String(process.env.STRIPE_SECRET_KEY || "").trim();
@@ -49,18 +53,41 @@ function fundPath() {
 }
 
 function emptyFund() {
-  return { raisedCents: 0, processed: [], updatedAt: 0 };
+  return { raisedCents: 0, processed: [], sponsors: [], updatedAt: 0 };
 }
 
 let fund = emptyFund();
+let sponsorsRefreshAt = 0;
+
+function normalizeSponsor(raw) {
+  const id = String((raw && raw.id) || "").trim();
+  if (!id) return null;
+  const name =
+    String((raw && raw.name) || "Player")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 18) || "Player";
+  return {
+    id,
+    name,
+    avatar: String((raw && raw.avatar) || "").trim().slice(0, 500),
+    plus: !!(raw && raw.plus),
+    supporter: !!(raw && raw.supporter),
+    at: Number((raw && raw.at) || 0) || Date.now(),
+  };
+}
 
 function loadFund() {
   try {
     const raw = fs.readFileSync(fundPath(), "utf8");
     const parsed = JSON.parse(raw);
+    const sponsors = Array.isArray(parsed.sponsors)
+      ? parsed.sponsors.map(normalizeSponsor).filter(Boolean)
+      : [];
     fund = {
       raisedCents: Math.max(0, Math.floor(Number(parsed.raisedCents) || 0)),
       processed: Array.isArray(parsed.processed) ? parsed.processed.map(String).slice(-PROCESSED_MAX) : [],
+      sponsors,
       updatedAt: Number(parsed.updatedAt) || 0,
     };
   } catch {
@@ -93,11 +120,176 @@ function info() {
   };
 }
 
+function plusUntilMs(meta) {
+  if (!meta || typeof meta !== "object") return 0;
+  const v = meta[META_PLUS_UNTIL] ?? meta.citronsPlusUntil;
+  const n = typeof v === "string" && /^\d+$/.test(v) ? Number(v) : Number(v);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+}
+
+function metaHasActivePlus(meta) {
+  if (!meta || typeof meta !== "object") return false;
+  const flag = meta[META_PLUS] ?? meta.citronsPlus;
+  if (flag === true || flag === 1 || flag === "1" || String(flag).toLowerCase() === "true") return true;
+  return plusUntilMs(meta) > Date.now();
+}
+
+function nextDonatePlusUntil(meta) {
+  const existing = plusUntilMs(meta);
+  const base = Math.max(Date.now(), existing);
+  return base + DONATE_PLUS_MS;
+}
+
 function raisedPublic() {
   return {
     raisedCents: fund.raisedCents,
     goalCents: GOAL_CENTS,
     currency: "eur",
+  };
+}
+
+function sponsorDisplayName(user) {
+  if (!user || typeof user !== "object") return "Player";
+  const unsafe = user.unsafe_metadata || {};
+  const nick = String(unsafe.nickname || "").replace(/\s+/g, " ").trim();
+  if (nick) return nick.slice(0, 18);
+  const first = String(user.first_name || "").replace(/\s+/g, " ").trim();
+  if (first) return first.slice(0, 18);
+  const username = String(user.username || "").replace(/\s+/g, " ").trim();
+  if (username) return username.slice(0, 18);
+  const email = primaryEmail(user);
+  if (email.includes("@")) return email.split("@")[0].slice(0, 18) || "Player";
+  return "Player";
+}
+
+function writeSponsor(entry) {
+  const next = normalizeSponsor(entry);
+  if (!next) return;
+  if (!next.plus && !next.supporter) {
+    fund.sponsors = fund.sponsors.filter((s) => s.id !== next.id);
+    fund.updatedAt = Date.now();
+    saveFund();
+    return;
+  }
+  const i = fund.sponsors.findIndex((s) => s.id === next.id);
+  if (i >= 0) fund.sponsors[i] = { ...fund.sponsors[i], ...next, at: Date.now() };
+  else fund.sponsors.push({ ...next, at: Date.now() });
+  fund.sponsors.sort((a, b) => (b.at || 0) - (a.at || 0));
+  if (fund.sponsors.length > SPONSORS_MAX) fund.sponsors = fund.sponsors.slice(0, SPONSORS_MAX);
+  fund.updatedAt = Date.now();
+  saveFund();
+}
+
+async function syncSponsor(userId) {
+  const id = String(userId || "").trim();
+  if (!id) return;
+  let user = null;
+  try {
+    user = await loadClerkUser(id);
+  } catch (err) {
+    console.warn("sponsor sync load", err && err.message);
+  }
+  if (!user) return;
+  const meta = user.public_metadata || {};
+  writeSponsor({
+    id,
+    name: sponsorDisplayName(user),
+    avatar: String(user.image_url || "").trim(),
+    plus: metaHasActivePlus(meta),
+    supporter: !!meta[META_SUPPORTER],
+  });
+}
+
+function clerkUsersFromResponse(batch) {
+  if (Array.isArray(batch)) return batch;
+  if (batch && Array.isArray(batch.data)) return batch.data;
+  return [];
+}
+
+async function refreshSponsorsFromClerk(force) {
+  if (!force && Date.now() - sponsorsRefreshAt < SPONSORS_REFRESH_MS && fund.sponsors.length) {
+    return;
+  }
+  const key = String(process.env.CLERK_SECRET_KEY || "").trim();
+  if (!key) {
+    sponsorsRefreshAt = Date.now();
+    return;
+  }
+  const found = [];
+  let offset = 0;
+  for (let page = 0; page < 20; page++) {
+    let batch;
+    try {
+      batch = await clerkApi("GET", `/users?limit=100&offset=${offset}&order_by=-updated_at`);
+    } catch {
+      try {
+        batch = await clerkApi("GET", `/users?limit=100&offset=${offset}`);
+      } catch (err) {
+        console.warn("sponsors clerk list", err && err.message);
+        break;
+      }
+    }
+    const list = clerkUsersFromResponse(batch);
+    if (!list.length) break;
+    for (const user of list) {
+      if (!user || !user.id) continue;
+      const meta = user.public_metadata || {};
+      const plus = metaHasActivePlus(meta);
+      const supporter = !!meta[META_SUPPORTER];
+      if (!plus && !supporter) continue;
+      // One-time backfill: lifetime tippers without an expiry get 30 days of Plus from now.
+      if (supporter && !meta[META_PLUS] && !plusUntilMs(meta)) {
+        try {
+          await patchPlusMetadata(user.id, { plusUntil: Date.now() + DONATE_PLUS_MS });
+        } catch (err) {
+          console.warn("sponsor tip-plus backfill", err && err.message);
+        }
+      }
+      found.push(
+        normalizeSponsor({
+          id: user.id,
+          name: sponsorDisplayName(user),
+          avatar: String(user.image_url || "").trim(),
+          plus: metaHasActivePlus(meta) || (supporter && !plusUntilMs(meta)),
+          supporter,
+          at: Number(user.updated_at) || Date.now(),
+        })
+      );
+    }
+    offset += list.length;
+    if (list.length < 100) break;
+  }
+  // Keep newer local timestamps when present
+  const byId = new Map();
+  for (const s of fund.sponsors) byId.set(s.id, s);
+  for (const s of found) {
+    if (!s) continue;
+    const prev = byId.get(s.id);
+    byId.set(s.id, prev ? { ...s, at: Math.max(prev.at || 0, s.at || 0) } : s);
+  }
+  fund.sponsors = [...byId.values()]
+    .filter((s) => s && (s.plus || s.supporter))
+    .sort((a, b) => (b.at || 0) - (a.at || 0))
+    .slice(0, SPONSORS_MAX);
+  fund.updatedAt = Date.now();
+  sponsorsRefreshAt = Date.now();
+  saveFund();
+}
+
+async function sponsorsPublic() {
+  try {
+    await refreshSponsorsFromClerk(false);
+  } catch (err) {
+    console.warn("sponsors refresh", err && err.message);
+  }
+  return {
+    sponsors: fund.sponsors.map((s) => ({
+      id: s.id,
+      name: s.name,
+      avatar: s.avatar,
+      plus: !!s.plus,
+      supporter: !!s.supporter,
+    })),
   };
 }
 
@@ -158,6 +350,10 @@ async function patchPlusMetadata(userId, patch) {
   if (Object.prototype.hasOwnProperty.call(patch, "supporter")) {
     public_metadata[META_SUPPORTER] = !!patch.supporter;
   }
+  if (Object.prototype.hasOwnProperty.call(patch, "plusUntil")) {
+    const until = Math.floor(Number(patch.plusUntil) || 0);
+    public_metadata[META_PLUS_UNTIL] = until > 0 ? until : 0;
+  }
   if (Object.prototype.hasOwnProperty.call(patch, "customerId") && patch.customerId) {
     public_metadata[META_CUSTOMER] = String(patch.customerId);
   }
@@ -166,11 +362,21 @@ async function patchPlusMetadata(userId, patch) {
   }
   if (Object.keys(public_metadata).length === 0) return;
   await clerkApi("PATCH", `/users/${encodeURIComponent(id)}/metadata`, { public_metadata });
-  if (Object.prototype.hasOwnProperty.call(patch, "plus")) {
-    clerk.setPlusCache(id, !!patch.plus);
+  if (Object.prototype.hasOwnProperty.call(patch, "plus") || Object.prototype.hasOwnProperty.call(patch, "plusUntil")) {
+    try {
+      const user = await loadClerkUser(id);
+      clerk.setPlusCache(id, metaHasActivePlus((user && user.public_metadata) || {}));
+    } catch {
+      if (Object.prototype.hasOwnProperty.call(patch, "plus")) clerk.setPlusCache(id, !!patch.plus);
+    }
   }
   if (Object.prototype.hasOwnProperty.call(patch, "supporter")) {
     clerk.setSupporterCache(id, !!patch.supporter);
+  }
+  try {
+    await syncSponsor(id);
+  } catch (err) {
+    console.warn("sponsor sync after metadata", err && err.message);
   }
 }
 
@@ -325,10 +531,11 @@ async function statusForUser(userId) {
   if (cached) return { plus: cached.plus };
   const user = await loadClerkUser(id);
   const meta = (user && user.public_metadata) || {};
-  const plus = !!meta[META_PLUS];
+  const plus = metaHasActivePlus(meta);
   clerk.setPlusCache(id, plus);
   return {
     plus,
+    plusUntil: plusUntilMs(meta) || null,
     customerId: meta[META_CUSTOMER] || null,
     subscriptionId: meta[META_SUB] || null,
   };
@@ -360,9 +567,14 @@ async function handleCheckoutCompleted(session) {
     ).trim();
     if (clerkUserId && session.payment_status === "paid") {
       try {
-        await patchPlusMetadata(clerkUserId, { supporter: true });
+        const user = await loadClerkUser(clerkUserId);
+        const meta = (user && user.public_metadata) || {};
+        await patchPlusMetadata(clerkUserId, {
+          supporter: true,
+          plusUntil: nextDonatePlusUntil(meta),
+        });
       } catch (err) {
-        console.warn("donate supporter flag", err && err.message);
+        console.warn("donate supporter/plus grant", err && err.message);
       }
     }
     return;
@@ -468,9 +680,11 @@ module.exports = {
   statusForUser,
   handleWebhook,
   raisedPublic,
+  sponsorsPublic,
   GOAL_CENTS,
   DONATE_MIN_CENTS,
   DONATE_MAX_CENTS,
   META_PLUS,
   META_SUPPORTER,
+  META_PLUS_UNTIL,
 };
