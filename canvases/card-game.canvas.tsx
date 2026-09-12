@@ -2,6 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef, useCallback, createContex
 import { useHostTheme, Text, Row, Spacer } from "cursor/canvas";
 
 const JOIN_KEY = "citrons-join";
+const PENDING_MP_KEY = "citrons-pending-mp";
 const STRIPE_GO_KEY = "citrons-stripe-go";
 const INVITE_PROMPT_KEY = "citrons-invite-prompt-dismissed";
 const IOS_INSTALL_KEY = "citrons-ios-install-seen";
@@ -27,6 +28,30 @@ function rememberJoinFromUrl() {
 }
 
 rememberJoinFromUrl();
+
+type PendingMp = { kind: "create"; title: string } | { kind: "join"; code: string } | { kind: "rejoin" };
+
+function rememberPendingMp(pending: PendingMp) {
+  try {
+    sessionStorage.setItem(PENDING_MP_KEY, JSON.stringify({ ...pending, at: Date.now() }));
+  } catch {
+    /* ignore */
+  }
+}
+
+function takePendingMp(): PendingMp | null {
+  try {
+    const raw = sessionStorage.getItem(PENDING_MP_KEY);
+    sessionStorage.removeItem(PENDING_MP_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PendingMp & { at?: number };
+    if (!parsed || !parsed.kind) return null;
+    if (Date.now() - Number(parsed.at || 0) > 2 * 60 * 1000) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
 
 /** Safari often won't leave for Stripe after await; hop via same-origin ?go=stripe first. */
 function isTrustedStripeUrl(href: string): boolean {
@@ -2916,28 +2941,16 @@ function loadScriptOnce(src: string, attrs?: Record<string, string>): Promise<vo
 
 let clerkPromise: Promise<any> | null = null;
 
-/** clerk-js@6 mount* (PricingTable, UserProfile, …) needs the separate @clerk/ui bundle. */
-async function ensureClerkUiCtor(): Promise<any> {
-  const w = window as any;
-  if (w.__internal_ClerkUICtor) return w.__internal_ClerkUICtor;
-  const host = clerkFrontendHost(clerkPublishableKey());
-  const uiSrc = host
-    ? `https://${host}/npm/@clerk/ui@1/dist/ui.browser.js`
-    : "https://cdn.jsdelivr.net/npm/@clerk/ui@1/dist/ui.browser.js";
-  await loadScriptOnce(uiSrc);
-  if (!w.__internal_ClerkUICtor) throw new Error("Clerk UI failed to load");
-  return w.__internal_ClerkUICtor;
-}
-
-function clerkLoadOptions(uiCtor: any) {
+function clerkLoadOptions() {
   return {
-    ui: { ClerkUI: uiCtor },
     signInUrl: clerkSignInUrl() || undefined,
     signUpUrl: clerkSignUpUrl() || undefined,
     afterSignInUrl: appUrl(),
     afterSignUpUrl: appUrl(),
     afterSignOutUrl: appUrl(),
     allowedRedirectOrigins: ["https://citrons.lat", "https://www.citrons.lat", "https://identity1211.github.io"],
+    touchSession: true,
+    standardBrowser: true,
   };
 }
 
@@ -2951,10 +2964,9 @@ async function ensureClerk(): Promise<any> {
     }
     const w = window as any;
     const callbackHref = window.location.href;
-    const uiCtor = await ensureClerkUiCtor();
     if (w.Clerk && typeof w.Clerk.load === "function" && typeof w.Clerk !== "function") {
       if (!w.Clerk.loaded) {
-        await w.Clerk.load(clerkLoadOptions(uiCtor));
+        await w.Clerk.load(clerkLoadOptions());
       }
       const fromCallback = isClerkCallbackUrl(callbackHref);
       if (fromCallback || !w.Clerk.user) {
@@ -2962,6 +2974,8 @@ async function ensureClerk(): Promise<any> {
       } else if (w.Clerk.session && String(w.Clerk.session.status || "") && String(w.Clerk.session.status) !== "active") {
         await ensureActiveClerkSession(w.Clerk);
       }
+      rememberWarmedJwt(clerkJwtFromClerk(w.Clerk, { allowExpired: true }));
+      armSafariClerkWarming();
       return w.Clerk;
     }
     const host = clerkFrontendHost(pk);
@@ -2972,7 +2986,7 @@ async function ensureClerk(): Promise<any> {
     let clerk = w.Clerk;
     if (typeof clerk === "function") clerk = new clerk(pk);
     if (!clerk || typeof clerk.load !== "function") throw new Error("Clerk failed to load");
-    await clerk.load(clerkLoadOptions(uiCtor));
+    await clerk.load(clerkLoadOptions());
     w.Clerk = clerk;
     const fromCallback = isClerkCallbackUrl(callbackHref);
     if (fromCallback || !clerk.user) {
@@ -2987,6 +3001,8 @@ async function ensureClerk(): Promise<any> {
         /* ignore */
       }
     }
+    rememberWarmedJwt(clerkJwtFromClerk(clerk, { allowExpired: true }));
+    armSafariClerkWarming();
     return clerk;
   })().catch((err) => {
     clerkPromise = null;
@@ -3094,13 +3110,13 @@ async function clerkSessionHasPlus(clerk?: any): Promise<boolean> {
   if (clerkSessionHasPlusSync(c)) return true;
   try {
     if (c.user && typeof c.user.reload === "function") {
-      await c.user.reload({ withCommits: true } as any);
+      await withTimeout(c.user.reload({ withCommits: true } as any), 4000, "reload");
       if (userPublicMetaPlus(c.user)) return true;
     }
   } catch {
     try {
       if (c.user && typeof c.user.reload === "function") {
-        await c.user.reload();
+        await withTimeout(c.user.reload(), 4000, "reload");
         if (userPublicMetaPlus(c.user)) return true;
       }
     } catch {
@@ -3109,13 +3125,8 @@ async function clerkSessionHasPlus(clerk?: any): Promise<boolean> {
   }
   try {
     const session = c.session;
-    if (session && typeof session.getToken === "function") {
-      let token = "";
-      try {
-        token = String((await session.getToken({ skipCache: true })) || "");
-      } catch {
-        token = String((await session.getToken()) || "");
-      }
+    const token = clerkJwtFromSession(session, { allowExpired: true });
+    if (token) {
       if (claimsIndicatePlus(decodeJwtPayload(token))) return true;
       const st = await fetchBillingStatus(token);
       if (st && st.plus) return true;
@@ -3174,6 +3185,179 @@ function clerkSessionIds(clerk: any): string[] {
   return ids;
 }
 
+function clerkJwtString(value: unknown): string {
+  if (!value) return "";
+  if (typeof value === "string") {
+    const s = value.trim();
+    return s.split(".").length === 3 ? s : "";
+  }
+  if (typeof value !== "object") return "";
+  const o = value as any;
+  if (typeof o.getRawString === "function") {
+    const nested = clerkJwtString(o.getRawString());
+    if (nested) return nested;
+  }
+  if (o.encoded && o.encoded.header && o.encoded.payload && o.encoded.signature) {
+    return `${o.encoded.header}.${o.encoded.payload}.${o.encoded.signature}`;
+  }
+  if (typeof o.toString === "function") {
+    const s = String(o.toString());
+    if (s.split(".").length === 3 && s !== "[object Object]") return s.trim();
+  }
+  return (
+    clerkJwtString(o.jwt) ||
+    clerkJwtString(o.token) ||
+    clerkJwtString(o.__raw) ||
+    clerkJwtString(o.claims && o.claims.__raw)
+  );
+}
+
+/** Read a session JWT without hitting Clerk's network. Safari iOS often stalls on getToken(). */
+function clerkJwtFromSession(session: any, opts?: { allowExpired?: boolean }): string {
+  const jwt =
+    clerkJwtString(session && session.lastActiveToken) || clerkJwtString(session && session.lastActiveToken && session.lastActiveToken.jwt);
+  if (!jwt) return "";
+  const payload = decodeJwtPayload(jwt);
+  if (!payload) return "";
+  const exp = Number(payload.exp) || 0;
+  const now = Math.floor(Date.now() / 1000);
+  // Server verify allows +60s clock skew; keep the same leeway for Safari cache hits.
+  if (exp && exp + (opts?.allowExpired ? 60 : 5) < now) return "";
+  return jwt;
+}
+
+const CLERK_ITP_TOUCH_KEY = "citrons-clerk-itp-touch";
+
+function clerkItpTouchTried(): boolean {
+  try {
+    return sessionStorage.getItem(CLERK_ITP_TOUCH_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function markClerkItpTouchTried() {
+  try {
+    sessionStorage.setItem(CLERK_ITP_TOUCH_KEY, "1");
+  } catch {
+    /* ignore */
+  }
+}
+
+/** iOS WebKit and desktop Safari cap CNAME-cloaked Clerk cookies at 7 days. */
+function needsClerkItpTouch(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  const iOS =
+    /iP(hone|ad|od)/.test(ua) ||
+    (navigator.platform === "MacIntel" && Number(navigator.maxTouchPoints || 0) > 1);
+  const macSafari = /Macintosh/.test(ua) && /Safari/.test(ua) && !/Chrome|Chromium|Edg|OPR|Firefox/.test(ua);
+  return iOS || macSafari;
+}
+
+function clerkJwtFromClerk(clerk: any, opts?: { allowExpired?: boolean }): string {
+  if (!clerk) return warmedClerkJwt(opts);
+  const hit = clerkJwtFromSession(clerk.session, opts) || warmedClerkJwt(opts);
+  if (hit) {
+    rememberWarmedJwt(hit);
+    return hit;
+  }
+  const sessions = clerk.client && clerk.client.sessions;
+  if (Array.isArray(sessions)) {
+    for (const s of sessions) {
+      const jwt = clerkJwtFromSession(s, opts);
+      if (jwt) {
+        rememberWarmedJwt(jwt);
+        return jwt;
+      }
+    }
+  }
+  return warmedClerkJwt(opts);
+}
+
+let warmedJwt = { token: "", exp: 0 };
+
+function rememberWarmedJwt(token: string) {
+  const jwt = String(token || "").trim();
+  if (!jwt || jwt.split(".").length !== 3) return;
+  const payload = decodeJwtPayload(jwt);
+  if (!payload) return;
+  warmedJwt = { token: jwt, exp: Number(payload.exp) || 0 };
+}
+
+function warmedClerkJwt(opts?: { allowExpired?: boolean }): string {
+  if (!warmedJwt.token) return "";
+  const now = Math.floor(Date.now() / 1000);
+  if (warmedJwt.exp && warmedJwt.exp + (opts?.allowExpired === false ? 5 : 60) < now) return "";
+  return warmedJwt.token;
+}
+
+/** Mint from a tap when possible — Safari is more willing to send Clerk cookies after a gesture. */
+async function warmClerkJwt(clerk: any, timeoutMs = 1800): Promise<string> {
+  const existing = clerkJwtFromClerk(clerk, { allowExpired: true });
+  if (existing) {
+    const payload = decodeJwtPayload(existing);
+    const exp = payload ? Number(payload.exp) || 0 : 0;
+    if (exp - 20 > Math.floor(Date.now() / 1000)) return existing;
+  }
+  const session = clerk && clerk.session;
+  if (!session || typeof session.getToken !== "function") return existing;
+  try {
+    const token = await withTimeout(session.getToken({ leewayInSeconds: 60 }), timeoutMs, "Sign-in timed out");
+    if (token) {
+      rememberWarmedJwt(String(token));
+      return String(token);
+    }
+  } catch {
+    /* keep whatever we already have */
+  }
+  return existing;
+}
+
+function armSafariClerkWarming() {
+  if (typeof window === "undefined" || (window as any).__citronsClerkWarm) return;
+  (window as any).__citronsClerkWarm = true;
+  const kick = () => {
+    void (async () => {
+      try {
+        const clerk = await ensureClerk();
+        await warmClerkJwt(clerk, needsClerkItpTouch() ? 1800 : 4000);
+      } catch {
+        /* ignore */
+      }
+    })();
+  };
+  document.addEventListener("pointerdown", kick, { passive: true });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") kick();
+  });
+  window.setInterval(() => {
+    if (document.visibilityState === "visible") kick();
+  }, 45000);
+  kick();
+}
+
+if (typeof window !== "undefined") armSafariClerkWarming();
+
+function clerkFrontendTouchUrl(redirectUrl: string): string {
+  const host = clerkFrontendHost(clerkPublishableKey());
+  if (!host) return "";
+  return `https://${host}/v1/client/touch?redirect_url=${encodeURIComponent(redirectUrl)}`;
+}
+
+/** Top-level navigation — Safari ignores location changes after an awaited fetch. */
+function hopClerkItp(redirectUrl: string, fromGesture: boolean): boolean {
+  if (typeof window === "undefined") return false;
+  if (!needsClerkItpTouch()) return false;
+  if (clerkItpTouchTried()) return false;
+  const href = clerkFrontendTouchUrl(redirectUrl);
+  if (!href) return false;
+  markClerkItpTouchTried();
+  if (fromGesture) navigateOffsite(href);
+  else window.location.replace(href);
+  return true;
+}
+
 /** Safari often keeps clerk.user from cache while session JWT minting is inactive. */
 async function ensureActiveClerkSession(clerk: any, timeoutMs = 4000): Promise<any> {
   if (!clerk) return null;
@@ -3182,52 +3366,49 @@ async function ensureActiveClerkSession(clerk: any, timeoutMs = 4000): Promise<a
     return clerk.session;
   }
   if (typeof clerk.setActive !== "function") return clerk.session || null;
-  const id = clerkSessionIds(clerk)[0];
-  if (!id) return clerk.session || null;
-  try {
-    await withTimeout(clerk.setActive({ session: id }), timeoutMs, "Sign-in timed out");
-  } catch {
-    /* keep whatever session we have */
+  for (const id of clerkSessionIds(clerk)) {
+    try {
+      await withTimeout(clerk.setActive({ session: id }), timeoutMs, "Sign-in timed out");
+      if (clerk.session && typeof clerk.session.getToken === "function") return clerk.session;
+    } catch {
+      /* try next */
+    }
   }
   return clerk.session || null;
 }
 
-/** Mint a Clerk JWT. Keep the budget short — Safari iOS can hang for a minute on retries. */
-async function clerkSessionToken(clerk: any, budgetMs = 10000): Promise<string> {
-  if (!clerk) return "";
-  const deadline = Date.now() + Math.max(3000, budgetMs);
-  const slice = () => Math.max(700, Math.min(4000, deadline - Date.now()));
-  const tryToken = async (session: any, opts?: Record<string, unknown>) => {
-    if (!session || typeof session.getToken !== "function") return "";
-    if (Date.now() >= deadline) return "";
+/**
+ * Mint a Clerk JWT. Prefer the in-memory token — Safari iOS often hangs on getToken()
+ * after an expired 60s JWT, and ignores redirects that run after that await.
+ */
+async function clerkSessionToken(clerk: any, budgetMs = 8000): Promise<string> {
+  if (!clerk) return warmedClerkJwt({ allowExpired: true });
+  const hit = clerkJwtFromClerk(clerk, { allowExpired: true });
+  if (hit) return hit;
+
+  const session = await ensureActiveClerkSession(clerk, 2500);
+  const afterActive = clerkJwtFromClerk(clerk, { allowExpired: true }) || clerkJwtFromSession(session, { allowExpired: true });
+  if (afterActive) return afterActive;
+
+  if (needsClerkItpTouch()) {
+    throw new Error("Couldn't refresh your session token. Reload the page, or sign out and sign in again.");
+  }
+
+  if (session && typeof session.getToken === "function") {
     try {
       const token = await withTimeout(
-        opts ? session.getToken(opts) : session.getToken(),
-        slice(),
+        session.getToken({ leewayInSeconds: 60 }),
+        Math.max(3000, budgetMs),
         "Sign-in timed out"
       );
-      return token ? String(token) : "";
+      if (token) {
+        rememberWarmedJwt(String(token));
+        return String(token);
+      }
     } catch {
-      return "";
+      const again = clerkJwtFromClerk(clerk, { allowExpired: true });
+      if (again) return again;
     }
-  };
-
-  let session = await ensureActiveClerkSession(clerk, slice());
-  let token = await tryToken(session);
-  if (token) return token;
-  token = await tryToken(clerk.session, { skipCache: true });
-  if (token) return token;
-
-  // One forced re-activate, then one more mint
-  const id = clerkSessionIds(clerk)[0];
-  if (id && typeof clerk.setActive === "function" && Date.now() < deadline) {
-    try {
-      await withTimeout(clerk.setActive({ session: id }), slice(), "Sign-in timed out");
-    } catch {
-      /* ignore */
-    }
-    token = await tryToken(clerk.session, { skipCache: true });
-    if (token) return token;
   }
 
   if (clerk.user) {
@@ -3419,6 +3600,20 @@ function clerkPortalHref(path: "sign-in" | "sign-up"): string {
   const dest = encodeURIComponent(appUrl());
   const qs = `redirect_url=${dest}&after_sign_in_url=${dest}&after_sign_up_url=${dest}`;
   return `${origin}/${path}?${qs}#/?${qs}`;
+}
+
+/** Safari: hop in the click itself. Awaiting getToken first makes iOS ignore the redirect. */
+function beginSafariClerkHopIfNeeded(clerk: any, pending: PendingMp): boolean {
+  if (!needsClerkItpTouch()) return false;
+  if (clerkJwtFromClerk(clerk, { allowExpired: true }) || warmedClerkJwt({ allowExpired: true })) return false;
+  rememberPendingMp(pending);
+  if (hopClerkItp(appUrl(), true)) return true;
+  const href = clerkPortalHref("sign-in");
+  if (href) {
+    navigateOffsite(href);
+    return true;
+  }
+  return false;
 }
 
 async function signInWithGoogle(): Promise<void> {
@@ -5677,7 +5872,8 @@ function EmojiDock({ onPick }: { onPick: (emoji: string) => void }) {
               <button
                 key={face}
                 type="button"
-                onClick={() => {
+                onClick={(e) => {
+                  e.stopPropagation();
                   if (locked) {
                     setGateHint("Plus or a tip (30 days) unlocks 🖕");
                     openPlusFromLobby();
@@ -5685,7 +5881,6 @@ function EmojiDock({ onPick }: { onPick: (emoji: string) => void }) {
                   }
                   setGateHint("");
                   onPick(face);
-                  setOpen(false);
                 }}
                 aria-label={locked ? `Locked react ${face}` : `React ${face}`}
                 title={locked ? "Plus or Donate" : undefined}
@@ -9793,6 +9988,8 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   const dealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const revealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sessionRef = useRef<MpSession | null>(readMpSession());
+  const creatingRef = useRef(false);
+  const pendingResumeRef = useRef(false);
   const pickupSentRef = useRef(false);
   const titleInputRef = useRef<HTMLInputElement | null>(null);
   const reconnectTriesRef = useRef(0);
@@ -10824,13 +11021,20 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   }
 
   function createLobby() {
+    if (creatingRef.current) return;
+    creatingRef.current = true;
+    setBusy(true);
+    setError("");
     void (async () => {
       try {
         const payload = await clerkPayload();
+        creatingRef.current = false;
         connect((ws) =>
           ws.send(JSON.stringify({ type: "create", ...payload, title: roomTitle.trim() }))
         );
       } catch (e) {
+        creatingRef.current = false;
+        setBusy(false);
         setError(clerkErrorText(e));
       }
     })();
@@ -10844,17 +11048,24 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       rejoinSavedGame();
       return;
     }
+    const clerk = typeof window !== "undefined" ? (window as any).Clerk : null;
+    if (beginSafariClerkHopIfNeeded(clerk, { kind: "join", code: c })) {
+      setBusy(true);
+      return;
+    }
     void (async () => {
+      setBusy(true);
+      setError("");
       try {
         const payload = await clerkPayload();
         const ws = wsRef.current;
         if (ws && ws.readyState === 1) {
-          setBusy(true);
           ws.send(JSON.stringify({ type: "join", code: c, ...payload }));
         } else {
           connect((sock) => sock.send(JSON.stringify({ type: "join", code: c, ...payload })));
         }
       } catch (e) {
+        setBusy(false);
         setError(clerkErrorText(e));
       }
     })();
@@ -11016,10 +11227,16 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       setDropped(false);
       return;
     }
+    const clerk = typeof window !== "undefined" ? (window as any).Clerk : null;
+    if (beginSafariClerkHopIfNeeded(clerk, { kind: "rejoin" })) {
+      setBusy(true);
+      return;
+    }
     sessionRef.current = sess;
     setSavedGame(sess);
     setDropped(false);
     setError("");
+    setBusy(true);
     void (async () => {
       try {
         const payload = await clerkPayload();
@@ -11034,6 +11251,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
           )
         );
       } catch (e) {
+        setBusy(false);
         setError(clerkErrorText(e));
         setDropped(true);
       }
@@ -11227,6 +11445,31 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [createOpen, busy]);
+
+  useEffect(() => {
+    if (screen !== "pick") return;
+    if (!auth.loaded || !auth.user) return;
+    if (pendingResumeRef.current) return;
+    const clerk = typeof window !== "undefined" ? (window as any).Clerk : null;
+    if (needsClerkItpTouch() && !clerkJwtFromClerk(clerk, { allowExpired: true })) return;
+    const pending = takePendingMp();
+    if (!pending) return;
+    pendingResumeRef.current = true;
+    if (pending.kind === "create") {
+      if (pending.title) {
+        persistRoomTitle(pending.title);
+        setRoomTitle(pending.title);
+      }
+      setCreateOpen(false);
+      createLobby();
+      return;
+    }
+    if (pending.kind === "join") {
+      joinOpenLobby(pending.code);
+      return;
+    }
+    rejoinSavedGame();
+  }, [screen, auth.loaded, auth.user]);
 
   useEffect(() => {
     if (!view || view.phase !== "dealing") {
@@ -11452,7 +11695,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         }}
       >
         {children}
-        {error ? <div style={{ color: "#f5b7b1", fontSize: 13, maxWidth: 300, lineHeight: 1.4 }}>{error}</div> : null}
+        {error && !createOpen ? <div style={{ color: "#f5b7b1", fontSize: 13, maxWidth: 300, lineHeight: 1.4 }}>{error}</div> : null}
       </div>
     </FeltShell>
   );
@@ -11572,6 +11815,12 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     const confirmCreate = () => {
       if (!auth.user) {
         setError("Sign in with Google first");
+        return;
+      }
+      persistRoomTitle(roomTitle);
+      const clerk = typeof window !== "undefined" ? (window as any).Clerk : null;
+      if (beginSafariClerkHopIfNeeded(clerk, { kind: "create", title: roomTitle.trim() })) {
+        setBusy(true);
         return;
       }
       createLobby();
@@ -11735,9 +11984,8 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
                   >
                     {busy ? "…" : "Create"}
                   </button>
-                ) : null}
-              </form>
-              <div style={{ display: "flex", gap: 10, width: "100%" }}>
+                ) : (
+              <div style={{ display: "flex", gap: 10, width: "100%", marginTop: 12 }}>
                 <button
                   type="button"
                   disabled={busy}
@@ -11747,15 +11995,28 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
                   Cancel
                 </button>
                 <button
-                  type="button"
+                  type="submit"
                   className="lobby-play-btn"
                   disabled={busy}
-                  onClick={confirmCreate}
                   style={{ ...LOBBY_GOLD_BTN, flex: 1, maxWidth: "none", height: 44 }}
                 >
                   {busy ? "Creating…" : "Create"}
                 </button>
               </div>
+                )}
+              </form>
+              {createKb ? (
+              <div style={{ display: "flex", gap: 10, width: "100%" }}>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setCreateOpen(false)}
+                  style={{ ...LOBBY_GHOST_BTN, flex: 1, maxWidth: "none", height: 44 }}
+                >
+                  Cancel
+                </button>
+              </div>
+              ) : null}
               {error ? (
                 <div style={{ color: "#f5b7b1", fontSize: 13, marginTop: 12, lineHeight: 1.4 }}>{error}</div>
               ) : null}
