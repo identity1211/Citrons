@@ -53,7 +53,14 @@ function fundPath() {
 }
 
 function emptyFund() {
-  return { raisedCents: 0, processed: [], sponsors: [], sponsorsPaidBackfill: false, updatedAt: 0 };
+  return {
+    raisedCents: 0,
+    processed: [],
+    sponsors: [],
+    sponsorsPaidBackfill: false,
+    sponsorsBadgeVersion: 0,
+    updatedAt: 0,
+  };
 }
 
 let fund = emptyFund();
@@ -104,6 +111,7 @@ function loadFund() {
       processed: Array.isArray(parsed.processed) ? parsed.processed.map(String).slice(-PROCESSED_MAX) : [],
       sponsors,
       sponsorsPaidBackfill: !!parsed.sponsorsPaidBackfill,
+      sponsorsBadgeVersion: Math.floor(Number(parsed.sponsorsBadgeVersion) || 0),
       updatedAt: Number(parsed.updatedAt) || 0,
     };
     sortSponsorsInPlace();
@@ -146,9 +154,15 @@ function plusUntilMs(meta) {
 
 function metaHasActivePlus(meta) {
   if (!meta || typeof meta !== "object") return false;
-  const flag = meta[META_PLUS] ?? meta.citronsPlus;
-  if (flag === true || flag === 1 || flag === "1" || String(flag).toLowerCase() === "true") return true;
+  if (metaHasSubscriptionPlus(meta)) return true;
   return plusUntilMs(meta) > Date.now();
+}
+
+/** Stripe / complimentary subscription flag only — not tip-granted Plus. */
+function metaHasSubscriptionPlus(meta) {
+  if (!meta || typeof meta !== "object") return false;
+  const flag = meta[META_PLUS] ?? meta.citronsPlus;
+  return flag === true || flag === 1 || flag === "1" || String(flag).toLowerCase() === "true";
 }
 
 function nextDonatePlusUntil(meta) {
@@ -254,7 +268,7 @@ async function syncSponsor(userId) {
     ...fund.sponsors[i],
     name: sponsorDisplayName(user),
     avatar: String(user.image_url || "").trim(),
-    plus: metaHasActivePlus(meta),
+    plus: metaHasSubscriptionPlus(meta),
     supporter: !!meta[META_SUPPORTER],
   };
   sortSponsorsInPlace();
@@ -293,7 +307,13 @@ async function sponsorsPublic() {
     console.warn("sponsors stripe backfill", err && err.message);
   }
   try {
-    await refreshSponsorsFromClerk(false);
+    // v2: Plus badge = subscription only (not tip-grant until).
+    const forceBadges = fund.sponsorsBadgeVersion !== 2;
+    await refreshSponsorsFromClerk(forceBadges);
+    if (forceBadges) {
+      fund.sponsorsBadgeVersion = 2;
+      saveFund();
+    }
   } catch (err) {
     console.warn("sponsors refresh", err && err.message);
   }
@@ -424,7 +444,7 @@ async function rebuildSponsorsFromStripe() {
         const meta = user.public_metadata || {};
         name = sponsorDisplayName(user);
         avatar = String(user.image_url || "").trim();
-        plus = metaHasActivePlus(meta);
+        plus = metaHasSubscriptionPlus(meta);
         supporter = !!meta[META_SUPPORTER];
       }
     } catch {
