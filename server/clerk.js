@@ -44,7 +44,9 @@ function peekPlusCache(userId) {
   if (!id) return null;
   const cached = plusCache.get(id);
   if (!cached) return null;
-  if (Date.now() - cached.at >= 60 * 1000) return null;
+  // Positive hits keep for 60s; negative only 5s so manual grants show up quickly.
+  const ttl = cached.plus ? 60 * 1000 : 5 * 1000;
+  if (Date.now() - cached.at >= ttl) return null;
   return { plus: !!cached.plus };
 }
 

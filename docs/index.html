@@ -3104,12 +3104,14 @@ function claimsIndicatePlus(payload: any): boolean {
 
 function userPublicMetaPlus(user: any): boolean {
   const meta = (user && (user.publicMetadata || user.public_metadata)) || {};
-  return !!(meta.citrons_plus || meta.citronsPlus);
+  const v = meta.citrons_plus ?? meta.citronsPlus;
+  return v === true || v === 1 || v === "1" || String(v).toLowerCase() === "true";
 }
 
 function userPublicMetaSupporter(user: any): boolean {
   const meta = (user && (user.publicMetadata || user.public_metadata)) || {};
-  return !!(meta.citrons_supporter || meta.citronsSupporter || meta.citrons_donated);
+  const v = meta.citrons_supporter ?? meta.citronsSupporter ?? meta.citrons_donated;
+  return v === true || v === 1 || v === "1" || String(v).toLowerCase() === "true";
 }
 
 function clerkSessionHasPlusSync(clerk: any): boolean {
@@ -3142,24 +3144,37 @@ async function clerkSessionHasPlus(clerk?: any): Promise<boolean> {
   if (clerkSessionHasPlusSync(c)) return true;
   try {
     if (c.user && typeof c.user.reload === "function") {
-      await c.user.reload();
+      await c.user.reload({ withCommits: true } as any);
       if (userPublicMetaPlus(c.user)) return true;
     }
   } catch {
-    /* ignore */
+    try {
+      if (c.user && typeof c.user.reload === "function") {
+        await c.user.reload();
+        if (userPublicMetaPlus(c.user)) return true;
+      }
+    } catch {
+      /* ignore */
+    }
   }
   try {
     const session = c.session;
     if (session && typeof session.getToken === "function") {
-      const token = await session.getToken();
-      if (claimsIndicatePlus(decodeJwtPayload(String(token || "")))) return true;
-      const st = await fetchBillingStatus(String(token || ""));
+      let token = "";
+      try {
+        token = String((await session.getToken({ skipCache: true })) || "");
+      } catch {
+        token = String((await session.getToken()) || "");
+      }
+      if (claimsIndicatePlus(decodeJwtPayload(token))) return true;
+      const st = await fetchBillingStatus(token);
       if (st && st.plus) return true;
     }
   } catch {
     /* ignore */
   }
-  return false;
+  // Last resort: trust publicMetadata on the in-memory user even if sync checks missed it.
+  return userPublicMetaPlus(c.user);
 }
 
 async function fetchBillingStatus(clerkToken: string): Promise<{ plus?: boolean } | null> {
@@ -3315,8 +3330,12 @@ function useClerkAuth() {
               /* ignore */
             }
             setIsSupporter(userPublicMetaSupporter(u));
+            // Public metadata is the source of truth for manual/Stripe grants.
+            setIsPlus(userPublicMetaPlus(u));
             void clerkSessionHasPlus(clerk).then((plus) => {
-              if (!cancelled) setIsPlus(plus);
+              if (cancelled) return;
+              // Never downgrade a metadata grant if the network path lags or fails.
+              setIsPlus(!!plus || userPublicMetaPlus(clerk.user) || userPublicMetaPlus(u));
             });
           } else {
             setIsPlus(false);
