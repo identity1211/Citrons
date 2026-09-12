@@ -870,8 +870,18 @@ function ensureKeyframes() {
       .lobby-fs-hint { display: none !important; }
     }
     @media (orientation: landscape) and (max-height: 520px) {
-      .lobby-logo { width: min(280px, 58vw) !important; margin: 0 0 2px !important; }
-      .lobby-fs-hint { display: none !important; }
+      .lobby-logo { width: min(260px, 42vw) !important; margin: 0 0 2px !important; }
+      .lobby-fs-hint, .lobby-edition { display: none !important; }
+      .lobby-play-btn, .lobby-ghost-btn { height: 40px !important; font-size: 15px !important; }
+      .lobby-main-land { max-width: min(720px, 100%) !important; }
+      .profile-sheet-panel {
+        width: min(360px, 48vw) !important;
+        height: 100% !important;
+        max-height: 100% !important;
+        margin: 0 !important;
+        border-radius: 14px 0 0 14px !important;
+        border-right: none !important;
+      }
     }
     .lobby-play-btn {
       transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
@@ -1324,6 +1334,27 @@ function useFullscreen() {
     };
   }, []);
   return on;
+}
+
+/** Phone landscape / short height — lobby and sheets must stay compact. */
+function useShortLandscape() {
+  const [short, setShort] = useState(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
+    return window.matchMedia("(orientation: landscape) and (max-height: 520px)").matches;
+  });
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+    const mq = window.matchMedia("(orientation: landscape) and (max-height: 520px)");
+    const sync = () => setShort(mq.matches);
+    sync();
+    if (typeof mq.addEventListener === "function") {
+      mq.addEventListener("change", sync);
+      return () => mq.removeEventListener("change", sync);
+    }
+    mq.addListener(sync);
+    return () => mq.removeListener(sync);
+  }, []);
+  return short;
 }
 
 function VisualFrame({ children }: { children: ReactNode }) {
@@ -3513,6 +3544,7 @@ function PlayerStatsBody({ userId }: { userId: string }) {
 
 function ProfileButton() {
   const { loaded, user, isPlus, setIsPlus, error } = useClerkAuth();
+  const shortLand = useShortLandscape();
   const [open, setOpen] = useState(false);
   const [pane, setPane] = useState<"profile" | "edit" | "stats" | "plus">("profile");
   const [nick, setNick] = useState("");
@@ -3667,18 +3699,34 @@ function ProfileButton() {
             background: "rgba(0,0,0,0.48)",
             display: "flex",
             alignItems: "stretch",
-            justifyContent: "center",
+            justifyContent: shortLand ? "flex-end" : "center",
             overflow: "auto",
-            padding:
-              "max(8px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left))",
+            padding: shortLand
+              ? 0
+              : "max(8px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left))",
             boxSizing: "border-box",
           }}
         >
           <div
+            className={shortLand ? "profile-sheet-panel" : undefined}
             onClick={(e) => e.stopPropagation()}
             style={{
               ...PROFILE_PANEL,
-              width: pane === "plus" ? "min(360px, 100%)" : PROFILE_PANEL.width,
+              width: shortLand
+                ? "min(360px, 48vw)"
+                : pane === "plus"
+                  ? "min(360px, 100%)"
+                  : PROFILE_PANEL.width,
+              ...(shortLand
+                ? {
+                    height: "100%",
+                    maxHeight: "100%",
+                    margin: 0,
+                    borderRadius: "14px 0 0 14px",
+                    borderRight: "none",
+                    padding: "10px 12px 10px",
+                  }
+                : null),
             }}
           >
             <ProfileHeader title={paneTitle} onBack={showBack ? () => setPane("profile") : undefined} />
@@ -3693,16 +3741,40 @@ function ProfileButton() {
                     background: "#f7f3ea",
                     color: "#1a2e1a",
                     borderRadius: 12,
-                    padding: "14px 14px 12px",
-                    marginBottom: 10,
+                    padding: shortLand ? "10px 12px 8px" : "14px 14px 12px",
+                    marginBottom: 8,
                   }}
                 >
-                  <div style={{ fontFamily: 'Georgia, "Times New Roman", serif', fontSize: 22, fontWeight: 700 }}>
-                    Plus
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "baseline",
+                      justifyContent: "space-between",
+                      gap: 10,
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontFamily: 'Georgia, "Times New Roman", serif',
+                        fontSize: shortLand ? 18 : 22,
+                        fontWeight: 700,
+                      }}
+                    >
+                      Plus
+                    </div>
+                    <div style={{ fontSize: shortLand ? 20 : 28, fontWeight: 800, letterSpacing: -0.5 }}>
+                      €2.99
+                      <span style={{ fontSize: 11, fontWeight: 600, marginLeft: 4, opacity: 0.7 }}>/mo</span>
+                    </div>
                   </div>
-                  <div style={{ marginTop: 4, fontSize: 28, fontWeight: 800, letterSpacing: -0.5 }}>€2.99</div>
-                  <div style={{ fontSize: 12, color: "rgba(26,46,26,0.65)", marginBottom: 8 }}>per month · EUR</div>
-                  <div style={{ fontSize: 13, lineHeight: 1.4, color: "rgba(26,46,26,0.78)" }}>
+                  <div
+                    style={{
+                      marginTop: 6,
+                      fontSize: shortLand ? 12 : 13,
+                      lineHeight: 1.35,
+                      color: "rgba(26,46,26,0.78)",
+                    }}
+                  >
                     {isPlus
                       ? "You're on Plus. Manage billing in the Stripe portal — cancel anytime."
                       : "Extra card backs, tables, and more as we roll them out."}
@@ -3713,13 +3785,13 @@ function ProfileButton() {
                     style={{
                       display: "inline-flex",
                       alignItems: "center",
-                      margin: "0 auto 10px",
-                      padding: "4px 10px",
+                      margin: "0 auto 8px",
+                      padding: "3px 8px",
                       borderRadius: 999,
                       background: "rgba(241,196,15,0.18)",
                       border: "1px solid rgba(241,196,15,0.55)",
                       color: "#f1c40f",
-                      fontSize: 11,
+                      fontSize: 10,
                       fontWeight: 800,
                       letterSpacing: 0.6,
                       textTransform: "uppercase",
@@ -3738,7 +3810,7 @@ function ProfileButton() {
                         window.location.assign(url);
                       })
                     }
-                    style={{ ...LOBBY_GOLD_BTN, maxWidth: "100%", height: 40, fontSize: 14, marginBottom: 8 }}
+                    style={{ ...LOBBY_GOLD_BTN, maxWidth: "100%", height: 40, fontSize: 14, marginBottom: 4 }}
                   >
                     {busy ? "Opening…" : "Manage subscription"}
                   </button>
@@ -3752,7 +3824,7 @@ function ProfileButton() {
                         window.location.assign(url);
                       })
                     }
-                    style={{ ...LOBBY_GOLD_BTN, maxWidth: "100%", height: 40, fontSize: 14, marginBottom: 8 }}
+                    style={{ ...LOBBY_GOLD_BTN, maxWidth: "100%", height: 40, fontSize: 14, marginBottom: 4 }}
                   >
                     {busy ? "Opening checkout…" : `Subscribe · ${PLUS_PRICE_LABEL}`}
                   </button>
@@ -3777,8 +3849,11 @@ function ProfileButton() {
                     ...PROFILE_MUTED_BTN,
                     border: "none",
                     background: "transparent",
-                    height: 28,
-                    marginTop: 2,
+                    height: 24,
+                    marginTop: 0,
+                    fontSize: 11,
+                    textDecoration: "underline",
+                    textUnderlineOffset: 2,
                   }}
                 >
                   Refresh status
@@ -3848,59 +3923,74 @@ function ProfileButton() {
               </>
             ) : user ? (
               <>
-                <div style={{ display: "flex", justifyContent: "center", marginBottom: 6, position: "relative" }}>
-                  <AvatarBubble src={user.imageUrl} name={nickName} size={56} />
-                  {isPlus ? (
-                    <span
-                      style={{
-                        position: "absolute",
-                        right: "calc(50% - 40px)",
-                        bottom: -2,
-                        fontSize: 10,
-                        fontWeight: 800,
-                        letterSpacing: 0.4,
-                        textTransform: "uppercase",
-                        color: "#1a2e1a",
-                        background: "#f1c40f",
-                        borderRadius: 6,
-                        padding: "2px 5px",
-                      }}
-                    >
-                      Plus
-                    </span>
-                  ) : null}
-                </div>
                 <div
                   style={{
-                    fontSize: 16,
-                    fontWeight: 700,
-                    marginBottom: 2,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
+                    display: "flex",
+                    flexDirection: shortLand ? "row" : "column",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: shortLand ? 10 : 0,
+                    marginBottom: shortLand ? 4 : 6,
+                    position: "relative",
+                    textAlign: shortLand ? "left" : "center",
                   }}
                 >
-                  {nickName}
+                  <span style={{ position: "relative", display: "inline-flex", flexShrink: 0 }}>
+                    <AvatarBubble src={user.imageUrl} name={nickName} size={shortLand ? 44 : 56} />
+                    {isPlus ? (
+                      <span
+                        style={{
+                          position: "absolute",
+                          right: -4,
+                          bottom: -2,
+                          fontSize: 9,
+                          fontWeight: 800,
+                          letterSpacing: 0.4,
+                          textTransform: "uppercase",
+                          color: "#1a2e1a",
+                          background: "#f1c40f",
+                          borderRadius: 6,
+                          padding: "2px 4px",
+                        }}
+                      >
+                        Plus
+                      </span>
+                    ) : null}
+                  </span>
+                  <div style={{ minWidth: 0, flex: shortLand ? 1 : undefined }}>
+                    <div
+                      style={{
+                        fontSize: shortLand ? 15 : 16,
+                        fontWeight: 700,
+                        marginBottom: 0,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {nickName}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setPane("edit")}
+                      style={{
+                        border: "none",
+                        background: "transparent",
+                        color: "rgba(245,240,230,0.62)",
+                        fontSize: 12,
+                        fontWeight: 600,
+                        cursor: "pointer",
+                        padding: shortLand ? "2px 0 0" : "2px 6px 8px",
+                        textDecoration: "underline",
+                        textUnderlineOffset: 3,
+                      }}
+                    >
+                      Edit profile
+                    </button>
+                  </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setPane("edit")}
-                  style={{
-                    border: "none",
-                    background: "transparent",
-                    color: "rgba(245,240,230,0.62)",
-                    fontSize: 12,
-                    fontWeight: 600,
-                    cursor: "pointer",
-                    padding: "2px 6px 8px",
-                    textDecoration: "underline",
-                    textUnderlineOffset: 3,
-                  }}
-                >
-                  Edit profile
-                </button>
 
-                <div style={PROFILE_DIVIDER} />
+                <div style={{ ...PROFILE_DIVIDER, margin: shortLand ? "6px 0" : "10px 0" }} />
 
                 <ProfileNavRow label="Stats" onClick={() => setPane("stats")} />
                 <ProfileNavRow
@@ -3910,7 +4000,7 @@ function ProfileButton() {
                   onClick={() => setPane("plus")}
                 />
 
-                <div style={PROFILE_DIVIDER} />
+                <div style={{ ...PROFILE_DIVIDER, margin: shortLand ? "6px 0" : "10px 0" }} />
 
                 <button
                   type="button"
@@ -5985,6 +6075,7 @@ function Lobby({
   onRules: () => void;
   onOnline: () => void;
 }) {
+  const shortLand = useShortLandscape();
   const [view, setView] = useState<LobbyView>("main");
   const [selected, setSelected] = useState(4);
   const [popKey, setPopKey] = useState(0);
@@ -6000,10 +6091,44 @@ function Lobby({
     setPopKey((k) => k + 1);
   }
 
+  const mainPlayBtns = (
+    <>
+      <button
+        type="button"
+        className="lobby-play-btn"
+        onClick={() => setView("solo")}
+        style={{ ...LOBBY_GOLD_BTN, ...(shortLand ? { height: 40, maxWidth: "none" } : null) }}
+      >
+        Solo
+      </button>
+      <button
+        type="button"
+        className="lobby-play-btn"
+        onClick={onOnline}
+        style={{ ...LOBBY_GOLD_BTN, ...(shortLand ? { height: 40, maxWidth: "none" } : null) }}
+      >
+        Multiplayer
+      </button>
+      <button
+        type="button"
+        className="lobby-ghost-btn"
+        onClick={() => setView("board")}
+        style={{
+          ...LOBBY_GHOST_BTN,
+          ...(shortLand
+            ? { height: 36, maxWidth: "none", fontSize: 13 }
+            : { height: 44, fontSize: 14 }),
+        }}
+      >
+        Leaderboard
+      </button>
+    </>
+  );
+
   return (
     <>
     <FeltShell
-      center={view !== "board"}
+      center={view !== "board" && !(view === "main" && shortLand)}
       overlay={
         <>
           <ProfileButton />
@@ -6051,9 +6176,74 @@ function Lobby({
         padding:
           view === "board"
             ? "max(52px, calc(env(safe-area-inset-top) + 40px)) 16px max(48px, calc(env(safe-area-inset-bottom) + 28px))"
-            : "max(40px, calc(env(safe-area-inset-top) + 22px)) 16px max(56px, calc(env(safe-area-inset-bottom) + 40px))",
+            : shortLand
+              ? "max(10px, calc(env(safe-area-inset-top) + 4px)) 12px max(12px, calc(env(safe-area-inset-bottom) + 8px))"
+              : "max(40px, calc(env(safe-area-inset-top) + 22px)) 16px max(56px, calc(env(safe-area-inset-bottom) + 40px))",
       }}
     >
+      {view === "main" && shortLand ? (
+        <div
+          className="lobby-main-land lobby-brand-in"
+          style={{
+            width: "100%",
+            maxWidth: 720,
+            flex: 1,
+            minHeight: 0,
+            display: "flex",
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 18,
+            padding: "0 8px",
+            boxSizing: "border-box",
+          }}
+        >
+          <div
+            style={{
+              flex: "1 1 48%",
+              minWidth: 0,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              textAlign: "center",
+            }}
+          >
+            <img
+              className="lobby-logo"
+              src="citrons-logo.png"
+              alt="Citrons"
+              width={360}
+              height={100}
+              style={{
+                width: "min(260px, 42vw)",
+                maxWidth: "100%",
+                height: "auto",
+                display: "block",
+                margin: "0 auto 2px",
+                filter: "drop-shadow(0 8px 18px rgba(0,0,0,0.35))",
+                userSelect: "none",
+                pointerEvents: "none",
+              }}
+              draggable={false}
+            />
+            <GamesPlayedLine compact />
+            <FundraiserMeter compact />
+          </div>
+          <div
+            style={{
+              flex: "1 1 40%",
+              minWidth: 168,
+              maxWidth: 280,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "stretch",
+              gap: 8,
+            }}
+          >
+            {mainPlayBtns}
+          </div>
+        </div>
+      ) : (
       <div
         style={{
           width: "100%",
@@ -6073,7 +6263,7 @@ function Lobby({
             style={{
               animationDelay: "0.05s",
               flexShrink: 0,
-              paddingTop: 12,
+              paddingTop: shortLand ? 4 : 12,
               position: "relative",
               zIndex: 1,
             }}
@@ -6085,7 +6275,7 @@ function Lobby({
               width={360}
               height={100}
               style={{
-                width: "clamp(240px, 72vw, 360px)",
+                width: shortLand ? "min(240px, 56vw)" : "clamp(240px, 72vw, 360px)",
                 maxWidth: "100%",
                 height: "auto",
                 display: "block",
@@ -6096,12 +6286,14 @@ function Lobby({
               }}
               draggable={false}
             />
-            {view === "main" ? <GamesPlayedLine /> : null}
-            {view === "main" ? <FundraiserMeter /> : null}
+            {view === "main" ? <GamesPlayedLine compact={shortLand} /> : null}
+            {view === "main" ? <FundraiserMeter compact={shortLand} /> : null}
           </div>
         ) : null}
 
-        {view !== "board" && <div style={{ flex: 1, minHeight: 12, width: "100%" }} />}
+        {view !== "board" && (
+          <div style={{ flex: shortLand ? "0 0 8px" : 1, minHeight: shortLand ? 4 : 12, width: "100%" }} />
+        )}
 
         <div
           key={view}
@@ -6112,45 +6304,17 @@ function Lobby({
             display: "flex",
             flexDirection: "column",
             alignItems: "center",
-            gap: view === "board" ? 10 : 12,
+            gap: view === "board" ? 10 : shortLand ? 8 : 12,
             flexShrink: view === "board" ? 1 : 0,
             flex: view === "board" ? 1 : undefined,
             minHeight: view === "board" ? 0 : undefined,
             position: "relative",
             zIndex: 3,
-            marginTop: view === "board" ? 0 : "auto",
+            marginTop: view === "board" ? 0 : shortLand ? 0 : "auto",
             paddingBottom: 4,
           }}
         >
-          {view === "main" && (
-            <>
-              <button
-                type="button"
-                className="lobby-play-btn"
-                onClick={() => setView("solo")}
-                style={LOBBY_GOLD_BTN}
-              >
-                Solo
-              </button>
-              <button
-                type="button"
-                className="lobby-play-btn"
-                onClick={onOnline}
-                style={LOBBY_GOLD_BTN}
-              >
-                Multiplayer
-              </button>
-              <button
-                type="button"
-                className="lobby-ghost-btn"
-                onClick={() => setView("board")}
-                style={LOBBY_GHOST_BTN}
-              >
-                Leaderboard
-              </button>
-              <DonateButton />
-            </>
-          )}
+          {view === "main" && mainPlayBtns}
 
           {view === "board" && (
             <>
@@ -6285,6 +6449,7 @@ function Lobby({
           )}
         </div>
       </div>
+      )}
     </FeltShell>
     {iosInstall ? (
       <IosInstallTutorial
@@ -7775,7 +7940,7 @@ function medalColor(rank: number): string {
   return "rgba(255,255,255,0.45)";
 }
 
-function GamesPlayedLine() {
+function GamesPlayedLine({ compact }: { compact?: boolean }) {
   const [total, setTotal] = useState<number | null>(null);
 
   useEffect(() => {
@@ -7800,9 +7965,9 @@ function GamesPlayedLine() {
   return (
     <div
       style={{
-        marginTop: 10,
+        marginTop: compact ? 4 : 10,
         color: "rgba(255,255,255,0.55)",
-        fontSize: 13,
+        fontSize: compact ? 12 : 13,
         fontWeight: 600,
         letterSpacing: 0.4,
         textShadow: "0 1px 8px rgba(0,0,0,0.35)",
@@ -7818,7 +7983,7 @@ function formatEuroCents(cents: number): string {
   return n.toLocaleString("en-US", { style: "currency", currency: "EUR", minimumFractionDigits: n % 1 ? 2 : 0 });
 }
 
-function FundraiserMeter() {
+function FundraiserMeter({ compact }: { compact?: boolean }) {
   const [raised, setRaised] = useState<number | null>(null);
   const [goal, setGoal] = useState(3000);
 
@@ -7863,13 +8028,29 @@ function FundraiserMeter() {
     return () => window.clearTimeout(t);
   }, []);
 
-  if (raised === null) return null;
+  if (raised === null) {
+    return (
+      <div
+        style={{
+          marginTop: compact ? 6 : 10,
+          width: compact ? "min(240px, 90%)" : "min(280px, 86vw)",
+          marginLeft: "auto",
+          marginRight: "auto",
+          textAlign: "center",
+          display: "flex",
+          justifyContent: "center",
+        }}
+      >
+        <DonateButton compact />
+      </div>
+    );
+  }
   const pct = Math.max(0, Math.min(100, Math.round((100 * raised) / goal)));
   return (
     <div
       style={{
-        marginTop: 12,
-        width: "min(260px, 78vw)",
+        marginTop: compact ? 6 : 10,
+        width: compact ? "min(240px, 90%)" : "min(280px, 86vw)",
         marginLeft: "auto",
         marginRight: "auto",
         textAlign: "center",
@@ -7877,19 +8058,32 @@ function FundraiserMeter() {
     >
       <div
         style={{
-          fontSize: 12,
-          fontWeight: 700,
-          letterSpacing: 0.3,
-          color: "rgba(245,240,230,0.78)",
-          marginBottom: 6,
-          textShadow: "0 1px 8px rgba(0,0,0,0.35)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+          marginBottom: 5,
         }}
       >
-        {formatEuroCents(raised)} / {formatEuroCents(goal)} raised
+        <div
+          style={{
+            fontSize: compact ? 11 : 12,
+            fontWeight: 700,
+            letterSpacing: 0.3,
+            color: "rgba(245,240,230,0.78)",
+            textShadow: "0 1px 8px rgba(0,0,0,0.35)",
+            textAlign: "left",
+            flex: 1,
+            minWidth: 0,
+          }}
+        >
+          {formatEuroCents(raised)} / {formatEuroCents(goal)} raised
+        </div>
+        <DonateButton compact />
       </div>
       <div
         style={{
-          height: 8,
+          height: compact ? 6 : 8,
           borderRadius: 999,
           background: "rgba(0,0,0,0.28)",
           border: "1px solid rgba(255,255,255,0.18)",
@@ -7913,7 +8107,8 @@ function FundraiserMeter() {
 
 const DONATE_PRESETS = [100, 300, 500, 1000];
 
-function DonateButton() {
+function DonateButton({ compact }: { compact?: boolean }) {
+  const shortLand = useShortLandscape();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
@@ -7934,9 +8129,25 @@ function DonateButton() {
     <>
       <button
         type="button"
-        className="lobby-ghost-btn"
         onClick={() => setOpen(true)}
-        style={{ ...LOBBY_GHOST_BTN, height: 42, fontSize: 14 }}
+        style={
+          compact
+            ? {
+                flexShrink: 0,
+                border: "1px solid rgba(241,196,15,0.45)",
+                background: "rgba(241,196,15,0.12)",
+                color: "#f1c40f",
+                borderRadius: 999,
+                padding: "3px 10px",
+                fontSize: 11,
+                fontWeight: 800,
+                letterSpacing: 0.4,
+                textTransform: "uppercase",
+                cursor: "pointer",
+                lineHeight: 1.2,
+              }
+            : { ...LOBBY_GHOST_BTN, height: 42, fontSize: 14 }
+        }
       >
         Donate
       </button>
@@ -7949,9 +8160,10 @@ function DonateButton() {
             zIndex: 90,
             background: "rgba(0,0,0,0.48)",
             display: "flex",
-            alignItems: "center",
+            alignItems: shortLand ? "flex-start" : "center",
             justifyContent: "center",
-            padding: 16,
+            overflow: "auto",
+            padding: shortLand ? "8px 12px" : 16,
             boxSizing: "border-box",
             pointerEvents: "auto",
           }}
@@ -7961,7 +8173,9 @@ function DonateButton() {
             style={{
               ...PROFILE_PANEL,
               width: "min(300px, 100%)",
+              maxHeight: shortLand ? "calc(100% - 8px)" : undefined,
               textAlign: "center",
+              margin: shortLand ? "0 auto" : "auto",
             }}
           >
             <div style={{ fontFamily: 'Georgia, "Times New Roman", serif', fontSize: 20, fontWeight: 700, marginBottom: 6 }}>

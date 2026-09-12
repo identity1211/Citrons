@@ -94,9 +94,18 @@ my $html = <<"HTML";
       .lobby-fs-hint { display: none !important; }
     }
     \@media (orientation: landscape) and (max-height: 520px) {
-      .lobby-logo { width: min(280px, 58vw) !important; margin: 0 0 2px !important; }
-      .lobby-fs-hint { display: none !important; }
-      .lobby-play-btn, .lobby-ghost-btn { height: 42px !important; }
+      .lobby-logo { width: min(260px, 42vw) !important; margin: 0 0 2px !important; }
+      .lobby-fs-hint, .lobby-edition { display: none !important; }
+      .lobby-play-btn, .lobby-ghost-btn { height: 40px !important; font-size: 15px !important; }
+      .lobby-main-land { max-width: min(720px, 100%) !important; }
+      .profile-sheet-panel {
+        width: min(360px, 48vw) !important;
+        height: 100% !important;
+        max-height: 100% !important;
+        margin: 0 !important;
+        border-radius: 14px 0 0 14px !important;
+        border-right: none !important;
+      }
     }
   </style>
   <script>
