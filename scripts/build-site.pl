@@ -80,7 +80,7 @@ my $html = <<"HTML";
   <link rel="dns-prefetch" href="https://clerk.citrons.lat" />
   <!-- keep ?v= in sync with HOME_ICON_VERSION in canvases/card-game.canvas.tsx -->
   <link rel="apple-touch-icon" href="apple-touch-icon.png?v=1" />
-  <title>Citrons — TwoCircles Edition</title>
+  <title>Citrons</title>
   <meta name="description" content="Citrons card game. Solo against bots." />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%231a6b3c'/><text x='16' y='22' text-anchor='middle' font-size='16' fill='%23f5f0e6'>C</text></svg>" />
   <style>
@@ -103,7 +103,7 @@ my $html = <<"HTML";
     }
     \@media (orientation: landscape) and (max-height: 520px) {
       .lobby-logo { width: min(220px, 38vw) !important; margin: 0 0 2px !important; }
-      .lobby-fs-hint, .lobby-edition { display: none !important; }
+      .lobby-fs-hint { display: none !important; }
       .lobby-play-btn, .lobby-ghost-btn { height: 40px !important; font-size: 15px !important; }
       .lobby-main-land { max-width: min(720px, 100%) !important; }
       .profile-sheet-panel {

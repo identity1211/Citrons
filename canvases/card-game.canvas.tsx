@@ -929,7 +929,7 @@ function ensureKeyframes() {
     }
     @media (orientation: landscape) and (max-height: 520px) {
       .lobby-logo { width: min(220px, 38vw) !important; margin: 0 0 2px !important; }
-      .lobby-fs-hint, .lobby-edition { display: none !important; }
+      .lobby-fs-hint { display: none !important; }
       .lobby-play-btn, .lobby-ghost-btn { height: 40px !important; font-size: 15px !important; }
       .lobby-main-land { max-width: min(720px, 100%) !important; }
       .profile-sheet-panel {
@@ -6853,23 +6853,6 @@ function Lobby({
             </div>
           )}
           {view !== "main" && <LobbyBack onClick={() => setView("main")} />}
-          <div
-            className="lobby-edition"
-            style={{
-              position: "absolute",
-              right: "max(16px, env(safe-area-inset-right))",
-              bottom: "max(12px, env(safe-area-inset-bottom))",
-              zIndex: 2,
-              fontSize: 11,
-              fontWeight: 500,
-              letterSpacing: 0.5,
-              color: "rgba(255,255,255,0.26)",
-              pointerEvents: "none",
-              whiteSpace: "nowrap",
-            }}
-          >
-            TwoCircles Edition
-          </div>
         </>
       }
       style={{

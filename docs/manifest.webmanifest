@@ -1,7 +1,7 @@
 {
   "name": "Citrons",
   "short_name": "Citrons",
-  "description": "Citrons — TwoCircles Edition",
+  "description": "Citrons card game",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
