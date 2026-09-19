@@ -722,7 +722,6 @@ async function joinRoom(ws, code, name, token, avatar, clerkToken, intent) {
 
   // Table full or match live/finished — watch (classic) or watch/queue (elimination).
   if (!elim) {
-    if (room.phase === "waiting") return error(ws, "Lobby is full");
     if (roomSpectators(room).length >= MAX_SPECTATORS) return error(ws, "This table is full of watchers");
     if (!Array.isArray(room.spectators)) room.spectators = [];
     releaseClerk(clerkUserId, room.code);

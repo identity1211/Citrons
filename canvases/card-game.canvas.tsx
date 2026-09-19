@@ -8298,7 +8298,7 @@ function Table({
             pointerEvents: "none",
           }}
         >
-          Watching
+          {watching && phase === "lobby" ? "Waiting for start" : "Watching"}
         </div>
       ) : phase === "finished" ? null : (
         <>
@@ -8556,13 +8556,8 @@ function OpenLobbyList({
             const elim = lobby.mode === "elimination";
             const watchFull = (lobby.watchers || 0) >= (lobby.watchMax || 16);
             const seatsFull = lobby.count >= lobby.max;
-            const full = mine
-              ? false
-              : elim
-                ? watchFull
-                : live
-                  ? watchFull
-                  : seatsFull;
+            // Seats full in the waiting room → watch (or watch/queue), not a hard "Full".
+            const full = mine ? false : watchFull;
             const names = lobby.players.map((p) => p.name).join(", ");
             const watchers = lobby.watchers || 0;
             const queueN = lobby.queue || 0;
@@ -8570,7 +8565,7 @@ function OpenLobbyList({
             if (full) actionLabel = "Full";
             else if (mine) actionLabel = "Rejoin";
             else if (elim && (live || seatsFull)) actionLabel = "Watch / Queue";
-            else if (live) actionLabel = "Watch";
+            else if (live || seatsFull) actionLabel = "Watch";
             return (
               <div
                 key={lobby.code}
@@ -10972,7 +10967,8 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       if (msg.view.phase === "waiting") {
         clearTableAnims();
         setView(msg.view);
-        setScreen("waiting");
+        // Spectators / queue sit on the empty table until the host starts.
+        setScreen(msg.view.spectator ? "table" : "waiting");
         return;
       }
       setScreen("table");
@@ -12283,7 +12279,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
               <div style={{ color: "rgba(245,240,230,0.72)", fontSize: 13, lineHeight: 1.4, marginBottom: 14 }}>
                 {joinChoice.live
                   ? "Match in progress. Watch now, or join the queue for the next seat."
-                  : "Table is full. Watch the lobby, or join the queue for the next open seat."}
+                  : "Table is full. Watch the empty table until the match starts, or join the queue."}
                 {joinChoice.queue > 0 ? ` ${joinChoice.queue} already queued.` : ""}
               </div>
               <button
@@ -12863,14 +12859,30 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         discard={view.discard}
         phase={tablePhase}
         dealing={dealing && view.phase === "dealing"}
-        dealProgress={view.phase === "dealing" ? dealProgress : fullDealProgress(players.length)}
+        dealProgress={
+          view.phase === "dealing"
+            ? dealProgress
+            : view.phase === "waiting"
+              ? {
+                  faceDown: players.map(() => 0),
+                  faceUp: players.map(() => 0),
+                  hand: players.map(() => 0),
+                }
+              : fullDealProgress(players.length)
+        }
         lastStep={lastStep}
         swapSeconds={view.swapSeconds}
         selection={selection}
         swapTick={swapTick}
         currentPlayer={view.currentPlayer}
         playSelected={playSelected}
-        statusMsg={view.statusMsg}
+        statusMsg={
+          view.spectator && view.phase === "waiting"
+            ? view.queued
+              ? "You're in the queue · Waiting for the match to start"
+              : "Waiting for the match to start"
+            : view.statusMsg
+        }
         finishOrder={view.finishOrder}
         flyAnim={flyAnim}
         burnCount={view.burnCount}
