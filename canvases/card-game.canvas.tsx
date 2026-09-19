@@ -2498,6 +2498,12 @@ const ACHIEVEMENT_META: { id: string; title: string; desc: string; icon: string 
     desc: "Win a match without chatting or sending reacts",
     icon: "achievements/silent_lemon.jpg",
   },
+  {
+    id: "toxic_lemon",
+    title: "Toxic Lemon",
+    desc: "Send 1000 middle-finger reacts",
+    icon: "achievements/toxic_lemon.jpg",
+  },
 ];
 
 function achievementMeta(id: string) {

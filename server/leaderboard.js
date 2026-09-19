@@ -88,6 +88,12 @@ const ACHIEVEMENTS = [
     desc: "Win a match without chatting or sending reacts",
     match: true,
   },
+  {
+    id: "toxic_lemon",
+    title: "Toxic Lemon",
+    desc: "Send 1000 middle-finger reacts",
+    check: (u) => num(u.fuckReacts) >= 1000,
+  },
 ];
 
 const ACHIEVEMENT_IDS = new Set(ACHIEVEMENTS.map((a) => a.id));
@@ -412,6 +418,7 @@ function normalizeRow(raw) {
       recent: numRecent(prev.recent),
       meddles: num(prev.meddles),
       sixForces: num(prev.sixForces),
+      fuckReacts: num(prev.fuckReacts),
       achievements: numAchievements(prev.achievements),
     };
   } else {
@@ -441,6 +448,7 @@ function normalizeRow(raw) {
       recent: [],
       meddles: num(prev.meddles),
       sixForces: num(prev.sixForces),
+      fuckReacts: num(prev.fuckReacts),
       achievements: numAchievements(prev.achievements),
     };
   }
@@ -583,6 +591,7 @@ function bump(userId, name, avatar, { place, field, matchFlags }) {
     recent,
     meddles: num(prev.meddles),
     sixForces: num(prev.sixForces),
+    fuckReacts: num(prev.fuckReacts),
     achievements: { ...prev.achievements },
   };
   const flags = win && matchFlags && typeof matchFlags === "object" ? matchFlags : null;
@@ -635,6 +644,28 @@ function recordSixForce(userId, name, avatar) {
   return { id, unlocked };
 }
 
+function recordFuckReact(userId, name, avatar) {
+  const id = sanitizeId(userId);
+  if (!id) return { id: "", unlocked: [] };
+  const prev = store.users[id] ? normalizeRow(store.users[id]) : normalizeRow({});
+  const next = {
+    ...prev,
+    name: sanitizeName(name) || prev.name,
+    avatar: sanitizeAvatar(avatar) || prev.avatar,
+    fuckReacts: num(prev.fuckReacts) + 1,
+    updatedAt: Date.now(),
+    achievements: { ...(prev.achievements || {}) },
+  };
+  const unlocked = unlockNewAchievements(next, id);
+  store.users[id] = next;
+  pending.add(id);
+  saveSafe();
+  Promise.resolve(pushUserToClerkWithRetry(id, next)).catch((err) => {
+    console.error("leaderboard fuck-react clerk sync failed", err);
+  });
+  return { id, unlocked };
+}
+
 async function clerkApi(method, urlPath, body) {
   const key = clerkKey();
   if (!key) return null;
@@ -662,7 +693,15 @@ function rowFromClerkUser(user) {
     name: meta.name || [user.first_name, user.last_name].filter(Boolean).join(" ") || user.username,
     avatar: meta.avatar || user.image_url,
   });
-  if (row.games <= 0 && row.wins <= 0 && row.points <= 0 && num(row.meddles) <= 0 && num(row.sixForces) <= 0 && !seasonHasData(row.season1)) {
+  if (
+    row.games <= 0 &&
+    row.wins <= 0 &&
+    row.points <= 0 &&
+    num(row.meddles) <= 0 &&
+    num(row.sixForces) <= 0 &&
+    num(row.fuckReacts) <= 0 &&
+    !seasonHasData(row.season1)
+  ) {
     return null;
   }
   const id = sanitizeId(user.id);
@@ -779,6 +818,8 @@ function mergeClerkRow(parsed) {
     const merged = {
       ...next,
       season1,
+      // fuckReacts stay server-local (not in Clerk public metadata)
+      fuckReacts: Math.max(num(prev && prev.fuckReacts), num(next.fuckReacts)),
       recent: (prev && prev.recent) || next.recent || [],
       achievements: {
         ...((prev && prev.achievements) || {}),
@@ -894,7 +935,14 @@ function recordGame(room) {
 }
 
 function onBoard(u) {
-  return num(u.games) > 0 || num(u.points) > 0 || num(u.meddles) > 0 || seasonHasData(u.season1);
+  return (
+    num(u.games) > 0 ||
+    num(u.points) > 0 ||
+    num(u.meddles) > 0 ||
+    num(u.sixForces) > 0 ||
+    num(u.fuckReacts) > 0 ||
+    seasonHasData(u.season1)
+  );
 }
 
 function top(limit) {
@@ -1031,6 +1079,7 @@ module.exports = {
   recordGame,
   recordMeddle,
   recordSixForce,
+  recordFuckReact,
   top,
   matches,
   stats,

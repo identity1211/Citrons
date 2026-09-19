@@ -862,6 +862,14 @@ async function handleReact(room, player, emoji) {
     if (!s.ws) continue;
     send(s.ws, { type: "react", react });
   }
+  if (face === "🖕" && player.clerkUserId) {
+    try {
+      const { unlocked } = leaderboard.recordFuckReact(player.clerkUserId, player.name, player.avatar);
+      pushPendingAchievements(room, player, unlocked);
+    } catch (err) {
+      console.error("fuck-react stats failed", err);
+    }
+  }
 }
 
 function handleChat(room, player, text) {
