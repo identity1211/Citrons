@@ -1956,28 +1956,30 @@ function flyOrigin(playerIndex: number, playerCount: number): { x: string; y: st
   return { x: `${x}%`, y: "-30%", rot: 6 + i * 3 };
 }
 
-/** Stable messy offsets so burn cards look tossed, not restacked each render. */
+/** Stable messy offsets so burn cards look tossed, not restacked each render.
+ *  Bias x rightward so the pile stays clear of the discard at 50%. */
 const BURN_MESS: { x: number; y: number; rot: number }[] = [
-  { x: -6, y: 4, rot: -18 },
-  { x: 10, y: -2, rot: 14 },
-  { x: -2, y: -8, rot: -7 },
-  { x: 8, y: 6, rot: 22 },
-  { x: -10, y: 1, rot: -25 },
-  { x: 4, y: -5, rot: 9 },
-  { x: -4, y: 8, rot: 16 },
+  { x: 2, y: 5, rot: -16 },
+  { x: 12, y: -3, rot: 18 },
+  { x: 0, y: -6, rot: -9 },
+  { x: 10, y: 7, rot: 24 },
+  { x: 4, y: 1, rot: -22 },
+  { x: 14, y: -4, rot: 11 },
+  { x: 6, y: 8, rot: -14 },
 ];
 
 function BurnPile({ count }: { count: number }) {
   const backId = useCardBack();
-  const shown = Math.min(count, BURN_MESS.length);
+  const n = Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
+  const shown = Math.min(n, BURN_MESS.length);
   return (
-    <div style={{ position: "relative", width: 72, height: 100 }}>
-      {count === 0 ? (
+    <div style={{ position: "relative", width: 78, height: 104 }}>
+      {n === 0 ? (
         <div
           style={{
             width: 64,
             height: 90,
-            margin: "5px 4px",
+            margin: "7px 7px",
             borderRadius: 7,
             border: "2px dashed rgba(255,255,255,0.22)",
             display: "flex",
@@ -2000,8 +2002,8 @@ function BurnPile({ count }: { count: number }) {
                 key={i}
                 style={{
                   position: "absolute",
-                  top: 5 + m.y,
-                  left: 4 + m.x,
+                  top: 7 + m.y,
+                  left: 7 + m.x,
                   width: 64,
                   height: 90,
                   borderRadius: 7,
@@ -2031,7 +2033,7 @@ function BurnPile({ count }: { count: number }) {
           <div
             style={{
               position: "absolute",
-              bottom: -4,
+              bottom: -2,
               left: 0,
               right: 0,
               textAlign: "center",
@@ -2044,7 +2046,7 @@ function BurnPile({ count }: { count: number }) {
               zIndex: 20,
             }}
           >
-            Burn · {count}
+            Burn · {n}
           </div>
         </>
       )}
@@ -8211,7 +8213,7 @@ function Table({
               pointerEvents: "auto",
             }}
           >
-            {isPlaying ? <BurnPile count={burnCount} /> : <div style={{ width: 72, height: 100 }} />}
+            {isPlaying ? <BurnPile count={burnCount} /> : <div style={{ width: 78, height: 104 }} />}
           </div>
         </div>
 
