@@ -69,13 +69,17 @@ function pullQueuedSpectator(room) {
 }
 
 /**
- * After a finished elimination match: last place leaves the table,
+ * After a finished elimination match on a FULL table: last place leaves,
  * first queued spectator takes that seat; loser goes to the end of the queue.
+ * No-op if the table is short of maxPlayers — callers should fill open seats instead.
  * Mutates room.seats / spectators / queue / hostId.
  * @returns {{ promotedId: string, demotedId: string } | null}
  */
 function rotateElimination(room, opts) {
   if (!isElimination(room)) return null;
+  const max = opts && typeof opts.maxPlayers === "number" ? opts.maxPlayers : 5;
+  if (!Array.isArray(room.seats) || room.seats.length < max) return null;
+
   const order = Array.isArray(room.finishOrder) ? room.finishOrder : [];
   if (order.length < 2) return null;
   const loserIdx = order[order.length - 1];

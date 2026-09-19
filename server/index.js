@@ -948,7 +948,8 @@ function resetRoomToLobby(room) {
   clearRoomTimers(room);
   const elim = roomMode(room) === "elimination";
   if (elim) {
-    elimination.rotateElimination(room, { makeToken: id });
+    // Full table + queue → swap last place. Short table → keep everyone; fill below.
+    elimination.rotateElimination(room, { makeToken: id, maxPlayers: MAX_PLAYERS });
   }
   for (const p of room.seats) {
     p.hand = [];
@@ -966,6 +967,9 @@ function resetRoomToLobby(room) {
   room.phase = "waiting";
   clearKickVote(room);
   if (elim) {
+    while (promoteQueuedIntoSeat(room)) {
+      /* fill open seats from queue without kicking anyone */
+    }
     notifyRoleChange(room);
   } else {
     dropSpectators(room);
