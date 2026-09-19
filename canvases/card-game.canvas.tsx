@@ -844,7 +844,7 @@ function ensureKeyframes() {
     }
     @keyframes cardFlyToBurn {
       0% { opacity: 1; transform: translate(0, 0) scale(1) rotate(0deg); }
-      100% { opacity: 0.85; transform: translate(var(--bx), var(--by)) scale(0.62) rotate(16deg); }
+      100% { opacity: 0.85; transform: translate(var(--bx), var(--by)) scale(0.62) rotate(var(--br, 16deg)); }
     }
     @keyframes cardFlyToPlayer {
       0% { opacity: 1; transform: translate(0, 0) scale(1) rotate(0deg); }
@@ -1956,14 +1956,28 @@ function flyOrigin(playerIndex: number, playerCount: number): { x: string; y: st
   return { x: `${x}%`, y: "-30%", rot: 6 + i * 3 };
 }
 
+/** Stable messy offsets so burn cards look tossed, not restacked each render. */
+const BURN_MESS: { x: number; y: number; rot: number }[] = [
+  { x: -6, y: 4, rot: -18 },
+  { x: 10, y: -2, rot: 14 },
+  { x: -2, y: -8, rot: -7 },
+  { x: 8, y: 6, rot: 22 },
+  { x: -10, y: 1, rot: -25 },
+  { x: 4, y: -5, rot: 9 },
+  { x: -4, y: 8, rot: 16 },
+];
+
 function BurnPile({ count }: { count: number }) {
+  const backId = useCardBack();
+  const shown = Math.min(count, BURN_MESS.length);
   return (
-    <div style={{ position: "relative", width: 64, height: 90 }}>
+    <div style={{ position: "relative", width: 72, height: 100 }}>
       {count === 0 ? (
         <div
           style={{
             width: 64,
             height: 90,
+            margin: "5px 4px",
             borderRadius: 7,
             border: "2px dashed rgba(255,255,255,0.22)",
             display: "flex",
@@ -1978,23 +1992,61 @@ function BurnPile({ count }: { count: number }) {
           Burn
         </div>
       ) : (
-        [...Array(Math.min(count, 5))].map((_, i) => (
+        <>
+          {[...Array(shown)].map((_, i) => {
+            const m = BURN_MESS[i];
+            return (
+              <div
+                key={i}
+                style={{
+                  position: "absolute",
+                  top: 5 + m.y,
+                  left: 4 + m.x,
+                  width: 64,
+                  height: 90,
+                  borderRadius: 7,
+                  overflow: "hidden",
+                  border: "1.5px solid #1a4060",
+                  transform: `rotate(${m.rot}deg)`,
+                  boxShadow: "0 2px 6px rgba(0,0,0,0.35)",
+                  zIndex: i + 1,
+                  ...cardBackFill(backId),
+                }}
+              >
+                {backId === "classic" && i === shown - 1 && (
+                  <div
+                    style={{
+                      width: 56,
+                      height: 82,
+                      margin: 3,
+                      borderRadius: 3,
+                      border: "1px solid rgba(255,255,255,0.12)",
+                      backgroundImage: CARD_BACK_INNER,
+                    }}
+                  />
+                )}
+              </div>
+            );
+          })}
           <div
-            key={i}
             style={{
               position: "absolute",
-              top: -i * 1.5,
-              left: i * 0.5,
-              width: 64,
-              height: 90,
-              borderRadius: 7,
-              border: "1.5px solid #4a3728",
-              background: "#5d4037",
-              backgroundImage:
-                "repeating-linear-gradient(-45deg, transparent, transparent 5px, rgba(0,0,0,0.12) 5px, rgba(0,0,0,0.12) 10px)",
+              bottom: -4,
+              left: 0,
+              right: 0,
+              textAlign: "center",
+              fontSize: 10,
+              fontWeight: 700,
+              letterSpacing: 0.4,
+              color: "rgba(255,255,255,0.55)",
+              textShadow: "0 1px 2px rgba(0,0,0,0.6)",
+              pointerEvents: "none",
+              zIndex: 20,
             }}
-          />
-        ))
+          >
+            Burn · {count}
+          </div>
+        </>
       )}
     </div>
   );
@@ -2217,23 +2269,27 @@ function BurnOverlay({ anim }: { anim: BurnAnim }) {
         justifyContent: "center",
       }}
     >
-      {visible.map((card, i) => (
-        <div
-          key={`${anim.id}-burn-${i}-${card}`}
-          className="card-fly-burn"
-          style={{
-            ["--bx" as string]: `calc(12% + ${i * 3}px)`,
-            ["--by" as string]: `${-6 + i * 2}px`,
-            position: "absolute",
-            width: 56,
-            height: 78,
-            animationDelay: `${i * 35}ms`,
-            zIndex: 55 + i,
-          }}
-        >
-          <PlayingCard card={card} faceVisible style={{ top: 0, left: 0 }} />
-        </div>
-      ))}
+      {visible.map((card, i) => {
+        const mess = BURN_MESS[i % BURN_MESS.length];
+        return (
+          <div
+            key={`${anim.id}-burn-${i}-${card}`}
+            className="card-fly-burn"
+            style={{
+              ["--bx" as string]: `calc(16% + ${mess.x}px)`,
+              ["--by" as string]: `${mess.y}px`,
+              ["--br" as string]: `${mess.rot}deg`,
+              position: "absolute",
+              width: 56,
+              height: 78,
+              animationDelay: `${i * 35}ms`,
+              zIndex: 55 + i,
+            }}
+          >
+            <PlayingCard card={card} faceVisible style={{ top: 0, left: 0 }} />
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -8155,7 +8211,7 @@ function Table({
               pointerEvents: "auto",
             }}
           >
-            {isPlaying ? <BurnPile count={burnCount} /> : <div style={{ width: 64, height: 90 }} />}
+            {isPlaying ? <BurnPile count={burnCount} /> : <div style={{ width: 72, height: 100 }} />}
           </div>
         </div>
 
