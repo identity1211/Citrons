@@ -9,6 +9,7 @@ const leaderboard = require("./leaderboard");
 const push = require("./push");
 const daily = require("./daily");
 const stripeBilling = require("./stripe-billing");
+const elimination = require("./elimination");
 
 push.init();
 
@@ -28,6 +29,7 @@ const REJOIN_MS = 3 * 60 * 1000;
 const WAITING_REJOIN_MS = 2 * 60 * 1000;
 const TABLE_SKINS = new Set(["felt", "peli", "lifetime"]);
 const CARD_BACKS = new Set(["classic", "shades", "sweaty", "camera", "dealer"]);
+const ROOM_MODES = new Set(["classic", "elimination"]);
 const CHAT_MAX_LEN = 120;
 const CHAT_MAX_LOG = 50;
 const ROOM_TITLE_MAX = 28;
@@ -80,6 +82,15 @@ function roomSpectators(room) {
   return Array.isArray(room.spectators) ? room.spectators : [];
 }
 
+function sanitizeMode(mode) {
+  const m = String(mode || "").trim().toLowerCase();
+  return ROOM_MODES.has(m) ? m : "classic";
+}
+
+function roomMode(room) {
+  return sanitizeMode(room && room.mode);
+}
+
 function roomLive(room) {
   return room.phase === "dealing" || room.phase === "swap" || room.phase === "playing" || room.phase === "finished";
 }
@@ -91,6 +102,7 @@ function publicLobbies() {
     const host = room.seats.find((p) => p.id === room.hostId) || room.seats[0];
     const live = roomLive(room);
     const watchers = roomSpectators(room).filter((s) => isOnline(s)).length;
+    const queued = elimination.queueView(room).length;
     list.push({
       code: room.code,
       title: room.title || (host ? `${host.name}'s lobby` : "Lobby"),
@@ -102,6 +114,8 @@ function publicLobbies() {
       live,
       watchers,
       watchMax: MAX_SPECTATORS,
+      mode: roomMode(room),
+      queue: queued,
     });
   }
   list.sort((a, b) => {
@@ -202,10 +216,12 @@ function viewFor(room, playerId) {
   return {
     code: room.code,
     title: room.title || "",
+    mode: roomMode(room),
     you: 0,
     youId: playerId,
     host: room.hostId === playerId,
     spectator: false,
+    queued: false,
     phase: room.phase,
     players,
     deckCount: room.deck.length,
@@ -222,6 +238,7 @@ function viewFor(room, playerId) {
     watchers: roomSpectators(room).filter((s) => isOnline(s)).length,
     kickVote: kickVoteView(room, playerId),
     achievementFeed: achievementFeedView(room),
+    queue: elimination.queueView(room),
     lobby: room.seats.map((p) => ({
       id: p.id,
       name: p.id === playerId ? `${p.name} (you)` : p.name,
@@ -247,13 +264,16 @@ function achievementFeedView(room) {
 
 function viewForSpectator(room, spectatorId) {
   const players = room.seats.map((src) => maskPlayer(src, false));
+  const self = roomSpectators(room).find((s) => s.id === spectatorId);
   return {
     code: room.code,
     title: room.title || "",
+    mode: roomMode(room),
     you: -1,
     youId: spectatorId,
     host: false,
     spectator: true,
+    queued: !!(self && self.queued),
     phase: room.phase,
     players,
     deckCount: room.deck.length,
@@ -270,6 +290,7 @@ function viewForSpectator(room, spectatorId) {
     watchers: roomSpectators(room).filter((s) => isOnline(s)).length,
     kickVote: kickVoteView(room, spectatorId),
     achievementFeed: achievementFeedView(room),
+    queue: elimination.queueView(room),
     lobby: room.seats.map((p) => ({
       id: p.id,
       name: p.name,
@@ -352,6 +373,7 @@ function dropSpectators(room) {
     }
   }
   room.spectators = [];
+  room.queue = [];
 }
 
 function removeSeat(room, player) {
@@ -405,7 +427,7 @@ function attachSpectator(ws, room, spectator) {
   notifyLobbies();
 }
 
-function makeSpectator(ws, name, avatar, clerkUserId) {
+function makeSpectator(ws, name, avatar, clerkUserId, queued) {
   return {
     id: id(),
     name: sanitizeName(name),
@@ -415,6 +437,7 @@ function makeSpectator(ws, name, avatar, clerkUserId) {
     connected: true,
     lastChatAt: 0,
     lastReactAt: 0,
+    queued: !!queued,
   };
 }
 
@@ -582,7 +605,7 @@ async function identifyClerk(ws, clerkToken, { required }) {
   return { userId: result.userId };
 }
 
-async function createRoom(ws, name, avatar, clerkToken, title) {
+async function createRoom(ws, name, avatar, clerkToken, title, mode) {
   const auth = await identifyClerk(ws, clerkToken, { required: true });
   if (!auth) return;
   const clerkUserId = auth.userId;
@@ -593,6 +616,7 @@ async function createRoom(ws, name, avatar, clerkToken, title) {
   const room = {
     code,
     title: sanitizeTitle(title, player.name),
+    mode: sanitizeMode(mode),
     hostId: player.id,
     phase: "waiting",
     seats: [player],
@@ -614,6 +638,7 @@ async function createRoom(ws, name, avatar, clerkToken, title) {
     createdAt: Date.now(),
     timers: [],
     spectators: [],
+    queue: [],
     kickVote: null,
     kickCooldownUntil: 0,
   };
@@ -621,12 +646,14 @@ async function createRoom(ws, name, avatar, clerkToken, title) {
   attach(ws, room, player);
 }
 
-async function joinRoom(ws, code, name, token, avatar, clerkToken) {
+async function joinRoom(ws, code, name, token, avatar, clerkToken, intent) {
   const room = rooms.get(String(code || "").trim().toUpperCase());
   if (!room) return error(ws, "Lobby not found");
   const auth = await identifyClerk(ws, clerkToken, { required: !token });
   if (!auth) return;
   const clerkUserId = auth.userId;
+  const want = String(intent || "").trim().toLowerCase();
+  const elim = roomMode(room) === "elimination";
 
   if (ws.roomCode && ws.roomCode !== room.code) leave(ws, true);
 
@@ -649,29 +676,78 @@ async function joinRoom(ws, code, name, token, avatar, clerkToken) {
       attach(ws, room, existing);
       return;
     }
-  }
-
-  if (room.phase !== "waiting") {
     const watching = roomSpectators(room).find((s) => s.clerkUserId && s.clerkUserId === clerkUserId);
     if (watching) {
       if (name) watching.name = sanitizeName(name);
       if (avatar) watching.avatar = sanitizeAvatar(avatar);
+      if (elim && want === "queue" && !watching.queued) {
+        watching.queued = true;
+        const q = elimination.roomQueue(room);
+        if (!q.includes(watching.id)) q.push(watching.id);
+      }
       attachSpectator(ws, room, watching);
       return;
     }
+  }
+
+  const waitingOpen = room.phase === "waiting" && room.seats.length < MAX_PLAYERS;
+  if (waitingOpen) {
+    releaseClerk(clerkUserId, room.code);
+    const player = makePlayer(ws, name, avatar, clerkUserId);
+    room.seats.push(player);
+    attach(ws, room, player);
+    return;
+  }
+
+  // Table full or match live/finished — watch (classic) or watch/queue (elimination).
+  if (!elim) {
+    if (room.phase === "waiting") return error(ws, "Lobby is full");
     if (roomSpectators(room).length >= MAX_SPECTATORS) return error(ws, "This table is full of watchers");
     if (!Array.isArray(room.spectators)) room.spectators = [];
-    const spectator = makeSpectator(ws, name, avatar, clerkUserId);
+    releaseClerk(clerkUserId, room.code);
+    const spectator = makeSpectator(ws, name, avatar, clerkUserId, false);
     room.spectators.push(spectator);
     attachSpectator(ws, room, spectator);
     return;
   }
-  if (room.seats.length >= MAX_PLAYERS) return error(ws, "Lobby is full");
-  releaseClerk(clerkUserId, room.code);
 
-  const player = makePlayer(ws, name, avatar, clerkUserId);
-  room.seats.push(player);
-  attach(ws, room, player);
+  if (want !== "watch" && want !== "queue") {
+    send(ws, {
+      type: "joinChoice",
+      code: room.code,
+      title: room.title || "",
+      mode: "elimination",
+      live: roomLive(room),
+      count: room.seats.length,
+      max: MAX_PLAYERS,
+      queue: elimination.queueView(room).length,
+    });
+    return;
+  }
+
+  if (roomSpectators(room).length >= MAX_SPECTATORS) return error(ws, "This table is full of watchers");
+  if (!Array.isArray(room.spectators)) room.spectators = [];
+  releaseClerk(clerkUserId, room.code);
+  const queued = want === "queue";
+  const spectator = makeSpectator(ws, name, avatar, clerkUserId, queued);
+  room.spectators.push(spectator);
+  if (queued) elimination.roomQueue(room).push(spectator.id);
+  attachSpectator(ws, room, spectator);
+}
+
+function notifyRoleChange(room) {
+  for (const p of room.seats) {
+    if (!p.ws) continue;
+    p.ws.roomCode = room.code;
+    p.ws.playerId = p.id;
+    send(p.ws, { type: "joined", code: room.code, playerId: p.id, token: p.token });
+  }
+  for (const s of roomSpectators(room)) {
+    if (!s.ws) continue;
+    s.ws.roomCode = room.code;
+    s.ws.playerId = s.id;
+    send(s.ws, { type: "joined", code: room.code, playerId: s.id, spectator: true, queued: !!s.queued });
+  }
 }
 
 function clearRoomTimers(room) {
@@ -849,6 +925,10 @@ function handleKickVote(room, player, yes) {
 function resetRoomToLobby(room) {
   if (room.phase !== "finished") return;
   clearRoomTimers(room);
+  const elim = roomMode(room) === "elimination";
+  if (elim) {
+    elimination.rotateElimination(room, { makeToken: id });
+  }
   for (const p of room.seats) {
     p.hand = [];
     p.faceUp = [];
@@ -864,7 +944,11 @@ function resetRoomToLobby(room) {
   room.statusMsg = "";
   room.phase = "waiting";
   clearKickVote(room);
-  dropSpectators(room);
+  if (elim) {
+    notifyRoleChange(room);
+  } else {
+    dropSpectators(room);
+  }
   broadcast(room);
   notifyLobbies();
 }
@@ -1237,6 +1321,7 @@ function leave(ws, immediate) {
     if (spectator.ws === ws) spectator.ws = null;
     spectator.connected = false;
     room.spectators = roomSpectators(room).filter((s) => s.id !== spectator.id);
+    elimination.removeFromQueue(room, spectator.id);
     ws.roomCode = null;
     ws.playerId = null;
     broadcast(room);
@@ -1407,11 +1492,11 @@ function onMessage(ws, data) {
   const spectator = room && roomSpectators(room).find((s) => s.id === ws.playerId);
 
   if (type === "create") {
-    void createRoom(ws, msg.name, msg.avatar, msg.clerkToken, msg.title);
+    void createRoom(ws, msg.name, msg.avatar, msg.clerkToken, msg.title, msg.mode);
     return;
   }
   if (type === "join") {
-    void joinRoom(ws, msg.code, msg.name, null, msg.avatar, msg.clerkToken);
+    void joinRoom(ws, msg.code, msg.name, null, msg.avatar, msg.clerkToken, msg.intent);
     return;
   }
   if (type === "rejoin") {

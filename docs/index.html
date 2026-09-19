@@ -145,7 +145,10 @@ function rememberJoinFromUrl() {
 
 rememberJoinFromUrl();
 
-type PendingMp = { kind: "create"; title: string } | { kind: "join"; code: string } | { kind: "rejoin" };
+type PendingMp =
+  | { kind: "create"; title: string; mode?: string }
+  | { kind: "join"; code: string; intent?: string }
+  | { kind: "rejoin" };
 
 function rememberPendingMp(pending: PendingMp) {
   try {
@@ -8560,13 +8563,30 @@ function clearMpSession() {
   }
 }
 
+type RoomModeId = "classic" | "elimination";
+
+function isRoomMode(id: unknown): id is RoomModeId {
+  return id === "classic" || id === "elimination";
+}
+
+const ROOM_MODES: { id: RoomModeId; name: string; blurb: string }[] = [
+  { id: "classic", name: "Classic", blurb: "Fixed seats until the lobby ends." },
+  {
+    id: "elimination",
+    name: "Elimination",
+    blurb: "Full table of 5 — others queue; last place swaps with the next in line.",
+  },
+];
+
 type OnlineView = {
   code: string;
   title?: string;
+  mode?: RoomModeId | string;
   you: number;
   youId: string;
   host: boolean;
   spectator?: boolean;
+  queued?: boolean;
   phase: "waiting" | "dealing" | "swap" | "playing" | "finished";
   players: PlayerState[];
   deckCount: number;
@@ -8582,6 +8602,7 @@ type OnlineView = {
   chat?: ChatLine[];
   kickVote?: KickVoteInfo | null;
   lobby: { id: string; name: string; avatar?: string; ready: boolean; connected: boolean; host: boolean }[];
+  queue?: { id: string; name: string; avatar?: string; connected: boolean }[];
   achievementFeed?: { seatId: string; name: string; avatar: string; achievements: string[] }[];
 };
 
@@ -8596,6 +8617,8 @@ type LobbyInfo = {
   live?: boolean;
   watchers?: number;
   watchMax?: number;
+  mode?: string;
+  queue?: number;
 };
 
 function OpenLobbyList({
@@ -8607,7 +8630,7 @@ function OpenLobbyList({
   lobbies: LobbyInfo[];
   busy: boolean;
   rejoinCode?: string;
-  onJoin: (code: string) => void;
+  onJoin: (code: string, lobby?: LobbyInfo) => void;
 }) {
   return (
     <div style={{ width: "100%", maxWidth: 340, textAlign: "left" }}>
@@ -8643,13 +8666,24 @@ function OpenLobbyList({
           lobbies.map((lobby) => {
             const live = !!lobby.live;
             const mine = !!rejoinCode && rejoinCode === lobby.code;
+            const elim = lobby.mode === "elimination";
+            const watchFull = (lobby.watchers || 0) >= (lobby.watchMax || 16);
+            const seatsFull = lobby.count >= lobby.max;
             const full = mine
               ? false
-              : live
-                ? (lobby.watchers || 0) >= (lobby.watchMax || 16)
-                : lobby.count >= lobby.max;
+              : elim
+                ? watchFull
+                : live
+                  ? watchFull
+                  : seatsFull;
             const names = lobby.players.map((p) => p.name).join(", ");
             const watchers = lobby.watchers || 0;
+            const queueN = lobby.queue || 0;
+            let actionLabel = "Join";
+            if (full) actionLabel = "Full";
+            else if (mine) actionLabel = "Rejoin";
+            else if (elim && (live || seatsFull)) actionLabel = "Watch / Queue";
+            else if (live) actionLabel = "Watch";
             return (
               <div
                 key={lobby.code}
@@ -8681,6 +8715,19 @@ function OpenLobbyList({
                         LIVE
                       </span>
                     ) : null}
+                    {elim ? (
+                      <span
+                        style={{
+                          marginLeft: 8,
+                          color: "rgba(245,240,230,0.75)",
+                          fontSize: 10,
+                          letterSpacing: 0.6,
+                          fontWeight: 800,
+                        }}
+                      >
+                        ELIM
+                      </span>
+                    ) : null}
                   </div>
                   <div
                     style={{
@@ -8693,13 +8740,14 @@ function OpenLobbyList({
                   >
                     {lobby.host} · {lobby.count}/{lobby.max}
                     {live ? ` · ${watchers} watching` : ""}
+                    {elim && queueN > 0 ? ` · ${queueN} queued` : ""}
                     {names ? ` · ${names}` : ""}
                   </div>
                 </div>
                 <button
                   type="button"
                   disabled={busy || full}
-                  onClick={() => onJoin(lobby.code)}
+                  onClick={() => onJoin(lobby.code, lobby)}
                   style={{
                     flexShrink: 0,
                     height: 32,
@@ -8713,7 +8761,7 @@ function OpenLobbyList({
                     cursor: busy || full ? "default" : "pointer",
                   }}
                 >
-                  {full ? "Full" : mine ? "Rejoin" : live ? "Watch" : "Join"}
+                  {actionLabel}
                 </button>
               </div>
             );
@@ -10133,6 +10181,13 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   const [name, setName] = useState(readSavedName);
   const [roomTitle, setRoomTitle] = useState(readSavedRoomTitle);
   const [createOpen, setCreateOpen] = useState(false);
+  const [createMode, setCreateMode] = useState<RoomModeId>("classic");
+  const [joinChoice, setJoinChoice] = useState<{
+    code: string;
+    title: string;
+    live: boolean;
+    queue: number;
+  } | null>(null);
   const [wsUrl, setWsUrl] = useState(defaultWsUrl);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -10958,6 +11013,16 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       }
       return;
     }
+    if (msg.type === "joinChoice" && msg.code) {
+      setBusy(false);
+      setJoinChoice({
+        code: String(msg.code),
+        title: String(msg.title || msg.code),
+        live: !!msg.live,
+        queue: Math.max(0, Number(msg.queue) || 0),
+      });
+      return;
+    }
     if (msg.type === "lobbies" && Array.isArray(msg.lobbies)) {
       setLobbies(msg.lobbies);
       if (!sessionRef.current) setBusy(false);
@@ -10982,7 +11047,12 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       setError("");
       setDropped(false);
       reconnectTriesRef.current = 0;
-      if (msg.spectator) return;
+      if (msg.spectator) {
+        sessionRef.current = null;
+        setSavedGame(null);
+        clearMpSession();
+        return;
+      }
       if (msg.code && msg.token) {
         const sess: MpSession = {
           code: msg.code,
@@ -11210,17 +11280,25 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     return { name: nick, avatar: u.imageUrl || "", clerkToken: token };
   }
 
-  function createLobby() {
+  function createLobby(modeOverride?: RoomModeId) {
     if (creatingRef.current) return;
     creatingRef.current = true;
     setBusy(true);
     setError("");
+    const mode = modeOverride && isRoomMode(modeOverride) ? modeOverride : createMode;
     void (async () => {
       try {
         const payload = await clerkPayload();
         creatingRef.current = false;
         connect((ws) =>
-          ws.send(JSON.stringify({ type: "create", ...payload, title: roomTitle.trim() }))
+          ws.send(
+            JSON.stringify({
+              type: "create",
+              ...payload,
+              title: roomTitle.trim(),
+              mode,
+            })
+          )
         );
       } catch (e) {
         creatingRef.current = false;
@@ -11230,7 +11308,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
     })();
   }
 
-  function joinOpenLobby(roomCode: string) {
+  function joinOpenLobby(roomCode: string, opts?: { intent?: "watch" | "queue"; lobby?: LobbyInfo }) {
     const c = String(roomCode || "").trim().toUpperCase();
     if (!c) return;
     const sess = sessionRef.current || readMpSession();
@@ -11238,21 +11316,39 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       rejoinSavedGame();
       return;
     }
+    const lobby = opts?.lobby || lobbies.find((l) => l.code === c);
+    const elim = lobby?.mode === "elimination";
+    const needsChoice =
+      elim &&
+      !opts?.intent &&
+      (lobby?.live || (lobby && lobby.count >= lobby.max));
+    if (needsChoice && lobby) {
+      setJoinChoice({
+        code: c,
+        title: lobby.title || lobby.host || c,
+        live: !!lobby.live,
+        queue: lobby.queue || 0,
+      });
+      return;
+    }
+    const intent = opts?.intent;
     const clerk = typeof window !== "undefined" ? (window as any).Clerk : null;
-    if (beginSafariClerkHopIfNeeded(clerk, { kind: "join", code: c })) {
+    if (beginSafariClerkHopIfNeeded(clerk, { kind: "join", code: c, intent })) {
       setBusy(true);
       return;
     }
     void (async () => {
       setBusy(true);
       setError("");
+      setJoinChoice(null);
       try {
         const payload = await clerkPayload();
+        const body = { type: "join", code: c, ...payload, ...(intent ? { intent } : {}) };
         const ws = wsRef.current;
         if (ws && ws.readyState === 1) {
-          ws.send(JSON.stringify({ type: "join", code: c, ...payload }));
+          ws.send(JSON.stringify(body));
         } else {
-          connect((sock) => sock.send(JSON.stringify({ type: "join", code: c, ...payload })));
+          connect((sock) => sock.send(JSON.stringify(body)));
         }
       } catch (e) {
         setBusy(false);
@@ -11650,12 +11746,15 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         persistRoomTitle(pending.title);
         setRoomTitle(pending.title);
       }
+      if (pending.mode && isRoomMode(pending.mode)) setCreateMode(pending.mode);
       setCreateOpen(false);
-      createLobby();
+      createLobby(pending.mode && isRoomMode(pending.mode) ? pending.mode : undefined);
       return;
     }
     if (pending.kind === "join") {
-      joinOpenLobby(pending.code);
+      joinOpenLobby(pending.code, {
+        intent: pending.intent === "watch" || pending.intent === "queue" ? pending.intent : undefined,
+      });
       return;
     }
     rejoinSavedGame();
@@ -12009,7 +12108,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       }
       persistRoomTitle(roomTitle);
       const clerk = typeof window !== "undefined" ? (window as any).Clerk : null;
-      if (beginSafariClerkHopIfNeeded(clerk, { kind: "create", title: roomTitle.trim() })) {
+      if (beginSafariClerkHopIfNeeded(clerk, { kind: "create", title: roomTitle.trim(), mode: createMode })) {
         setBusy(true);
         return;
       }
@@ -12068,12 +12167,12 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
               lobbies={lobbies}
               busy={busy}
               rejoinCode={savedGame?.code}
-              onJoin={(c) => {
+              onJoin={(c, lobby) => {
                 if (!auth.user) {
                   setError("Sign in with Google first");
                   return;
                 }
-                joinOpenLobby(c);
+                joinOpenLobby(c, { lobby });
               }}
             />
           </>
@@ -12104,7 +12203,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
               onClick={(e) => e.stopPropagation()}
               style={{
                 width: "100%",
-                maxWidth: createKb ? 480 : 320,
+                maxWidth: createKb ? 480 : 360,
                 borderRadius: createKb ? "14px 14px 0 0" : 14,
                 background: "#145230",
                 border: "1px solid rgba(255,255,255,0.22)",
@@ -12118,6 +12217,30 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
                 style={{ color: "#f5f0e6", fontWeight: 800, fontSize: 18, marginBottom: 12 }}
               >
                 New lobby
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12, textAlign: "left" }}>
+                {ROOM_MODES.map((m) => {
+                  const on = createMode === m.id;
+                  return (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => setCreateMode(m.id)}
+                      style={{
+                        padding: "10px 12px",
+                        borderRadius: 10,
+                        border: on ? "2px solid #f1c40f" : "1.5px solid rgba(255,255,255,0.2)",
+                        background: on ? "rgba(241,196,15,0.14)" : "rgba(0,0,0,0.28)",
+                        color: "#f5f0e6",
+                        cursor: "pointer",
+                        textAlign: "left",
+                      }}
+                    >
+                      <div style={{ fontWeight: 800, fontSize: 14, marginBottom: 2 }}>{m.name}</div>
+                      <div style={{ fontSize: 11, lineHeight: 1.35, color: "rgba(245,240,230,0.7)" }}>{m.blurb}</div>
+                    </button>
+                  );
+                })}
               </div>
               <form
                 className={createKb ? "chat-ime-bar is-ime" : undefined}
@@ -12210,6 +12333,73 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
               {error ? (
                 <div style={{ color: "#f5b7b1", fontSize: 13, marginTop: 12, lineHeight: 1.4 }}>{error}</div>
               ) : null}
+            </div>
+          </div>
+        ) : null}
+        {joinChoice ? (
+          <div
+            role="dialog"
+            aria-modal="true"
+            onClick={() => {
+              if (!busy) setJoinChoice(null);
+            }}
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: 150,
+              background: "rgba(0,0,0,0.58)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: 24,
+            }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                width: "100%",
+                maxWidth: 340,
+                borderRadius: 14,
+                background: "#145230",
+                border: "1px solid rgba(255,255,255,0.22)",
+                padding: "22px 18px",
+                textAlign: "center",
+              }}
+            >
+              <div style={{ color: "#f5f0e6", fontWeight: 800, fontSize: 18, marginBottom: 6 }}>
+                {joinChoice.title}
+              </div>
+              <div style={{ color: "rgba(245,240,230,0.72)", fontSize: 13, lineHeight: 1.4, marginBottom: 14 }}>
+                {joinChoice.live
+                  ? "Match in progress. Watch now, or join the queue for the next seat."
+                  : "Table is full. Watch the lobby, or join the queue for the next open seat."}
+                {joinChoice.queue > 0 ? ` ${joinChoice.queue} already queued.` : ""}
+              </div>
+              <button
+                type="button"
+                className="lobby-play-btn"
+                disabled={busy}
+                onClick={() => joinOpenLobby(joinChoice.code, { intent: "queue" })}
+                style={{ ...LOBBY_GOLD_BTN, maxWidth: "100%", height: 44, marginBottom: 8 }}
+              >
+                {busy ? "…" : "Join queue"}
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => joinOpenLobby(joinChoice.code, { intent: "watch" })}
+                style={{ ...LOBBY_GHOST_BTN, maxWidth: "100%", height: 44, marginBottom: 8 }}
+              >
+                Watch only
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => setJoinChoice(null)}
+                style={{ ...PROFILE_GHOST, height: 36, fontSize: 13 }}
+              >
+                Cancel
+              </button>
             </div>
           </div>
         ) : null}
@@ -12487,6 +12677,20 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
             }}
           >
             {view.title || "Waiting room"}
+            {view.mode === "elimination" ? (
+              <span
+                style={{
+                  marginLeft: 10,
+                  fontSize: 11,
+                  fontWeight: 800,
+                  letterSpacing: 0.8,
+                  color: "#f1c40f",
+                  verticalAlign: "middle",
+                }}
+              >
+                ELIMINATION
+              </span>
+            ) : null}
           </div>
           <div
             style={{
@@ -12576,6 +12780,49 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
                   </div>
                 ))}
               </div>
+              {view.mode === "elimination" ? (
+                <div style={{ marginTop: 10, flexShrink: 0 }}>
+                  <div style={{ ...sectionLabel, marginBottom: 6 }}>Queue</div>
+                  <div
+                    style={{
+                      maxHeight: 120,
+                      overflowY: "auto",
+                      WebkitOverflowScrolling: "touch",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 4,
+                    }}
+                  >
+                    {(view.queue || []).length === 0 ? (
+                      <div style={{ fontSize: 12, color: "rgba(255,255,255,0.45)", lineHeight: 1.35 }}>
+                        {view.queued ? "You're in the queue." : "No one queued yet."}
+                      </div>
+                    ) : (
+                      (view.queue || []).map((qRow, i) => (
+                        <div
+                          key={qRow.id}
+                          style={{
+                            padding: "5px 8px",
+                            borderRadius: 8,
+                            background: "rgba(0,0,0,0.28)",
+                            color: "#f5f0e6",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8,
+                            fontSize: 12,
+                          }}
+                        >
+                          <span style={{ opacity: 0.55, width: 16, flexShrink: 0 }}>{i + 1}.</span>
+                          <AvatarBubble src={qRow.avatar} name={qRow.name} size={20} />
+                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {qRow.id === view.youId ? `${qRow.name} (you)` : qRow.name}
+                          </span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              ) : null}
             </div>
 
             {/* Chat */}
