@@ -408,8 +408,23 @@ function detachSpectator(ws, keepRoom) {
   const prev = rooms.get(ws.roomCode);
   if (!prev) return;
   const before = roomSpectators(prev).length;
+  const dropping = roomSpectators(prev).filter((s) => s.ws === ws || s.id === ws.playerId);
   prev.spectators = roomSpectators(prev).filter((s) => s.ws !== ws && s.id !== ws.playerId);
+  for (const s of dropping) elimination.removeFromQueue(prev, s.id);
   if (prev !== keepRoom && prev.spectators.length !== before) notifyLobbies();
+}
+
+/** Promote queue head into an open waiting seat (elimination). */
+function promoteQueuedIntoSeat(room) {
+  const result = elimination.fillOpenSeatFromQueue(room, { makeToken: id, maxPlayers: MAX_PLAYERS });
+  if (!result || !result.player) return null;
+  const p = result.player;
+  if (p.ws && p.ws.readyState === 1) {
+    p.ws.roomCode = room.code;
+    p.ws.playerId = p.id;
+    send(p.ws, { type: "joined", code: room.code, playerId: p.id, token: p.token });
+  }
+  return p;
 }
 
 function attachSpectator(ws, room, spectator) {
@@ -422,7 +437,7 @@ function attachSpectator(ws, room, spectator) {
   spectator.connected = true;
   ws.roomCode = room.code;
   ws.playerId = spectator.id;
-  send(ws, { type: "joined", code: room.code, playerId: spectator.id, spectator: true });
+  send(ws, { type: "joined", code: room.code, playerId: spectator.id, spectator: true, queued: !!spectator.queued });
   broadcast(room);
   notifyLobbies();
 }
@@ -505,7 +520,13 @@ function ejectFromMatch(room, player, opts = {}) {
   if (idx < 0) return;
   const inMatch = room.phase === "playing" || room.phase === "swap" || room.phase === "dealing";
   if (!inMatch) {
-    if (removeSeat(room, player) && rooms.has(room.code)) broadcast(room);
+    if (removeSeat(room, player) && rooms.has(room.code)) {
+      // Elimination: fill the open lobby seat from the queue before the next join.
+      while (promoteQueuedIntoSeat(room)) {
+        /* promote until full or queue empty */
+      }
+      broadcast(room);
+    }
     notifyLobbies();
     return;
   }

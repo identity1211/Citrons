@@ -1,7 +1,7 @@
 "use strict";
 
 const assert = require("assert");
-const { rotateElimination } = require("./elimination");
+const { rotateElimination, fillOpenSeatFromQueue } = require("./elimination");
 
 function seat(id, name) {
   return {
@@ -95,8 +95,44 @@ function testClassicIgnored() {
   assert.strictEqual(rotateElimination(room), null);
 }
 
+function testFillOpenSeatFromQueue() {
+  const room = {
+    mode: "elimination",
+    phase: "waiting",
+    hostId: "a",
+    seats: [seat("a", "A"), seat("b", "B")],
+    spectators: [spectator("q1", "Q1", true), spectator("w1", "W1", false)],
+    queue: ["q1"],
+  };
+  const result = fillOpenSeatFromQueue(room, { makeToken: () => "seat-tok", maxPlayers: 5 });
+  assert.ok(result);
+  assert.strictEqual(result.promotedId, "q1");
+  assert.strictEqual(room.seats.length, 3);
+  assert.strictEqual(room.seats[2].id, "q1");
+  assert.strictEqual(room.seats[2].token, "seat-tok");
+  assert.deepStrictEqual(room.queue, []);
+  assert.ok(!room.spectators.some((s) => s.id === "q1"));
+  assert.ok(room.spectators.some((s) => s.id === "w1"));
+}
+
+function testFillSkipsWhenFull() {
+  const room = {
+    mode: "elimination",
+    phase: "waiting",
+    hostId: "a",
+    seats: [seat("a", "A"), seat("b", "B"), seat("c", "C")],
+    spectators: [spectator("q1", "Q1", true)],
+    queue: ["q1"],
+  };
+  assert.strictEqual(fillOpenSeatFromQueue(room, { maxPlayers: 3 }), null);
+  assert.strictEqual(room.seats.length, 3);
+  assert.deepStrictEqual(room.queue, ["q1"]);
+}
+
 testRotatesLastWithQueueHead();
 testHostTransferWhenLoserWasHost();
 testNoopWithoutQueue();
 testClassicIgnored();
+testFillOpenSeatFromQueue();
+testFillSkipsWhenFull();
 console.log("elimination tests ok");

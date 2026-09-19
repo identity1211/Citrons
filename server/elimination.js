@@ -36,6 +36,10 @@ function playerFromSpectator(s, token) {
 }
 
 function spectatorFromPlayer(p, queued) {
+  if (p && p.leaveTimer) {
+    clearTimeout(p.leaveTimer);
+    p.leaveTimer = null;
+  }
   return {
     id: p.id,
     name: p.name,
@@ -47,6 +51,21 @@ function spectatorFromPlayer(p, queued) {
     lastReactAt: 0,
     queued: !!queued,
   };
+}
+
+/** Pull the next valid queued spectator off the FIFO (skips stale ids). */
+function pullQueuedSpectator(room) {
+  const spectators = roomSpectatorsList(room);
+  const queue = roomQueue(room);
+  while (queue.length) {
+    const nextId = queue.shift();
+    const idx = spectators.findIndex((s) => s && s.id === nextId && s.queued);
+    if (idx < 0) continue;
+    const promoted = spectators[idx];
+    spectators.splice(idx, 1);
+    return promoted;
+  }
+  return null;
 }
 
 /**
@@ -64,28 +83,19 @@ function rotateElimination(room, opts) {
   const loser = room.seats[loserIdx];
   if (!loser) return null;
 
-  const spectators = roomSpectatorsList(room);
-  const queue = roomQueue(room);
   const makeToken =
     (opts && typeof opts.makeToken === "function" && opts.makeToken) ||
     (() => crypto.randomBytes(8).toString("hex"));
 
-  let promoted = null;
-  while (queue.length && !promoted) {
-    const nextId = queue.shift();
-    const idx = spectators.findIndex((s) => s && s.id === nextId && s.queued);
-    if (idx < 0) continue;
-    promoted = spectators[idx];
-    spectators.splice(idx, 1);
-  }
+  const promoted = pullQueuedSpectator(room);
   if (!promoted) return null;
 
   const newPlayer = playerFromSpectator(promoted, makeToken());
   room.seats[loserIdx] = newPlayer;
 
   const demoted = spectatorFromPlayer(loser, true);
-  spectators.push(demoted);
-  queue.push(demoted.id);
+  roomSpectatorsList(room).push(demoted);
+  roomQueue(room).push(demoted.id);
 
   if (room.hostId === loser.id) {
     const other = room.seats.find((p) => p && p.id !== newPlayer.id) || room.seats[0];
@@ -93,6 +103,28 @@ function rotateElimination(room, opts) {
   }
 
   return { promotedId: newPlayer.id, demotedId: demoted.id };
+}
+
+/**
+ * Fill one open waiting-room seat from the queue (elimination only).
+ * @returns {{ promotedId: string } | null}
+ */
+function fillOpenSeatFromQueue(room, opts) {
+  if (!isElimination(room)) return null;
+  if (!room || room.phase !== "waiting") return null;
+  const max = opts && typeof opts.maxPlayers === "number" ? opts.maxPlayers : 5;
+  if (room.seats.length >= max) return null;
+
+  const makeToken =
+    (opts && typeof opts.makeToken === "function" && opts.makeToken) ||
+    (() => crypto.randomBytes(8).toString("hex"));
+
+  const promoted = pullQueuedSpectator(room);
+  if (!promoted) return null;
+
+  const newPlayer = playerFromSpectator(promoted, makeToken());
+  room.seats.push(newPlayer);
+  return { promotedId: newPlayer.id, player: newPlayer };
 }
 
 function removeFromQueue(room, personId) {
@@ -119,7 +151,9 @@ module.exports = {
   roomQueue,
   playerFromSpectator,
   spectatorFromPlayer,
+  pullQueuedSpectator,
   rotateElimination,
+  fillOpenSeatFromQueue,
   removeFromQueue,
   queueView,
 };

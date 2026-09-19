@@ -11518,11 +11518,36 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
   }, []);
 
   // Auto-connect voice when entering lobby or table (players + watchers).
+  // Re-token when elimination rotates player ↔ spectator so mic rights match the seat.
   useEffect(() => {
     const inMatch = screen === "waiting" || screen === "table";
     if (!inMatch || !view?.code) return;
     const listenOnly = !!view.spectator;
+    const prevListenOnly = voiceListenOnlyRef.current;
     voiceListenOnlyRef.current = listenOnly;
+
+    if (
+      voiceCallRef.current &&
+      voiceRoomRef.current === view.code &&
+      prevListenOnly !== listenOnly
+    ) {
+      const call = voiceCallRef.current;
+      if (listenOnly && call) {
+        try {
+          applyLocalMic(call, false);
+        } catch {
+          /* ignore */
+        }
+      }
+      const code = view.code;
+      void destroyVoiceCall().then(() => {
+        if (screenRef.current !== "waiting" && screenRef.current !== "table") return;
+        if (!viewRef.current || viewRef.current.code !== code) return;
+        requestVoiceJoin({ listenOnly });
+      });
+      return;
+    }
+
     if (voiceCallRef.current && voiceRoomRef.current === view.code) return;
     if (voiceJoiningRef.current && voiceRoomRef.current === view.code) return;
     if (voiceAutoCodeRef.current === view.code && voiceUi.phase === "error") return;
