@@ -32,6 +32,11 @@ function playerFromSpectator(s, token) {
     faceUp: [],
     faceDown: [],
     leaveTimer: null,
+    perfectSwapReady: false,
+    wasCardLeader: false,
+    joinedFromQueue: false,
+    matchChat: false,
+    matchReact: false,
   };
 }
 

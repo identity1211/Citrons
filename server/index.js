@@ -421,6 +421,7 @@ function promoteQueuedIntoSeat(room) {
   const result = elimination.fillOpenSeatFromQueue(room, { makeToken: id, maxPlayers: MAX_PLAYERS });
   if (!result || !result.player) return null;
   const p = result.player;
+  markJoinedFromQueue(p);
   if (p.ws && p.ws.readyState === 1) {
     p.ws.roomCode = room.code;
     p.ws.playerId = p.id;
@@ -436,8 +437,10 @@ function claimSeat(ws, room, spectator) {
   if (room.seats.length >= MAX_PLAYERS) return error(ws, "No open seats");
   const stillThere = roomSpectators(room).some((s) => s.id === spectator.id);
   if (!stillThere) return error(ws, "You're not watching this table");
+  const fromQueue = !!spectator.queued;
   elimination.removeFromQueue(room, spectator.id);
   const player = elimination.playerFromSpectator(spectator, id());
+  if (fromQueue) markJoinedFromQueue(player);
   room.seats.push(player);
   attach(ws, room, player);
 }
@@ -510,7 +513,38 @@ function makePlayer(ws, name, avatar, clerkUserId) {
     faceUp: [],
     faceDown: [],
     leaveTimer: null,
+    perfectSwapReady: false,
+    wasCardLeader: false,
+    joinedFromQueue: false,
+    matchChat: false,
+    matchReact: false,
   };
+}
+
+function markJoinedFromQueue(player) {
+  if (player) player.joinedFromQueue = true;
+}
+
+function seatCardCount(player) {
+  if (!player) return 0;
+  let n = 0;
+  for (const c of player.hand || []) if (c) n += 1;
+  for (const c of player.faceUp || []) if (c) n += 1;
+  for (const c of player.faceDown || []) if (c) n += 1;
+  return n;
+}
+
+/** Flag whoever uniquely holds the most cards among unfinished seats (comeback candidate). */
+function updateComebackFlags(room) {
+  if (!room || room.phase !== "playing") return;
+  const alive = room.seats.filter((p) => p && !engine.playerFinished(p));
+  if (alive.length < 2) return;
+  let max = -1;
+  for (const p of alive) max = Math.max(max, seatCardCount(p));
+  if (max <= 0) return;
+  const leaders = alive.filter((p) => seatCardCount(p) === max);
+  if (leaders.length !== 1) return;
+  leaders[0].wasCardLeader = true;
 }
 
 function findClerkSeat(clerkUserId) {
@@ -817,6 +851,8 @@ async function handleReact(room, player, emoji) {
   const now = Date.now();
   if (player.lastReactAt && now - player.lastReactAt < REACT_GAP_MS) return;
   player.lastReactAt = now;
+  const seated = room.seats.find((p) => p && p.id === player.id);
+  if (seated) seated.matchReact = true;
   const react = { id: id(), emoji: face, fromId: player.id, name: player.name, at: now };
   for (const p of room.seats) {
     if (!p.ws) continue;
@@ -835,6 +871,10 @@ function handleChat(room, player, text) {
   if (player.lastChatAt && now - player.lastChatAt < CHAT_GAP_MS) return;
   player.lastChatAt = now;
   const watching = roomSpectators(room).some((s) => s.id === player.id);
+  if (!watching) {
+    const seated = room.seats.find((p) => p && p.id === player.id);
+    if (seated) seated.matchChat = true;
+  }
   const line = {
     id: id(),
     fromId: player.id,
@@ -960,7 +1000,11 @@ function resetRoomToLobby(room) {
   const elim = roomMode(room) === "elimination";
   if (elim) {
     // Full table + queue → swap last place. Short table → keep everyone; fill below.
-    elimination.rotateElimination(room, { makeToken: id, maxPlayers: MAX_PLAYERS });
+    const rotated = elimination.rotateElimination(room, { makeToken: id, maxPlayers: MAX_PLAYERS });
+    if (rotated && rotated.promotedId) {
+      const promoted = room.seats.find((p) => p && p.id === rotated.promotedId);
+      markJoinedFromQueue(promoted);
+    }
   }
   for (const p of room.seats) {
     p.hand = [];
@@ -1010,6 +1054,11 @@ function startGame(room) {
     p.faceUp = dealt.players[i].faceUp;
     p.faceDown = dealt.players[i].faceDown;
     p.ready = false;
+    p.perfectSwapReady = false;
+    p.wasCardLeader = false;
+    p.matchChat = false;
+    p.matchReact = false;
+    // Keep joinedFromQueue — set when promoted from the elim queue before this start.
   }
   room.deck = dealt.deck;
   room.discard = [];
@@ -1035,6 +1084,7 @@ function beginSwap(room) {
   if (room.phase !== "dealing") return;
   room.phase = "swap";
   room.swapSeconds = SWAP_SECONDS;
+  room.swapStartedAt = Date.now();
   room.statusMsg = "Card swap — 20 seconds";
   broadcast(room);
 
@@ -1218,6 +1268,7 @@ function afterPlay(room, playerIndex, result) {
   } else {
     updateSixForceAfterPlay(room, playerIndex, result);
   }
+  updateComebackFlags(room);
   room.statusMsg = result.message;
   if (result.privateReveal) {
     send(room.seats[playerIndex].ws, { type: "reveal", card: result.privateReveal });
@@ -1311,6 +1362,7 @@ function handlePickup(room, player, tableTake) {
     room.seats[i].faceDown = result.players[i].faceDown;
   }
   room.discard = result.discard;
+  updateComebackFlags(room);
   room.statusMsg = result.message;
   room.currentPlayer = engine.nextAlive(idx, room.seats);
   room.statusMsg = `${result.message}. Turn: ${room.seats[room.currentPlayer].name}`;
@@ -1336,6 +1388,10 @@ function handleSwap(room, player, hand, faceUp) {
 
 function handleReady(room, player) {
   if (room.phase !== "swap") return;
+  if (!player.ready) {
+    const started = Number(room.swapStartedAt) || 0;
+    if (started && Date.now() - started <= 5000) player.perfectSwapReady = true;
+  }
   player.ready = true;
   broadcast(room);
   maybeAllReady(room);

@@ -58,6 +58,36 @@ const ACHIEVEMENTS = [
     desc: "Force 7 pickups with a 6",
     check: (u) => num(u.sixForces) >= 7,
   },
+  {
+    id: "six_seven_vet",
+    title: "Six Seven Veteran",
+    desc: "Complete Six Seven ten times (70 six-forces)",
+    check: (u) => num(u.sixForces) >= 70,
+  },
+  {
+    id: "perfect_swap",
+    title: "Perfect Swap",
+    desc: "Lock your swap in under 5 seconds and win",
+    match: true,
+  },
+  {
+    id: "comeback_citron",
+    title: "Comeback Citron",
+    desc: "Win after holding the most cards mid-match",
+    match: true,
+  },
+  {
+    id: "spectator_champ",
+    title: "Spectator to Champ",
+    desc: "Win after entering the match from the Elimination queue",
+    match: true,
+  },
+  {
+    id: "silent_lemon",
+    title: "Silent Lemon",
+    desc: "Win a match without chatting or sending reacts",
+    match: true,
+  },
 ];
 
 const ACHIEVEMENT_IDS = new Set(ACHIEVEMENTS.map((a) => a.id));
@@ -250,7 +280,7 @@ function tryClaimFirstMeddle20(userId) {
   return true;
 }
 
-function unlockNewAchievements(row, userId, at = Date.now()) {
+function unlockNewAchievements(row, userId, at = Date.now(), matchFlags = null) {
   const achievements = { ...(row.achievements || {}) };
   const newly = [];
   for (const a of ACHIEVEMENTS) {
@@ -264,6 +294,13 @@ function unlockNewAchievements(row, userId, at = Date.now()) {
     }
     if (a.unique === "firstMeddle20") {
       if (num(row.meddles) >= 20 && tryClaimFirstMeddle20(userId)) {
+        achievements[a.id] = at;
+        newly.push(a.id);
+      }
+      continue;
+    }
+    if (a.match) {
+      if (matchFlags && matchFlags[a.id]) {
         achievements[a.id] = at;
         newly.push(a.id);
       }
@@ -505,7 +542,7 @@ function rowNewer(a, b) {
   return (num(a.updatedAt) || 0) >= (num(b.updatedAt) || 0);
 }
 
-function bump(userId, name, avatar, { place, field }) {
+function bump(userId, name, avatar, { place, field, matchFlags }) {
   const id = sanitizeId(userId);
   if (!id) return { id: "", unlocked: [] };
   const n = num(field);
@@ -548,7 +585,8 @@ function bump(userId, name, avatar, { place, field }) {
     sixForces: num(prev.sixForces),
     achievements: { ...prev.achievements },
   };
-  const unlocked = unlockNewAchievements(next, id);
+  const flags = win && matchFlags && typeof matchFlags === "object" ? matchFlags : null;
+  const unlocked = unlockNewAchievements(next, id, Date.now(), flags);
   store.users[id] = next;
   return { id, unlocked };
 }
@@ -814,7 +852,26 @@ function recordGame(room) {
     const clerkId = sanitizeId(player.clerkUserId);
     if (!clerkId || seen.has(clerkId)) continue;
     seen.add(clerkId);
-    const { id, unlocked } = bump(clerkId, player.name, player.avatar, { place: i + 1, field });
+    const place = i + 1;
+    const matchFlags =
+      place === 1
+        ? {
+            perfect_swap: !!player.perfectSwapReady,
+            comeback_citron: !!player.wasCardLeader,
+            spectator_champ: !!player.joinedFromQueue,
+            silent_lemon: !player.matchChat && !player.matchReact,
+          }
+        : null;
+    const { id, unlocked } = bump(clerkId, player.name, player.avatar, {
+      place,
+      field,
+      matchFlags,
+    });
+    player.joinedFromQueue = false;
+    player.perfectSwapReady = false;
+    player.wasCardLeader = false;
+    player.matchChat = false;
+    player.matchReact = false;
     if (!id) continue;
     pending.add(id);
     changed.push(id);
