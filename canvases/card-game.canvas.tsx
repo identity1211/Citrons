@@ -5162,6 +5162,8 @@ function LobbyStylePickers({
   const [openKind, setOpenKind] = useState<"table" | "back" | null>(null);
   const tableMeta = TABLE_SKINS.find((s) => s.id === table) || TABLE_SKINS[0];
   const backMeta = CARD_BACKS.find((s) => s.id === back) || CARD_BACKS[0];
+  const inset = useVisualInset();
+  const kbOpen = inset.keyboard || Math.max(inset.bottom, inset.vkH) > 40;
 
   const thumbBorder = (on: boolean): CSSProperties => ({
     border: on ? "2px solid #f1c40f" : "1.5px solid rgba(255,255,255,0.28)",
@@ -5195,7 +5197,8 @@ function LobbyStylePickers({
         gap: 10,
         paddingTop: 2,
         position: "relative",
-        zIndex: 12,
+        // Stay under the chat IME bar while the keyboard is open.
+        zIndex: kbOpen ? 1 : 12,
         boxSizing: "border-box",
       }}
     >
@@ -12708,7 +12711,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
               ) : null}
             </div>
 
-            {/* Chat */}
+            {/* Chat — lift above Invite / Look while the keyboard is open so the IME bar wins stacking */}
             <div
               style={{
                 flex: "1 1 50%",
@@ -12717,7 +12720,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
                 display: "flex",
                 flexDirection: "column",
                 position: "relative",
-                zIndex: 6,
+                zIndex: inset.keyboard || Math.max(inset.bottom, inset.vkH) > 40 ? 150 : 6,
               }}
             >
               <RoomChat
