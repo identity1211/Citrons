@@ -239,6 +239,7 @@ function viewFor(room, playerId) {
     kickVote: kickVoteView(room, playerId),
     achievementFeed: achievementFeedView(room),
     queue: elimination.queueView(room),
+    canClaimSeat: false,
     lobby: room.seats.map((p) => ({
       id: p.id,
       name: p.id === playerId ? `${p.name} (you)` : p.name,
@@ -291,6 +292,7 @@ function viewForSpectator(room, spectatorId) {
     kickVote: kickVoteView(room, spectatorId),
     achievementFeed: achievementFeedView(room),
     queue: elimination.queueView(room),
+    canClaimSeat: room.phase === "waiting" && room.seats.length < MAX_PLAYERS,
     lobby: room.seats.map((p) => ({
       id: p.id,
       name: p.name,
@@ -427,6 +429,19 @@ function promoteQueuedIntoSeat(room) {
   return p;
 }
 
+/** Spectator taps Join while the waiting table has an open seat (first claim wins). */
+function claimSeat(ws, room, spectator) {
+  if (!room || !spectator) return;
+  if (room.phase !== "waiting") return error(ws, "Match already started");
+  if (room.seats.length >= MAX_PLAYERS) return error(ws, "No open seats");
+  const stillThere = roomSpectators(room).some((s) => s.id === spectator.id);
+  if (!stillThere) return error(ws, "You're not watching this table");
+  elimination.removeFromQueue(room, spectator.id);
+  const player = elimination.playerFromSpectator(spectator, id());
+  room.seats.push(player);
+  attach(ws, room, player);
+}
+
 function attachSpectator(ws, room, spectator) {
   browsers.delete(ws);
   if (ws.roomCode && ws.roomCode !== room.code) leave(ws, true);
@@ -521,10 +536,7 @@ function ejectFromMatch(room, player, opts = {}) {
   const inMatch = room.phase === "playing" || room.phase === "swap" || room.phase === "dealing";
   if (!inMatch) {
     if (removeSeat(room, player) && rooms.has(room.code)) {
-      // Elimination: fill the open lobby seat from the queue before the next join.
-      while (promoteQueuedIntoSeat(room)) {
-        /* promote until full or queue empty */
-      }
+      // Open seats are claimed via claimSeat (first spectator to tap Join).
       broadcast(room);
     }
     notifyLobbies();
@@ -970,9 +982,8 @@ function resetRoomToLobby(room) {
       /* fill open seats from queue without kicking anyone */
     }
     notifyRoleChange(room);
-  } else {
-    dropSpectators(room);
   }
+  // Keep classic spectators too — they should see the empty waiting table, not get kicked.
   broadcast(room);
   notifyLobbies();
 }
@@ -1554,6 +1565,9 @@ function onMessage(ws, data) {
     if (type === "voiceJoin") {
       void handleVoiceJoin(ws, room, spectator, msg, { listenOnly: true });
       return;
+    }
+    if (type === "claimSeat") {
+      return claimSeat(ws, room, spectator);
     }
     if (type === "leave") {
       leave(ws, true);

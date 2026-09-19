@@ -7516,6 +7516,8 @@ function Table({
   speakingIds,
   showSpecials = true,
   watching = false,
+  canClaimSeat = false,
+  onClaimSeat,
   kickVote = null,
   onKickPlayer,
   onKickVote,
@@ -7566,6 +7568,8 @@ function Table({
   speakingIds?: string[];
   showSpecials?: boolean;
   watching?: boolean;
+  canClaimSeat?: boolean;
+  onClaimSeat?: () => void;
   kickVote?: KickVoteInfo | null;
   onKickPlayer?: (playerId: string) => void;
   onKickVote?: (yes: boolean) => void;
@@ -8250,7 +8254,7 @@ function Table({
               Tap a face-down card to peek
             </div>
           ) : null}
-          {(playerHand(0).length > 0 || !isPlaying) && (
+          {(playerHand(0).length > 0 || (!isPlaying && !watching)) && (
             <Hand
               cards={playerHand(0)}
               isOwner={!watching}
@@ -8286,19 +8290,47 @@ function Table({
             bottom: "max(10px, env(safe-area-inset-bottom))",
             transform: "translateX(-50%)",
             zIndex: 120,
-            padding: "8px 16px",
-            borderRadius: 999,
-            background: "rgba(8, 18, 10, 0.88)",
-            border: "1.5px solid rgba(241,196,15,0.7)",
-            color: "#f1c40f",
-            fontSize: 12,
-            fontWeight: 800,
-            letterSpacing: 0.8,
-            textTransform: "uppercase",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 8,
             pointerEvents: "none",
           }}
         >
-          {watching && phase === "lobby" ? "Waiting for start" : "Watching"}
+          {phase === "lobby" && canClaimSeat && onClaimSeat ? (
+            <button
+              type="button"
+              className="lobby-play-btn"
+              onClick={onClaimSeat}
+              style={{
+                ...LOBBY_GOLD_BTN,
+                pointerEvents: "auto",
+                width: "auto",
+                minWidth: 120,
+                height: 44,
+                padding: "0 22px",
+                fontSize: 15,
+              }}
+            >
+              Join
+            </button>
+          ) : null}
+          <div
+            style={{
+              padding: "8px 16px",
+              borderRadius: 999,
+              background: "rgba(8, 18, 10, 0.88)",
+              border: "1.5px solid rgba(241,196,15,0.7)",
+              color: "#f1c40f",
+              fontSize: 12,
+              fontWeight: 800,
+              letterSpacing: 0.8,
+              textTransform: "uppercase",
+              pointerEvents: "none",
+            }}
+          >
+            {phase === "lobby" ? "Waiting for start" : "Watching"}
+          </div>
         </div>
       ) : phase === "finished" ? null : (
         <>
@@ -8474,6 +8506,7 @@ type OnlineView = {
   host: boolean;
   spectator?: boolean;
   queued?: boolean;
+  canClaimSeat?: boolean;
   phase: "waiting" | "dealing" | "swap" | "playing" | "finished";
   players: PlayerState[];
   deckCount: number;
@@ -12878,9 +12911,11 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         playSelected={playSelected}
         statusMsg={
           view.spectator && view.phase === "waiting"
-            ? view.queued
-              ? "You're in the queue · Waiting for the match to start"
-              : "Waiting for the match to start"
+            ? view.canClaimSeat
+              ? "A seat is open — tap Join to enter the lobby"
+              : view.queued
+                ? "You're in the queue · Waiting for the match to start"
+                : "Waiting for the match to start"
             : view.statusMsg
         }
         finishOrder={view.finishOrder}
@@ -12924,6 +12959,8 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         speakingIds={voiceSpeakingIds}
         showSpecials={false}
         watching={!!view.spectator}
+        canClaimSeat={!!view.canClaimSeat}
+        onClaimSeat={() => send({ type: "claimSeat" })}
         kickVote={view.kickVote || null}
         onKickPlayer={(targetId) => send({ type: "kick", targetId })}
         onKickVote={(yes) => send({ type: "kickVote", yes })}
