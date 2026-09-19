@@ -1556,6 +1556,12 @@ function onMessage(ws, data) {
     return;
   }
 
+  if (type === "claimSeat") {
+    if (player) return; // already seated (e.g. double-tap)
+    if (spectator) return claimSeat(ws, room, spectator);
+    return error(ws, "Join a lobby first");
+  }
+
   if (spectator && !player) {
     if (type === "chat") return handleChat(room, spectator, msg.text);
     if (type === "react") {
@@ -1565,9 +1571,6 @@ function onMessage(ws, data) {
     if (type === "voiceJoin") {
       void handleVoiceJoin(ws, room, spectator, msg, { listenOnly: true });
       return;
-    }
-    if (type === "claimSeat") {
-      return claimSeat(ws, room, spectator);
     }
     if (type === "leave") {
       leave(ws, true);

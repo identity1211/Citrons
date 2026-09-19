@@ -7517,6 +7517,7 @@ function Table({
   showSpecials = true,
   watching = false,
   canClaimSeat = false,
+  claimSeatBusy = false,
   onClaimSeat,
   kickVote = null,
   onKickPlayer,
@@ -7569,6 +7570,7 @@ function Table({
   showSpecials?: boolean;
   watching?: boolean;
   canClaimSeat?: boolean;
+  claimSeatBusy?: boolean;
   onClaimSeat?: () => void;
   kickVote?: KickVoteInfo | null;
   onKickPlayer?: (playerId: string) => void;
@@ -8301,6 +8303,7 @@ function Table({
             <button
               type="button"
               className="lobby-play-btn"
+              disabled={!!claimSeatBusy}
               onClick={onClaimSeat}
               style={{
                 ...LOBBY_GOLD_BTN,
@@ -8310,9 +8313,11 @@ function Table({
                 height: 44,
                 padding: "0 22px",
                 fontSize: 15,
+                opacity: claimSeatBusy ? 0.55 : 1,
+                cursor: claimSeatBusy ? "default" : "pointer",
               }}
             >
-              Join
+              {claimSeatBusy ? "…" : "Join"}
             </button>
           ) : null}
           <div
@@ -12960,7 +12965,13 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
         showSpecials={false}
         watching={!!view.spectator}
         canClaimSeat={!!view.canClaimSeat}
-        onClaimSeat={() => send({ type: "claimSeat" })}
+        claimSeatBusy={busy}
+        onClaimSeat={() => {
+          if (busy) return;
+          setBusy(true);
+          setError("");
+          send({ type: "claimSeat" });
+        }}
         kickVote={view.kickVote || null}
         onKickPlayer={(targetId) => send({ type: "kick", targetId })}
         onKickVote={(yes) => send({ type: "kickVote", yes })}
