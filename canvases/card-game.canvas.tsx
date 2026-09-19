@@ -11608,7 +11608,6 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
 
   useEffect(() => {
     if (!createOpen) return;
-    titleInputRef.current?.focus();
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !busy) setCreateOpen(false);
     };
