@@ -6812,6 +6812,7 @@ function HomeIconUpdateNotice({
   onGotIt: () => void;
   onLater: () => void;
 }) {
+  const reinstall = typeof window !== "undefined" && isStandaloneApp();
   return (
     <div
       style={{
@@ -6836,19 +6837,52 @@ function HomeIconUpdateNotice({
         }}
       >
         <div
+          style={{
+            display: "flex",
+            justifyContent: "center",
+            marginBottom: 12,
+          }}
+        >
+          <img
+            src="apple-touch-icon.png?v=2"
+            alt=""
+            width={72}
+            height={72}
+            draggable={false}
+            style={{
+              width: 72,
+              height: 72,
+              borderRadius: 16,
+              border: "1.5px solid rgba(241,196,15,0.45)",
+              boxShadow: "0 6px 18px rgba(0,0,0,0.35)",
+              display: "block",
+            }}
+          />
+        </div>
+        <div
           id="home-icon-title"
           style={{
             fontFamily: 'Georgia, "Times New Roman", serif',
             fontSize: 20,
             fontWeight: 700,
             marginBottom: 8,
+            textAlign: "center",
           }}
         >
-          Update your Home Screen icon
+          New Home Screen icon
         </div>
-        <div style={{ fontSize: 14, lineHeight: 1.45, color: "rgba(255,255,255,0.78)", marginBottom: 14 }}>
-          This update changes the Citrons icon. iPhone does not refresh it on its own. Delete the old Citrons
-          icon, then open the site in Safari and use Share → Add to Home Screen.
+        <div
+          style={{
+            fontSize: 14,
+            lineHeight: 1.45,
+            color: "rgba(255,255,255,0.78)",
+            marginBottom: 14,
+            textAlign: "center",
+          }}
+        >
+          {reinstall
+            ? "Citrons now has a lemon icon. iPhone will not update the old green square by itself — delete it, then in Safari use Share → Add to Home Screen."
+            : "Add Citrons to your Home Screen for the lemon icon. In Safari: Share → Add to Home Screen. If an old green square is already there, delete it first."}
         </div>
         <button
           type="button"
@@ -9673,10 +9707,13 @@ function isStandaloneApp(): boolean {
   return window.matchMedia("(display-mode: standalone)").matches;
 }
 
-function isIosPhoneStandalone(): boolean {
+function isIosPhone(): boolean {
   if (typeof navigator === "undefined") return false;
-  if (!/iphone|ipod/i.test(navigator.userAgent || "")) return false;
-  return isStandaloneApp();
+  return /iphone|ipod/i.test(navigator.userAgent || "");
+}
+
+function isIosPhoneStandalone(): boolean {
+  return isIosPhone() && isStandaloneApp();
 }
 
 function storedHomeIconVersion(): number {
@@ -9698,14 +9735,17 @@ function homeIconUpdateLater(): boolean {
 
 function shouldShowHomeIconUpdate(): boolean {
   if (typeof window === "undefined") return false;
-  if (!isIosPhoneStandalone()) return false;
+  if (!isIosPhone()) return false;
   if (homeIconUpdateLater()) return false;
   const stored = storedHomeIconVersion();
   if (HOME_ICON_VERSION <= 1) {
     if (stored === 0) markHomeIconCurrent();
     return false;
   }
-  return HOME_ICON_VERSION > stored;
+  if (HOME_ICON_VERSION <= stored) return false;
+  // Standalone install always; Safari for returning players who may still have the old green square.
+  if (isStandaloneApp()) return true;
+  return isReturningCitronsPlayer() || iosInstallSeen();
 }
 
 function markHomeIconCurrent() {
