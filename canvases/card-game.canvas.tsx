@@ -10,7 +10,7 @@ const HOME_ICON_VER_KEY = "citrons-home-icon-ver";
 const HOME_ICON_LATER_KEY = "citrons-home-icon-later";
 const VAPID_KEY = "citrons-vapid-pub";
 /** Bump when apple-touch-icon.png or the Home Screen name changes. Keep at 1 until that happens so existing installs are not nagged. Also bump ?v= on the apple-touch-icon link in scripts/build-site.pl. */
-const HOME_ICON_VERSION = 1;
+const HOME_ICON_VERSION = 2;
 
 function rememberJoinFromUrl() {
   if (typeof window === "undefined") return;
