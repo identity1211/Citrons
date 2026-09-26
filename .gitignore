@@ -9,3 +9,14 @@ mcps/
 canvases/node_modules/
 data/*.json
 data/*.json.tmp
+android/.gradle/
+android/app/build/
+android/build/
+android/local.properties
+android/dist/
+android/*.jks
+android/*.keystore
+android/keystore.properties
+*.apk
+!docs/app/*.apk
+*.aab

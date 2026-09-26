@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Citrons" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/felt_dark</item>
+        <item name="colorPrimaryVariant">@color/felt_dark</item>
+        <item name="colorSecondary">@color/gold</item>
+        <item name="android:statusBarColor">@color/felt_dark</item>
+        <item name="android:navigationBarColor">@color/felt_dark</item>
+        <item name="android:windowBackground">@color/felt</item>
+    </style>
+</resources>

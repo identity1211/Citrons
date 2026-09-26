@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Citrons</string>
+    <string name="menu_refresh">Refresh game</string>
+    <string name="menu_open_browser">Open in browser</string>
+    <string name="load_error">Couldn\'t load Citrons. Check your connection, then long-press → Refresh game.</string>
+    <string name="hint_long_press">Long-press the screen for Refresh game</string>
+</resources>
