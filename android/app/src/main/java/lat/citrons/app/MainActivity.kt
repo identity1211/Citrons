@@ -9,6 +9,7 @@ import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
@@ -23,9 +24,11 @@ import android.webkit.WebViewClient
 import android.widget.ProgressBar
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -45,12 +48,21 @@ class MainActivity : AppCompatActivity() {
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         applyImmersiveWindow()
         setContentView(R.layout.activity_main)
 
+        val root = findViewById<ViewGroup>(R.id.root)
+        // Never pad the shell for status/nav bars — that was the green letterbox.
+        ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
+            WindowInsetsCompat.CONSUMED
+        }
+        root.fitsSystemWindows = false
+
         webView = findViewById(R.id.webView)
         progress = findViewById(R.id.progress)
+        webView.fitsSystemWindows = false
 
         setupWebView()
 
@@ -100,15 +112,18 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        (webView.parent as? android.view.ViewGroup)?.removeView(webView)
+        (webView.parent as? ViewGroup)?.removeView(webView)
         webView.destroy()
         super.onDestroy()
     }
 
     private fun applyImmersiveWindow() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
-        window.statusBarColor = Color.TRANSPARENT
-        window.navigationBarColor = Color.TRANSPARENT
+        @Suppress("DEPRECATION")
+        run {
+            window.statusBarColor = Color.TRANSPARENT
+            window.navigationBarColor = Color.TRANSPARENT
+        }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         hideSystemBars()
     }
@@ -118,6 +133,17 @@ class MainActivity : AppCompatActivity() {
         controller.systemBarsBehavior =
             WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         controller.hide(WindowInsetsCompat.Type.systemBars())
+        // Relayout after bars hide so WebView claims the full display.
+        if (::webView.isInitialized) {
+            webView.post {
+                webView.layoutParams =
+                    webView.layoutParams.apply {
+                        width = ViewGroup.LayoutParams.MATCH_PARENT
+                        height = ViewGroup.LayoutParams.MATCH_PARENT
+                    }
+                webView.requestLayout()
+            }
+        }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -166,6 +192,8 @@ class MainActivity : AppCompatActivity() {
                     progress.visibility = View.GONE
                     CookieManager.getInstance().flush()
                     hideSystemBars()
+                    // App-only: force the page to the real display size (does not change hosted web files).
+                    injectAppViewportFix()
                 }
 
                 override fun onReceivedError(
@@ -223,6 +251,35 @@ class MainActivity : AppCompatActivity() {
                     return true
                 }
             }
+    }
+
+    private fun injectAppViewportFix() {
+        // Stretch the document to the WebView size and zero CSS env(safe-area) via overrides.
+        // Hosted citrons.lat is unchanged; this runs only inside the native shell.
+        val js =
+            """
+            (function(){
+              if (window.__citronsAppViewport) return;
+              window.__citronsAppViewport = true;
+              var s = document.getElementById('citrons-app-viewport');
+              if (!s) {
+                s = document.createElement('style');
+                s.id = 'citrons-app-viewport';
+                s.textContent = [
+                  'html,body,#root{position:fixed!important;inset:0!important;width:100%!important;height:100%!important;min-height:100%!important;max-height:none!important;margin:0!important;overflow:hidden!important;}',
+                  'html{height:100%!important;}'
+                ].join('');
+                (document.head || document.documentElement).appendChild(s);
+              }
+              try {
+                window.dispatchEvent(new Event('resize'));
+                if (window.visualViewport) {
+                  window.visualViewport.dispatchEvent(new Event('resize'));
+                }
+              } catch (e) {}
+            })();
+            """.trimIndent()
+        webView.evaluateJavascript(js, null)
     }
 
     private inner class CitronsBridge {
