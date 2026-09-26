@@ -4656,6 +4656,15 @@ function ProfileButton({ chip = true }: { chip?: boolean } = {}) {
                   emphasize={!isPlus}
                   onClick={() => setPane("plus")}
                 />
+                {isAndroidClient() ? (
+                  <ProfileNavRow
+                    label="Get APK"
+                    hint="Android"
+                    onClick={() => {
+                      window.location.assign(ANDROID_APK_URL);
+                    }}
+                  />
+                ) : null}
 
                 <div style={{ ...PROFILE_DIVIDER, margin: shortLand ? "6px 0" : "10px 0" }} />
 
@@ -4698,6 +4707,15 @@ function ProfileButton({ chip = true }: { chip?: boolean } = {}) {
                 >
                   {busy === "signin" ? "Opening Google…" : "Sign in with Google"}
                 </button>
+                {isAndroidClient() ? (
+                  <ProfileNavRow
+                    label="Get APK"
+                    hint="Android"
+                    onClick={() => {
+                      window.location.assign(ANDROID_APK_URL);
+                    }}
+                  />
+                ) : null}
                 <button type="button" onClick={() => setOpen(false)} style={PROFILE_MUTED_BTN}>
                   Close
                 </button>
@@ -6963,23 +6981,6 @@ function Lobby({
       >
         Leaderboard
       </button>
-      {isAndroidClient() ? (
-        <a
-          className="lobby-ghost-btn"
-          href={ANDROID_APK_URL}
-          download="citrons-android.apk"
-          style={{
-            ...LOBBY_GHOST_BTN,
-            textDecoration: "none",
-            boxSizing: "border-box",
-            ...(shortLand
-              ? { height: 36, maxWidth: "none", fontSize: 13 }
-              : { height: 44, fontSize: 14 }),
-          }}
-        >
-          Get APK
-        </a>
-      ) : null}
     </>
   );
 
