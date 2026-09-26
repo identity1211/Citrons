@@ -1448,6 +1448,13 @@ function isStandaloneDisplay() {
   );
 }
 
+function isAndroidClient(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return /Android/i.test(navigator.userAgent || "");
+}
+
+const ANDROID_APK_URL = "app/citrons-android.apk";
+
 function isFullscreenActive() {
   const doc = document as Document & { webkitFullscreenElement?: Element | null };
   return !!(document.fullscreenElement || doc.webkitFullscreenElement || isStandaloneDisplay());
@@ -7073,6 +7080,23 @@ function Lobby({
       >
         Leaderboard
       </button>
+      {isAndroidClient() ? (
+        <a
+          className="lobby-ghost-btn"
+          href={ANDROID_APK_URL}
+          download="citrons-android.apk"
+          style={{
+            ...LOBBY_GHOST_BTN,
+            textDecoration: "none",
+            boxSizing: "border-box",
+            ...(shortLand
+              ? { height: 36, maxWidth: "none", fontSize: 13 }
+              : { height: 44, fontSize: 14 }),
+          }}
+        >
+          Get APK
+        </a>
+      ) : null}
     </>
   );
 
