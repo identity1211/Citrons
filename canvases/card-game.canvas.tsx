@@ -1336,6 +1336,29 @@ function isAndroidClient(): boolean {
   return /Android/i.test(navigator.userAgent || "");
 }
 
+/** True inside the native Citrons Android WebView shell. */
+function isCitronsAndroidApp(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return /CitronsAndroid/i.test(navigator.userAgent || "");
+}
+
+function refreshCitronsAndroidApp() {
+  try {
+    const bridge = (window as unknown as { CitronsAndroid?: { refreshGame?: () => void } }).CitronsAndroid;
+    if (bridge && typeof bridge.refreshGame === "function") {
+      bridge.refreshGame();
+      return;
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    window.location.replace(`${window.location.origin}/?app_refresh=${Date.now()}`);
+  } catch {
+    window.location.reload();
+  }
+}
+
 const ANDROID_APK_URL = "app/citrons-android.apk";
 
 function isFullscreenActive() {
@@ -4656,7 +4679,16 @@ function ProfileButton({ chip = true }: { chip?: boolean } = {}) {
                   emphasize={!isPlus}
                   onClick={() => setPane("plus")}
                 />
-                {isAndroidClient() ? (
+                {isCitronsAndroidApp() ? (
+                  <ProfileNavRow
+                    label="Refresh game"
+                    hint="Update"
+                    onClick={() => {
+                      refreshCitronsAndroidApp();
+                      setOpen(false);
+                    }}
+                  />
+                ) : isAndroidClient() ? (
                   <ProfileNavRow
                     label="Get APK"
                     hint="Android"
@@ -4707,7 +4739,16 @@ function ProfileButton({ chip = true }: { chip?: boolean } = {}) {
                 >
                   {busy === "signin" ? "Opening Google…" : "Sign in with Google"}
                 </button>
-                {isAndroidClient() ? (
+                {isCitronsAndroidApp() ? (
+                  <ProfileNavRow
+                    label="Refresh game"
+                    hint="Update"
+                    onClick={() => {
+                      refreshCitronsAndroidApp();
+                      setOpen(false);
+                    }}
+                  />
+                ) : isAndroidClient() ? (
                   <ProfileNavRow
                     label="Get APK"
                     hint="Android"

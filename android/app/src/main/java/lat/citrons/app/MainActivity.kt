@@ -5,12 +5,13 @@ import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
-import android.view.ContextMenu
-import android.view.MenuItem
 import android.view.View
+import android.view.WindowManager
 import android.webkit.CookieManager
+import android.webkit.JavascriptInterface
 import android.webkit.PermissionRequest
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -26,6 +27,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 
 class MainActivity : AppCompatActivity() {
     private lateinit var webView: WebView
@@ -43,19 +46,13 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        WindowCompat.setDecorFitsSystemWindows(window, true)
+        applyImmersiveWindow()
         setContentView(R.layout.activity_main)
 
         webView = findViewById(R.id.webView)
         progress = findViewById(R.id.progress)
 
         setupWebView()
-        webView.isLongClickable = true
-        webView.setOnLongClickListener {
-            openContextMenu(it)
-            true
-        }
-        registerForContextMenu(webView)
 
         if (savedInstanceState != null) {
             webView.restoreState(savedInstanceState)
@@ -86,28 +83,15 @@ class MainActivity : AppCompatActivity() {
         webView.loadUrl(url)
     }
 
-    override fun onCreateContextMenu(
-        menu: ContextMenu,
-        v: View,
-        menuInfo: ContextMenu.ContextMenuInfo?,
-    ) {
-        super.onCreateContextMenu(menu, v, menuInfo)
-        menuInflater.inflate(R.menu.main_menu, menu)
-        menu.setHeaderTitle(R.string.app_name)
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) hideSystemBars()
     }
 
-    override fun onContextItemSelected(item: MenuItem): Boolean {
-        return when (item.itemId) {
-            R.id.action_refresh -> {
-                refreshGame()
-                true
-            }
-            R.id.action_browser -> {
-                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(webView.url ?: HOME_URL)))
-                true
-            }
-            else -> super.onContextItemSelected(item)
-        }
+    override fun onResume() {
+        super.onResume()
+        hideSystemBars()
+        webView.onResume()
     }
 
     override fun onPause() {
@@ -115,16 +99,25 @@ class MainActivity : AppCompatActivity() {
         super.onPause()
     }
 
-    override fun onResume() {
-        super.onResume()
-        webView.onResume()
-    }
-
     override fun onDestroy() {
-        // Avoid destroying across config changes handled by android:configChanges.
         (webView.parent as? android.view.ViewGroup)?.removeView(webView)
         webView.destroy()
         super.onDestroy()
+    }
+
+    private fun applyImmersiveWindow() {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        window.statusBarColor = Color.TRANSPARENT
+        window.navigationBarColor = Color.TRANSPARENT
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        hideSystemBars()
+    }
+
+    private fun hideSystemBars() {
+        val controller = WindowInsetsControllerCompat(window, window.decorView)
+        controller.systemBarsBehavior =
+            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        controller.hide(WindowInsetsCompat.Type.systemBars())
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -132,13 +125,18 @@ class MainActivity : AppCompatActivity() {
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
 
+        webView.setBackgroundColor(Color.parseColor("#145230"))
+        // Consume long-press so Android never shows a context menu; JS still gets touch events for stacking.
+        webView.isLongClickable = false
+        webView.isHapticFeedbackEnabled = false
+        webView.setOnLongClickListener { true }
+
         webView.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
             mediaPlaybackRequiresUserGesture = false
             mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
             cacheMode = WebSettings.LOAD_DEFAULT
-            // Strip the "wv" WebView marker so Google/Clerk OAuth is less likely to block sign-in.
             userAgentString = chromeLikeUserAgent(userAgentString)
             setSupportZoom(false)
             builtInZoomControls = false
@@ -146,6 +144,8 @@ class MainActivity : AppCompatActivity() {
             loadWithOverviewMode = true
             useWideViewPort = true
         }
+
+        webView.addJavascriptInterface(CitronsBridge(), "CitronsAndroid")
 
         webView.webViewClient =
             object : WebViewClient() {
@@ -165,6 +165,7 @@ class MainActivity : AppCompatActivity() {
                 override fun onPageFinished(view: WebView?, url: String?) {
                     progress.visibility = View.GONE
                     CookieManager.getInstance().flush()
+                    hideSystemBars()
                 }
 
                 override fun onReceivedError(
@@ -190,7 +191,6 @@ class MainActivity : AppCompatActivity() {
                         val needsAudio =
                             request.resources.any { it == PermissionRequest.RESOURCE_AUDIO_CAPTURE }
                         if (!needsAudio) {
-                            // Don't auto-grant camera/etc.
                             val safe =
                                 request.resources
                                     .filter {
@@ -225,6 +225,13 @@ class MainActivity : AppCompatActivity() {
             }
     }
 
+    private inner class CitronsBridge {
+        @JavascriptInterface
+        fun refreshGame() {
+            runOnUiThread { hardRefresh() }
+        }
+    }
+
     private fun grantMediaPermissions(request: PermissionRequest, audioGranted: Boolean) {
         val granted =
             request.resources
@@ -238,10 +245,6 @@ class MainActivity : AppCompatActivity() {
         if (granted.isEmpty()) request.deny() else request.grant(granted)
     }
 
-    /**
-     * Keep first-party + OAuth/game hosts inside the WebView.
-     * Opening Google in Custom Tabs breaks Clerk redirect back into the app.
-     */
     private fun handleExternalUrl(url: String): Boolean {
         val uri = Uri.parse(url)
         val scheme = uri.scheme?.lowercase().orEmpty()
@@ -264,7 +267,6 @@ class MainActivity : AppCompatActivity() {
 
         val host = uri.host?.lowercase().orEmpty()
         if (host.isEmpty()) return false
-
         if (isAllowedInWebView(host)) return false
 
         return try {
@@ -275,7 +277,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun refreshGame() {
+    private fun hardRefresh() {
         webView.clearCache(true)
         webView.loadUrl(HOME_URL)
         Toast.makeText(this, R.string.menu_refresh, Toast.LENGTH_SHORT).show()
@@ -293,9 +295,7 @@ class MainActivity : AppCompatActivity() {
             return host == domain || host.endsWith(".$domain")
         }
 
-        fun isCitronsHost(host: String): Boolean {
-            return hostMatches(host, "citrons.lat")
-        }
+        fun isCitronsHost(host: String): Boolean = hostMatches(host, "citrons.lat")
 
         fun isAllowedInWebView(host: String): Boolean {
             if (isCitronsHost(host)) return true
@@ -314,7 +314,6 @@ class MainActivity : AppCompatActivity() {
                 return true
             }
             if (hostMatches(host, "stripe.com") || hostMatches(host, "stripe.network")) return true
-            // Keep Google OAuth inside WebView so the redirect returns to Citrons.
             if (hostMatches(host, "google.com") ||
                 hostMatches(host, "googleusercontent.com") ||
                 hostMatches(host, "gstatic.com") ||

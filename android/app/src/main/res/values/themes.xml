@@ -4,8 +4,9 @@
         <item name="colorPrimary">@color/felt_dark</item>
         <item name="colorPrimaryVariant">@color/felt_dark</item>
         <item name="colorSecondary">@color/gold</item>
-        <item name="android:statusBarColor">@color/felt_dark</item>
-        <item name="android:navigationBarColor">@color/felt_dark</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowBackground">@color/felt</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
     </style>
 </resources>

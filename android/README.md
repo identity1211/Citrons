@@ -45,9 +45,9 @@ keytool -genkey -v -keystore citrons-release.jks -keyalg RSA -keysize 2048 -vali
 
 ## In-app refresh
 
-Long-press anywhere on the game → **Refresh game** (clears cache and reloads https://citrons.lat).
+Inside the Android app: open profile (photo) → **Refresh game**.
 
-Also available: **Open in browser**.
+On Android Chrome (browser): profile → **Get APK**.
 
 ## Download (no Play Store)
 
