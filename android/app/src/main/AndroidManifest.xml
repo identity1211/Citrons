@@ -32,7 +32,7 @@
             android:hardwareAccelerated="true"
             android:launchMode="singleTask"
             android:theme="@style/Theme.Citrons"
-            android:windowSoftInputMode="adjustResize"
+            android:windowSoftInputMode="adjustPan"
             android:screenOrientation="unspecified">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

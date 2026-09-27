@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.view.ViewGroup
@@ -24,7 +25,6 @@ import android.webkit.WebViewClient
 import android.widget.ProgressBar
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
-import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -36,6 +36,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 class MainActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private lateinit var progress: ProgressBar
+    private lateinit var root: ViewGroup
 
     private var pendingPermissionRequest: PermissionRequest? = null
 
@@ -48,23 +49,27 @@ class MainActivity : AppCompatActivity() {
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        enableEdgeToEdge()
+        // Do not call enableEdgeToEdge() — it keeps status/nav overlays visible.
         super.onCreate(savedInstanceState)
         applyImmersiveWindow()
         setContentView(R.layout.activity_main)
 
-        val root = findViewById<ViewGroup>(R.id.root)
-        // Never pad the shell for status/nav bars — that was the green letterbox.
+        root = findViewById(R.id.root)
+        root.fitsSystemWindows = false
         ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
+            // If the system tries to show bars again, hide them immediately.
+            if (insets.isVisible(WindowInsetsCompat.Type.systemBars())) {
+                root.post { hideSystemBars() }
+            }
             WindowInsetsCompat.CONSUMED
         }
-        root.fitsSystemWindows = false
 
         webView = findViewById(R.id.webView)
         progress = findViewById(R.id.progress)
         webView.fitsSystemWindows = false
 
         setupWebView()
+        hideSystemBars()
 
         if (savedInstanceState != null) {
             webView.restoreState(savedInstanceState)
@@ -119,29 +124,65 @@ class MainActivity : AppCompatActivity() {
 
     private fun applyImmersiveWindow() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
+
         @Suppress("DEPRECATION")
         run {
             window.statusBarColor = Color.TRANSPARENT
             window.navigationBarColor = Color.TRANSPARENT
+            window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+            window.clearFlags(WindowManager.LayoutParams.FLAG_FORCE_NOT_FULLSCREEN)
         }
+
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        hideSystemBars()
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            window.attributes =
+                window.attributes.apply {
+                    layoutInDisplayCutoutMode =
+                        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            @Suppress("DEPRECATION")
+            window.isStatusBarContrastEnforced = false
+            @Suppress("DEPRECATION")
+            window.isNavigationBarContrastEnforced = false
+        }
+
+        // Re-apply sticky immersive if the user swipes bars back in.
+        @Suppress("DEPRECATION")
+        window.decorView.setOnSystemUiVisibilityChangeListener { visibility ->
+            val visible = visibility and View.SYSTEM_UI_FLAG_FULLSCREEN == 0
+            if (visible) hideSystemBars()
+        }
     }
 
+    @Suppress("DEPRECATION")
     private fun hideSystemBars() {
-        val controller = WindowInsetsControllerCompat(window, window.decorView)
+        val decor = window.decorView
+
+        // Legacy sticky immersive — most reliable for games on OEM skins.
+        decor.systemUiVisibility =
+            (View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                or View.SYSTEM_UI_FLAG_FULLSCREEN)
+
+        val controller = WindowInsetsControllerCompat(window, decor)
         controller.systemBarsBehavior =
             WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        controller.hide(WindowInsetsCompat.Type.statusBars())
+        controller.hide(WindowInsetsCompat.Type.navigationBars())
         controller.hide(WindowInsetsCompat.Type.systemBars())
-        // Relayout after bars hide so WebView claims the full display.
+        controller.isAppearanceLightStatusBars = false
+        controller.isAppearanceLightNavigationBars = false
+
         if (::webView.isInitialized) {
             webView.post {
-                webView.layoutParams =
-                    webView.layoutParams.apply {
-                        width = ViewGroup.LayoutParams.MATCH_PARENT
-                        height = ViewGroup.LayoutParams.MATCH_PARENT
-                    }
                 webView.requestLayout()
+                injectAppViewportFix()
             }
         }
     }
@@ -152,7 +193,6 @@ class MainActivity : AppCompatActivity() {
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
 
         webView.setBackgroundColor(Color.parseColor("#145230"))
-        // Consume long-press so Android never shows a context menu; JS still gets touch events for stacking.
         webView.isLongClickable = false
         webView.isHapticFeedbackEnabled = false
         webView.setOnLongClickListener { true }
@@ -186,13 +226,13 @@ class MainActivity : AppCompatActivity() {
                 override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                     progress.visibility = View.VISIBLE
                     progress.progress = 0
+                    hideSystemBars()
                 }
 
                 override fun onPageFinished(view: WebView?, url: String?) {
                     progress.visibility = View.GONE
                     CookieManager.getInstance().flush()
                     hideSystemBars()
-                    // App-only: force the page to the real display size (does not change hosted web files).
                     injectAppViewportFix()
                 }
 
@@ -254,28 +294,23 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun injectAppViewportFix() {
-        // Stretch the document to the WebView size and zero CSS env(safe-area) via overrides.
-        // Hosted citrons.lat is unchanged; this runs only inside the native shell.
+        if (!::webView.isInitialized) return
         val js =
             """
             (function(){
-              if (window.__citronsAppViewport) return;
-              window.__citronsAppViewport = true;
               var s = document.getElementById('citrons-app-viewport');
               if (!s) {
                 s = document.createElement('style');
                 s.id = 'citrons-app-viewport';
-                s.textContent = [
-                  'html,body,#root{position:fixed!important;inset:0!important;width:100%!important;height:100%!important;min-height:100%!important;max-height:none!important;margin:0!important;overflow:hidden!important;}',
-                  'html{height:100%!important;}'
-                ].join('');
                 (document.head || document.documentElement).appendChild(s);
               }
+              s.textContent = [
+                'html,body,#root{position:fixed!important;inset:0!important;width:100%!important;height:100%!important;min-height:100%!important;max-height:none!important;margin:0!important;padding:0!important;overflow:hidden!important;}',
+                'html{height:100%!important;}'
+              ].join('');
               try {
                 window.dispatchEvent(new Event('resize'));
-                if (window.visualViewport) {
-                  window.visualViewport.dispatchEvent(new Event('resize'));
-                }
+                if (window.visualViewport) window.visualViewport.dispatchEvent(new Event('resize'));
               } catch (e) {}
             })();
             """.trimIndent()
