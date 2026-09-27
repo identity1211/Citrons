@@ -6486,6 +6486,8 @@ const FELT_INSET_X = isCitronsAndroidApp()
 
 function WindowButton({ style, onClick }: { style?: CSSProperties; onClick?: () => void }) {
   const fsOn = useFullscreen();
+  // Native Android shell is already immersive — no browser fullscreen control.
+  if (isCitronsAndroidApp()) return null;
   return (
     <button
       type="button"
@@ -7103,7 +7105,7 @@ function Lobby({
         <>
           <ProfileButton />
           <WindowButton />
-          {view === "main" && (
+          {view === "main" && !isCitronsAndroidApp() && (
             <div
               className="lobby-fs-hint"
               style={{
