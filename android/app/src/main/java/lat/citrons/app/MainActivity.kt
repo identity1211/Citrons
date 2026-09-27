@@ -70,6 +70,7 @@ class MainActivity : AppCompatActivity() {
 
         setupWebView()
         hideSystemBars()
+        Toast.makeText(this, R.string.boot_version, Toast.LENGTH_LONG).show()
 
         if (savedInstanceState != null) {
             webView.restoreState(savedInstanceState)
@@ -169,6 +170,18 @@ class MainActivity : AppCompatActivity() {
                 or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
                 or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
                 or View.SYSTEM_UI_FLAG_FULLSCREEN)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.setDecorFitsSystemWindows(false)
+            window.insetsController?.let { ic ->
+                ic.hide(
+                    android.view.WindowInsets.Type.statusBars() or
+                        android.view.WindowInsets.Type.navigationBars(),
+                )
+                ic.systemBarsBehavior =
+                    android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            }
+        }
 
         val controller = WindowInsetsControllerCompat(window, decor)
         controller.systemBarsBehavior =

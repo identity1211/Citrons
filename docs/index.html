@@ -1459,6 +1459,24 @@ function isCitronsAndroidApp(): boolean {
   return /CitronsAndroid/i.test(navigator.userAgent || "");
 }
 
+/** App shell is already immersive — ignore CSS safe-area (browser keeps real insets). */
+function safeTop(minPx: number, extraPx = 0): string {
+  if (isCitronsAndroidApp()) return `${minPx}px`;
+  return `max(${minPx}px, calc(env(safe-area-inset-top) + ${extraPx}px))`;
+}
+function safeBottom(minPx: number, extraPx = 0): string {
+  if (isCitronsAndroidApp()) return `${minPx}px`;
+  return `max(${minPx}px, calc(env(safe-area-inset-bottom) + ${extraPx}px))`;
+}
+function safeLeft(minPx: number, extraPx = 0): string {
+  if (isCitronsAndroidApp()) return `${minPx}px`;
+  return `max(${minPx}px, calc(env(safe-area-inset-left) + ${extraPx}px))`;
+}
+function safeRight(minPx: number, extraPx = 0): string {
+  if (isCitronsAndroidApp()) return `${minPx}px`;
+  return `max(${minPx}px, calc(env(safe-area-inset-right) + ${extraPx}px))`;
+}
+
 function refreshCitronsAndroidApp() {
   try {
     const bridge = (window as unknown as { CitronsAndroid?: { refreshGame?: () => void } }).CitronsAndroid;
@@ -1476,7 +1494,7 @@ function refreshCitronsAndroidApp() {
   }
 }
 
-const ANDROID_APK_URL = "app/citrons-android.apk";
+const ANDROID_APK_URL = "app/citrons-android-1.0.4.apk";
 
 function isFullscreenActive() {
   const doc = document as Document & { webkitFullscreenElement?: Element | null };
@@ -6524,12 +6542,13 @@ const LOBBY_CORNER_BTN: CSSProperties = {
   pointerEvents: "auto",
 };
 
-const FELT_INSET_TOP = "max(18px, calc(env(safe-area-inset-top) + 4px))";
-const FELT_INSET_LEFT = "max(18px, calc(env(safe-area-inset-left) + 4px))";
-const FELT_INSET_RIGHT = "max(18px, calc(env(safe-area-inset-right) + 4px))";
-const FELT_INSET_BOTTOM = "max(18px, calc(env(safe-area-inset-bottom) + 4px))";
-const FELT_INSET_X =
-  "max(26px, calc(env(safe-area-inset-left) + 14px), calc(env(safe-area-inset-right) + 14px))";
+const FELT_INSET_TOP = safeTop(10, 4);
+const FELT_INSET_LEFT = safeLeft(10, 4);
+const FELT_INSET_RIGHT = safeRight(10, 4);
+const FELT_INSET_BOTTOM = safeBottom(10, 4);
+const FELT_INSET_X = isCitronsAndroidApp()
+  ? "14px"
+  : "max(26px, calc(env(safe-area-inset-left) + 14px), calc(env(safe-area-inset-right) + 14px))";
 
 function WindowButton({ style, onClick }: { style?: CSSProperties; onClick?: () => void }) {
   const fsOn = useFullscreen();
@@ -7155,7 +7174,7 @@ function Lobby({
               className="lobby-fs-hint"
               style={{
                 position: "absolute",
-                top: "max(36px, calc(env(safe-area-inset-top) + 22px))",
+                top: safeTop(22, 22),
                 left: FELT_INSET_LEFT,
                 zIndex: 8,
                 maxWidth: 148,
@@ -7175,10 +7194,10 @@ function Lobby({
       style={{
         padding:
           view === "board"
-            ? "max(52px, calc(env(safe-area-inset-top) + 40px)) 16px max(48px, calc(env(safe-area-inset-bottom) + 28px))"
+            ? `${safeTop(28, 40)} 16px ${safeBottom(28, 28)}`
             : shortLand
-              ? "max(10px, calc(env(safe-area-inset-top) + 4px)) 12px max(12px, calc(env(safe-area-inset-bottom) + 8px))"
-              : "max(40px, calc(env(safe-area-inset-top) + 22px)) 16px max(56px, calc(env(safe-area-inset-bottom) + 40px))",
+              ? `${safeTop(8, 4)} 12px ${safeBottom(8, 8)}`
+              : `${safeTop(16, 22)} 16px ${safeBottom(16, 40)}`,
       }}
     >
       {view === "main" && shortLand ? (
@@ -8300,8 +8319,8 @@ function Table({
           alignItems: "center",
           justifyItems: "center",
           padding: short
-            ? `13px max(10px, calc(env(safe-area-inset-right) + 12px)) 28px max(18px, calc(env(safe-area-inset-left) + 16px))`
-            : `8px max(28px, calc(env(safe-area-inset-right) + 12px)) 28px max(28px, calc(env(safe-area-inset-left) + 16px))`,
+            ? `13px ${safeRight(10, 12)} 28px ${safeLeft(14, 16)}`
+            : `8px ${safeRight(16, 12)} 28px ${safeLeft(16, 16)}`,
           overflow: "hidden",
           boxSizing: "border-box",
           position: "relative",
@@ -12906,7 +12925,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
           </>
         }
         style={{
-          padding: `max(44px, calc(env(safe-area-inset-top) + 28px)) ${FELT_INSET_X} ${FELT_INSET_BOTTOM} ${FELT_INSET_X}`,
+          padding: `${safeTop(16, 28)} ${FELT_INSET_X} ${FELT_INSET_BOTTOM} ${FELT_INSET_X}`,
           alignItems: "stretch",
           justifyContent: "flex-start",
           overflowY: "visible",
