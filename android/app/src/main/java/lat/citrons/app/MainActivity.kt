@@ -364,6 +364,21 @@ class MainActivity : AppCompatActivity() {
         fun refreshGame() {
             runOnUiThread { hardRefresh() }
         }
+
+        @JavascriptInterface
+        fun openApkUpdate(url: String) {
+            runOnUiThread {
+                try {
+                    val uri = Uri.parse(url)
+                    val intent = Intent(Intent.ACTION_VIEW, uri)
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    startActivity(intent)
+                    Toast.makeText(this@MainActivity, R.string.apk_update_opened, Toast.LENGTH_SHORT).show()
+                } catch (_: Exception) {
+                    Toast.makeText(this@MainActivity, R.string.apk_update_failed, Toast.LENGTH_LONG).show()
+                }
+            }
+        }
     }
 
     private fun grantMediaPermissions(request: PermissionRequest, audioGranted: Boolean) {
@@ -401,6 +416,16 @@ class MainActivity : AppCompatActivity() {
 
         val host = uri.host?.lowercase().orEmpty()
         if (host.isEmpty()) return false
+        // APK downloads must leave the WebView (Chrome / package installer).
+        val path = uri.path?.lowercase().orEmpty()
+        if (path.endsWith(".apk")) {
+            return try {
+                startActivity(Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                true
+            } catch (_: Exception) {
+                false
+            }
+        }
         if (isAllowedInWebView(host)) return false
 
         return try {

@@ -1387,7 +1387,26 @@ function refreshCitronsAndroidApp() {
   }
 }
 
-const ANDROID_APK_URL = "app/citrons-android-1.0.5.apk";
+const ANDROID_APK_VERSION = "1.0.6";
+const ANDROID_APK_URL = `app/citrons-android-${ANDROID_APK_VERSION}.apk`;
+
+function openAndroidApkUpdate() {
+  const url = new URL(ANDROID_APK_URL, window.location.origin).href;
+  try {
+    const bridge = (window as unknown as { CitronsAndroid?: { openApkUpdate?: (u: string) => void } }).CitronsAndroid;
+    if (bridge && typeof bridge.openApkUpdate === "function") {
+      bridge.openApkUpdate(url);
+      return;
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    window.open(url, "_blank");
+  } catch {
+    window.location.assign(url);
+  }
+}
 
 function isFullscreenActive() {
   const doc = document as Document & { webkitFullscreenElement?: Element | null };
@@ -4708,14 +4727,25 @@ function ProfileButton({ chip = true }: { chip?: boolean } = {}) {
                   onClick={() => setPane("plus")}
                 />
                 {isCitronsAndroidApp() ? (
-                  <ProfileNavRow
-                    label="Refresh game"
-                    hint="Update"
-                    onClick={() => {
-                      refreshCitronsAndroidApp();
-                      setOpen(false);
-                    }}
-                  />
+                  <>
+                    <ProfileNavRow
+                      label="Refresh game"
+                      hint="Website"
+                      onClick={() => {
+                        refreshCitronsAndroidApp();
+                        setOpen(false);
+                      }}
+                    />
+                    <ProfileNavRow
+                      label="Update app"
+                      hint={ANDROID_APK_VERSION}
+                      emphasize
+                      onClick={() => {
+                        openAndroidApkUpdate();
+                        setOpen(false);
+                      }}
+                    />
+                  </>
                 ) : isAndroidClient() ? (
                   <ProfileNavRow
                     label="Get APK"
@@ -4768,14 +4798,25 @@ function ProfileButton({ chip = true }: { chip?: boolean } = {}) {
                   {busy === "signin" ? "Opening Google…" : "Sign in with Google"}
                 </button>
                 {isCitronsAndroidApp() ? (
-                  <ProfileNavRow
-                    label="Refresh game"
-                    hint="Update"
-                    onClick={() => {
-                      refreshCitronsAndroidApp();
-                      setOpen(false);
-                    }}
-                  />
+                  <>
+                    <ProfileNavRow
+                      label="Refresh game"
+                      hint="Website"
+                      onClick={() => {
+                        refreshCitronsAndroidApp();
+                        setOpen(false);
+                      }}
+                    />
+                    <ProfileNavRow
+                      label="Update app"
+                      hint={ANDROID_APK_VERSION}
+                      emphasize
+                      onClick={() => {
+                        openAndroidApkUpdate();
+                        setOpen(false);
+                      }}
+                    />
+                  </>
                 ) : isAndroidClient() ? (
                   <ProfileNavRow
                     label="Get APK"
