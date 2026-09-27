@@ -39,6 +39,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var root: ViewGroup
 
     private var pendingPermissionRequest: PermissionRequest? = null
+    private var lastImeBottom = -1
 
     private val audioPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -56,10 +57,22 @@ class MainActivity : AppCompatActivity() {
 
         root = findViewById(R.id.root)
         root.fitsSystemWindows = false
-        ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
-            // If the system tries to show bars again, hide them immediately.
-            if (insets.isVisible(WindowInsetsCompat.Type.systemBars())) {
-                root.post { hideSystemBars() }
+        ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
+            val imeBottom = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
+            if (imeBottom != lastImeBottom) {
+                lastImeBottom = imeBottom
+                // Shrink the shell above the keyboard so lobby chat / IME bar stay visible.
+                v.setPadding(0, 0, 0, imeBottom)
+                pushImeHeightToPage(imeBottom)
+            }
+            // Keep status/nav hidden when the keyboard is closed.
+            if (imeBottom == 0 &&
+                (
+                    insets.isVisible(WindowInsetsCompat.Type.statusBars()) ||
+                        insets.isVisible(WindowInsetsCompat.Type.navigationBars())
+                    )
+            ) {
+                v.post { hideSystemBars() }
             }
             WindowInsetsCompat.CONSUMED
         }
@@ -70,7 +83,7 @@ class MainActivity : AppCompatActivity() {
 
         setupWebView()
         hideSystemBars()
-        Toast.makeText(this, R.string.boot_version, Toast.LENGTH_LONG).show()
+        Toast.makeText(this, R.string.boot_version, Toast.LENGTH_SHORT).show()
 
         if (savedInstanceState != null) {
             webView.restoreState(savedInstanceState)
@@ -130,7 +143,8 @@ class MainActivity : AppCompatActivity() {
         run {
             window.statusBarColor = Color.TRANSPARENT
             window.navigationBarColor = Color.TRANSPARENT
-            window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+            // Avoid FLAG_FULLSCREEN — it often blocks IME inset delivery to the WebView.
+            window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
             window.clearFlags(WindowManager.LayoutParams.FLAG_FORCE_NOT_FULLSCREEN)
         }
 
@@ -150,12 +164,27 @@ class MainActivity : AppCompatActivity() {
             window.isNavigationBarContrastEnforced = false
         }
 
-        // Re-apply sticky immersive if the user swipes bars back in.
         @Suppress("DEPRECATION")
         window.decorView.setOnSystemUiVisibilityChangeListener { visibility ->
             val visible = visibility and View.SYSTEM_UI_FLAG_FULLSCREEN == 0
-            if (visible) hideSystemBars()
+            if (visible && lastImeBottom <= 0) hideSystemBars()
         }
+    }
+
+    private fun pushImeHeightToPage(imeBottom: Int) {
+        if (!::webView.isInitialized) return
+        val js =
+            """
+            (function(){
+              window.__citronsImeH = $imeBottom;
+              document.documentElement.style.setProperty('--kb-h', '0px');
+              try {
+                window.dispatchEvent(new Event('resize'));
+                if (window.visualViewport) window.visualViewport.dispatchEvent(new Event('resize'));
+              } catch (e) {}
+            })();
+            """.trimIndent()
+        webView.evaluateJavascript(js, null)
     }
 
     @Suppress("DEPRECATION")

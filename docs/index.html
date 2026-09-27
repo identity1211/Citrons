@@ -1375,6 +1375,7 @@ function useVisualInset() {
     const fit = () => {
       enableVirtualKeyboard();
       const m = readVisualMetrics();
+      const bridgeH = citronsImeBridgeH();
       const layoutH = m.vvH + m.offsetTop;
       if (Math.abs(m.innerW - stable.current.w) > 60 || stable.current.w === 0) {
         stable.current = {
@@ -1384,24 +1385,26 @@ function useVisualInset() {
       }
       const sameWide = Math.abs(m.innerW - stable.current.w) < 80;
       const shrunk = sameWide && layoutH < stable.current.h - 100;
-      const keyboard = m.covered > 80 || m.vkH > 80 || shrunk;
+      const keyboard = m.covered > 80 || m.vkH > 80 || shrunk || bridgeH > 40;
       if (!keyboard) {
         stable.current = {
           w: Math.max(1, Math.round(m.innerW)),
           h: Math.max(1, Math.round(Math.max(m.innerH, layoutH))),
         };
       }
-      const lift = Math.max(m.covered, m.vkH);
-      const extra = android && lift > 80 && m.vkH < 80 ? 48 : 0;
-      document.documentElement.style.setProperty("--kb-h", `${Math.round(lift + extra)}px`);
+      const lift = Math.max(m.covered, m.vkH, bridgeH);
+      const extra = android && lift > 80 && m.vkH < 80 && bridgeH < 40 ? 48 : 0;
+      // Native Android shell pads the WebView for IME — keep CSS lift at 0 to avoid double offset.
+      const cssLift = isCitronsAndroidApp() && bridgeH > 0 ? 0 : lift + extra;
+      document.documentElement.style.setProperty("--kb-h", `${Math.round(cssLift)}px`);
       setInset({
-        bottom: Math.round(m.covered),
+        bottom: Math.round(Math.max(m.covered, bridgeH)),
         left: Math.round(m.offsetLeft),
         top: Math.round(m.offsetTop),
         width: Math.max(1, Math.round(m.vvW)),
         height: Math.max(1, Math.round(m.vvH)),
         keyboard,
-        vkH: Math.round(m.vkH),
+        vkH: Math.round(Math.max(m.vkH, bridgeH)),
         android,
       });
     };
@@ -1459,22 +1462,29 @@ function isCitronsAndroidApp(): boolean {
   return /CitronsAndroid/i.test(navigator.userAgent || "");
 }
 
-/** App shell is already immersive — ignore CSS safe-area (browser keeps real insets). */
+/** App shell hides system bars — keep intentional spacing, ignore status-bar env(). */
 function safeTop(minPx: number, extraPx = 0): string {
-  if (isCitronsAndroidApp()) return `${minPx}px`;
+  if (isCitronsAndroidApp()) return `${Math.max(minPx, 12)}px`;
   return `max(${minPx}px, calc(env(safe-area-inset-top) + ${extraPx}px))`;
 }
 function safeBottom(minPx: number, extraPx = 0): string {
-  if (isCitronsAndroidApp()) return `${minPx}px`;
+  // Restore lobby/table bottom air in the app (system gesture inset is 0 while immersive).
+  if (isCitronsAndroidApp()) return `${Math.max(minPx + extraPx, 28)}px`;
   return `max(${minPx}px, calc(env(safe-area-inset-bottom) + ${extraPx}px))`;
 }
 function safeLeft(minPx: number, extraPx = 0): string {
-  if (isCitronsAndroidApp()) return `${minPx}px`;
+  if (isCitronsAndroidApp()) return `${Math.max(minPx, 10)}px`;
   return `max(${minPx}px, calc(env(safe-area-inset-left) + ${extraPx}px))`;
 }
 function safeRight(minPx: number, extraPx = 0): string {
-  if (isCitronsAndroidApp()) return `${minPx}px`;
+  if (isCitronsAndroidApp()) return `${Math.max(minPx, 10)}px`;
   return `max(${minPx}px, calc(env(safe-area-inset-right) + ${extraPx}px))`;
+}
+
+function citronsImeBridgeH(): number {
+  if (typeof window === "undefined") return 0;
+  const h = (window as Window & { __citronsImeH?: number }).__citronsImeH;
+  return typeof h === "number" && h > 0 ? h : 0;
 }
 
 function refreshCitronsAndroidApp() {
@@ -1494,7 +1504,7 @@ function refreshCitronsAndroidApp() {
   }
 }
 
-const ANDROID_APK_URL = "app/citrons-android-1.0.4.apk";
+const ANDROID_APK_URL = "app/citrons-android-1.0.5.apk";
 
 function isFullscreenActive() {
   const doc = document as Document & { webkitFullscreenElement?: Element | null };

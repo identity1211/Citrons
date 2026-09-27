@@ -6,7 +6,7 @@
         <item name="colorPrimaryVariant">@color/felt_dark</item>
         <item name="colorSecondary">@color/gold</item>
         <item name="android:windowBackground">@color/felt</item>
-        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowFullscreen">false</item>
         <item name="android:windowContentOverlay">@null</item>
         <item name="android:windowNoTitle">true</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
