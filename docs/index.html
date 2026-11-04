@@ -9590,11 +9590,16 @@ function DonateButton({ compact }: { compact?: boolean }) {
   );
 }
 
+const LEADERBOARD_ACH_SHOWN = 3;
+
 function LeaderboardPanel() {
   const auth = useClerkAuth();
   const [rows, setRows] = useState<BoardRow[] | null>(null);
   const [fail, setFail] = useState("");
-  const [achInfo, setAchInfo] = useState<{ playerName: string; achievementId: string } | null>(null);
+  const [achInfo, setAchInfo] = useState<{ playerKey: string; playerName: string; achievementId: string } | null>(
+    null
+  );
+  const [achList, setAchList] = useState<{ playerKey: string; playerName: string; ids: string[] } | null>(null);
 
   useEffect(() => {
     let stop = false;
@@ -9644,13 +9649,24 @@ function LeaderboardPanel() {
     };
   }, []);
 
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [narrow, setNarrow] = useState(false);
+  useLayoutEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const measure = () => setNarrow(el.clientWidth < 440);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   const me = auth.user && auth.user.id ? String(auth.user.id) : "";
-  const col = {
-    rank: 28,
-    games: 52,
-    pts: 58,
-    avg: 64,
-  } as const;
+  const achShown = narrow ? 1 : LEADERBOARD_ACH_SHOWN;
+  const col = narrow
+    ? { rank: 22, games: 40, pts: 44, avg: 48 }
+    : { rank: 28, games: 52, pts: 58, avg: 64 };
   const head: CSSProperties = {
     color: "rgba(255,255,255,0.42)",
     fontSize: 11,
@@ -9661,9 +9677,18 @@ function LeaderboardPanel() {
   };
 
   const openAch = achInfo ? achievementMeta(achInfo.achievementId) : null;
+  const isAchOpen = (playerKey: string, id: string) =>
+    !!achInfo && achInfo.achievementId === id && achInfo.playerKey === playerKey;
+  const toggleAch = (playerKey: string, playerName: string, id: string) =>
+    setAchInfo((prev) =>
+      prev && prev.achievementId === id && prev.playerKey === playerKey
+        ? null
+        : { playerKey, playerName, achievementId: id }
+    );
 
   return (
     <div
+      ref={rootRef}
       style={{
         width: "100%",
         minHeight: 0,
@@ -9731,9 +9756,10 @@ function LeaderboardPanel() {
         ) : (
           rows.map((row) => {
             const mine = me && row.id === me;
+            const playerKey = row.id || `${row.rank}-${row.name}`;
             return (
               <div
-                key={row.id || `${row.rank}-${row.name}`}
+                key={playerKey}
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -9763,11 +9789,13 @@ function LeaderboardPanel() {
                     display: "flex",
                     alignItems: "center",
                     gap: 4,
+                    overflow: "hidden",
                   }}
                 >
                   <div
                     style={{
-                      minWidth: 0,
+                      minWidth: Math.min(40, row.name.length * 7),
+                      flexShrink: 1,
                       color: "#f5f0e6",
                       fontWeight: mine ? 700 : 600,
                       fontSize: 14,
@@ -9781,26 +9809,42 @@ function LeaderboardPanel() {
                   </div>
                   {row.achievements.length > 0 ? (
                     <div style={{ display: "flex", gap: 2, flexShrink: 0, alignItems: "center" }}>
-                      {row.achievements.map((id) => {
-                        const selected =
-                          !!achInfo && achInfo.achievementId === id && achInfo.playerName === row.name;
-                        return (
-                          <AchievementIcon
-                            key={id}
-                            id={id}
-                            size={18}
-                            title={achievementMeta(id).title}
-                            selected={selected}
-                            onClick={() =>
-                              setAchInfo((prev) =>
-                                prev && prev.achievementId === id && prev.playerName === row.name
-                                  ? null
-                                  : { playerName: row.name, achievementId: id }
-                              )
-                            }
-                          />
-                        );
-                      })}
+                      {row.achievements.slice(0, achShown).map((id) => (
+                        <AchievementIcon
+                          key={id}
+                          id={id}
+                          size={18}
+                          title={achievementMeta(id).title}
+                          selected={isAchOpen(playerKey, id)}
+                          onClick={() => toggleAch(playerKey, row.name, id)}
+                        />
+                      ))}
+                      {row.achievements.length > achShown ? (
+                        <button
+                          type="button"
+                          onClick={() => setAchList({ playerKey, playerName: row.name, ids: row.achievements })}
+                          aria-label={`All achievements of ${row.name}`}
+                          title={`${row.achievements.length} achievements`}
+                          style={{
+                            height: 18,
+                            minWidth: 22,
+                            padding: "0 4px",
+                            borderRadius: 5,
+                            border: "1.5px solid rgba(241,196,15,0.5)",
+                            background: "rgba(0,0,0,0.35)",
+                            color: "#f1c40f",
+                            fontSize: 10,
+                            fontWeight: 800,
+                            lineHeight: "15px",
+                            fontVariantNumeric: "tabular-nums",
+                            cursor: "pointer",
+                            flexShrink: 0,
+                            boxSizing: "border-box",
+                          }}
+                        >
+                          +{row.achievements.length - achShown}
+                        </button>
+                      ) : null}
                     </div>
                   ) : null}
                 </div>
@@ -9848,6 +9892,71 @@ function LeaderboardPanel() {
           })
         )}
       </div>
+      {achList ? (
+        <div
+          onClick={() => setAchList(null)}
+          style={{
+            position: "absolute",
+            inset: 0,
+            zIndex: 29,
+            background: "rgba(0,0,0,0.48)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 12,
+            boxSizing: "border-box",
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "min(320px, 100%)",
+              maxHeight: "100%",
+              overflowY: "auto",
+              padding: "14px 14px 12px",
+              borderRadius: 14,
+              border: "1.5px solid rgba(241,196,15,0.55)",
+              background: "linear-gradient(180deg, rgba(26,43,26,0.98), rgba(16,32,18,0.99))",
+              boxShadow: "0 12px 32px rgba(0,0,0,0.45)",
+              color: "#f5f0e6",
+              textAlign: "center",
+              boxSizing: "border-box",
+            }}
+          >
+            <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 2 }}>{achList.playerName}</div>
+            <div style={{ fontSize: 12, color: "rgba(241,196,15,0.9)", fontWeight: 700, marginBottom: 12 }}>
+              {achList.ids.length} achievements
+            </div>
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                justifyContent: "center",
+                gap: 8,
+                marginBottom: 12,
+              }}
+            >
+              {achList.ids.map((id) => (
+                <AchievementIcon
+                  key={id}
+                  id={id}
+                  size={40}
+                  title={achievementMeta(id).title}
+                  selected={isAchOpen(achList.playerKey, id)}
+                  onClick={() => toggleAch(achList.playerKey, achList.playerName, id)}
+                />
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => setAchList(null)}
+              style={{ ...PROFILE_GHOST, maxWidth: "100%", height: 36, fontSize: 13 }}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      ) : null}
       {openAch && achInfo ? (
         <div
           onClick={() => setAchInfo(null)}
