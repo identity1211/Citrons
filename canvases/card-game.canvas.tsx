@@ -562,11 +562,28 @@ function aiChoosePlay(
 
 // ─── Solo tutorial ───────────────────────────────────────────────────────────
 
-type TutWait = "dealing" | "continue" | "swap" | "ready" | "play" | "coach" | "take" | "free";
+type TutWait = "dealing" | "continue" | "swap" | "ready" | "play" | "coach" | "take" | "meddle" | "flip" | "done";
 type TutHint = "hand" | "faceUp" | "ready" | "play" | "take" | "none";
 type TutSpecial = "2" | "6" | "7" | "10" | "4";
 
+interface TutSeat {
+  hand: string[];
+  faceUp: (string | null)[];
+  faceDown: (string | null)[];
+}
+
+/** Fixed table state loaded when a chapter starts (or is skipped to). */
+interface TutScene {
+  you: TutSeat;
+  coach: TutSeat;
+  deck: string[];
+  discard: string[];
+  turn: 0 | 1;
+  burned?: number;
+}
+
 interface TutStep {
+  chapter: number;
   text: string;
   wait: TutWait;
   hint?: TutHint;
@@ -575,6 +592,7 @@ interface TutStep {
   faceRank?: string;
   coachRank?: string;
   special?: TutSpecial;
+  scene?: TutScene;
 }
 
 const SPECIALS_MEMO: { id: TutSpecial; label: string; text: string }[] = [
@@ -585,16 +603,24 @@ const SPECIALS_MEMO: { id: TutSpecial; label: string; text: string }[] = [
   { id: "4", label: "4×", text: "Four of a kind burns — 7s in between don't count. Off-turn, Meddle if you complete it with the pile. A 4× already in hand waits for your turn." },
 ];
 
+const TUTORIAL_CHAPTERS = ["Deal & swap", "Playing", "Special cards", "Taking the pile", "Meddle", "Endgame", "Winning"];
+
+const TUT_YOU_TABLE = { faceUp: ["A♥", "9♥", "K♣"], faceDown: ["5♣", "8♦", "J♥"] };
+const TUT_COACH_TABLE = { faceUp: ["4♣", "9♦", "K♠"], faceDown: ["5♦", "6♠", "J♠"] };
+
 const TUTORIAL_STEPS: TutStep[] = [
   {
-    text: "Each player gets 3 face-down cards, then 3 face-up on top, then 3 in hand.",
+    chapter: 0,
+    text: "Everyone gets 3 face-down cards, 3 face-up cards on top of them, and 3 cards in hand.",
     wait: "dealing",
   },
   {
-    text: "Before play, swap hand cards with your face-up cards. Strong cards on the table are played last.",
+    chapter: 0,
+    text: "Before the game you get 20 seconds to swap hand cards with your face-up cards. Face-up cards are played near the end, so park strong cards there.",
     wait: "continue",
   },
   {
+    chapter: 0,
     text: "Try it: tap the Ace in your hand, then the 3 on the table.",
     wait: "swap",
     hint: "hand",
@@ -602,104 +628,145 @@ const TUTORIAL_STEPS: TutStep[] = [
     faceRank: "3",
   },
   {
-    text: "Ace is waiting on the table. Tap Ready when the swap looks good.",
+    chapter: 0,
+    text: "The Ace now waits on the table for later. Tap Ready to start.",
     wait: "ready",
     hint: "ready",
   },
   {
-    text: "Ranks go 2 < 3 < \u2026 < K < A. Suits don't count. Empty pile \u2014 any card works. Tap your 4, then Play.",
+    chapter: 1,
+    text: "Cards go from weakest to strongest: 2 < 3 < … < K < A. Suits don't matter. On your turn, play a card equal to or higher than the top of the pile.",
+    wait: "continue",
+    scene: {
+      you: { hand: ["3♠", "4♦", "8♠"], ...TUT_YOU_TABLE },
+      coach: { hand: ["5♥", "7♣", "K♦"], ...TUT_COACH_TABLE },
+      deck: buildTutorialDeck().slice(18),
+      discard: [],
+      turn: 0,
+    },
+  },
+  {
+    chapter: 1,
+    text: "The pile is empty, so any card works. Tap your 4, then Play.",
     wait: "play",
     hint: "hand",
     rank: "4",
   },
   {
-    text: "Watch Coach play a 5. Your next card must be equal or higher \u2014 unless it is a special.",
+    chapter: 1,
+    text: "After playing you draw back up to 3 cards while the deck lasts. Now Coach plays a 5…",
     wait: "coach",
     coachRank: "5",
   },
   {
-    text: "Play your 8 \u2014 it beats the 5.",
+    chapter: 1,
+    text: "Your card must be a 5 or higher. Play your 8.",
     wait: "play",
     hint: "hand",
     rank: "8",
   },
   {
-    text: "Watch Coach play a King.",
+    chapter: 2,
+    text: "Some cards break the normal order. The Specials list on the right shows all of them.",
+    wait: "continue",
+    scene: {
+      you: { hand: ["2♣", "3♠", "6♥"], ...TUT_YOU_TABLE },
+      coach: { hand: ["7♣", "9♣", "K♦"], ...TUT_COACH_TABLE },
+      deck: buildTutorialDeck().slice(21),
+      discard: ["4♦", "5♥", "8♠"],
+      turn: 1,
+    },
+  },
+  {
+    chapter: 2,
+    text: "Coach plays a King.",
     wait: "coach",
     coachRank: "K",
   },
   {
-    text: "King is high. Your 3 loses. But 2 plays on anything and resets the pile. Play your 2.",
+    chapter: 2,
+    text: "Your 3 and 6 are lower than the King — but a 2 plays on anything and resets the pile. Play your 2.",
     wait: "play",
     hint: "hand",
     rank: "2",
     special: "2",
   },
   {
-    text: "Watch Coach play a 4. The 2 reset the pile, so any card was legal.",
+    chapter: 2,
+    text: "After a 2 any card is legal again. Coach plays a 4.",
     wait: "coach",
     coachRank: "4",
     special: "2",
   },
   {
-    text: "Play your 6 \u2014 after a 6, only 6 or lower (or a 7) can be played. Your 10 is illegal.",
+    chapter: 2,
+    text: "Play your 6. After a 6 only a 6 or lower — or a 7 — may follow. Even a 10 can't.",
     wait: "play",
     hint: "hand",
     rank: "6",
     special: "6",
   },
   {
-    text: "Watch Coach play a 7. It is transparent \u2014 the 6 underneath still counts.",
+    chapter: 2,
+    text: "Coach plays a 7. A 7 is transparent: the 6 under it still counts.",
     wait: "coach",
     coachRank: "7",
     special: "7",
   },
   {
-    text: "Your turn to play a 7. The pile still counts as 6, so a 10 still cannot burn it.",
+    chapter: 2,
+    text: "Play your 7 as well. The pile still counts as a 6.",
     wait: "play",
     hint: "hand",
     rank: "7",
     special: "7",
   },
   {
-    text: "Watch Coach play another 7. Two 7s in a row still leave the 6 in charge.",
+    chapter: 2,
+    text: "Coach adds another 7. The 6 is still in charge.",
     wait: "coach",
     coachRank: "7",
     special: "7",
   },
   {
-    text: "3 is 6 or lower, so it is legal. Play your 3.",
+    chapter: 2,
+    text: "A 3 is lower than 6, so it's legal. Play your 3.",
     wait: "play",
     hint: "hand",
     rank: "3",
     special: "6",
   },
   {
-    text: "Watch Coach play a 9.",
+    chapter: 2,
+    text: "Coach plays a 9.",
     wait: "coach",
     coachRank: "9",
   },
   {
-    text: "10 plays on anything except a 6 and burns the discard. You go again. Play your 10.",
+    chapter: 2,
+    text: "A 10 plays on anything except a 6 and burns the pile. After a burn you go again. Play your 10.",
     wait: "play",
     hint: "hand",
     rank: "10",
     special: "10",
   },
   {
-    text: "Pile burned. Empty pile \u2014 play your 4.",
+    chapter: 2,
+    text: "The pile is gone and it's still your turn. Play your 4.",
     wait: "play",
     hint: "hand",
     rank: "4",
   },
   {
-    text: "Watch Coach play a Queen.",
+    chapter: 2,
+    text: "Coach plays a Queen.",
     wait: "coach",
     coachRank: "Q",
     special: "4",
   },
   {
-    text: "Select all three Queens, then Play. Four of a kind burns, same as a 10 — 7s in between don't stop it.",
+    chapter: 2,
+    text: "You hold three Queens. Tap one — all cards of that rank get selected — then Play. Four of a kind burns the pile, just like a 10.",
     wait: "play",
     hint: "hand",
     rank: "Q",
@@ -707,28 +774,159 @@ const TUTORIAL_STEPS: TutStep[] = [
     special: "4",
   },
   {
-    text: "The pile burned, so you go again. Play your 5.",
+    chapter: 2,
+    text: "Burned again, so you go again. Play your 5.",
     wait: "play",
     hint: "hand",
     rank: "5",
   },
   {
-    text: "Watch Coach play an Ace.",
+    chapter: 3,
+    text: "Sometimes you can't beat the pile. Then you take the whole pile into your hand, and your turn ends.",
+    wait: "continue",
+    scene: {
+      you: { hand: ["8♥", "9♠", "J♣"], ...TUT_YOU_TABLE },
+      coach: { hand: ["3♦", "8♣", "A♠"], ...TUT_COACH_TABLE },
+      deck: buildTutorialDeck().slice(37),
+      discard: ["5♠"],
+      turn: 1,
+      burned: 18,
+    },
+  },
+  {
+    chapter: 3,
+    text: "Coach plays an Ace.",
     wait: "coach",
     coachRank: "A",
   },
   {
-    text: "Ace beats 8, J, and 5. You have no 2, 7, or 10. Take the discard.",
+    chapter: 3,
+    text: "Nothing in your hand beats an Ace, and you have no 2, 7 or 10. Tap Take discard.",
     wait: "take",
     hint: "take",
   },
   {
-    text: "Play from your hand first. When the deck and hand are empty, play face-up, then flip face-down. First to empty all cards takes 1st place.",
+    chapter: 3,
+    text: "The whole pile is in your hand now. You may also take it on purpose — sometimes that beats wasting a strong card.",
     wait: "continue",
   },
   {
-    text: "That's the rules. Keep playing against Coach, or leave with \u2190 Lobby.",
-    wait: "free",
+    chapter: 4,
+    text: "There is one way to play out of turn: Meddle.",
+    wait: "continue",
+    scene: {
+      you: { hand: ["5♥", "Q♥", "A♦"], ...TUT_YOU_TABLE },
+      coach: { hand: ["3♣", "8♠", "K♦"], ...TUT_COACH_TABLE },
+      deck: ["6♥", "2♣", "4♥", "10♠", "3♦", "7♦"],
+      discard: ["9♣", "Q♦", "Q♣", "Q♠"],
+      turn: 1,
+      burned: 18,
+    },
+  },
+  {
+    chapter: 4,
+    text: "It's Coach's turn, but three Queens are on the pile and you hold the fourth. Tap your Queen, then Meddle.",
+    wait: "meddle",
+    hint: "hand",
+    rank: "Q",
+    special: "4",
+  },
+  {
+    chapter: 4,
+    text: "You finished four of a kind, burned the pile and stole the turn. Meddle only works when your cards complete a four of a kind — a lone 10 can't meddle.",
+    wait: "continue",
+  },
+  {
+    chapter: 5,
+    text: "The deck is empty, so nobody draws anymore. Your last hand card is a 9 — and there's a 9 face-up on your table.",
+    wait: "continue",
+    scene: {
+      you: { hand: ["9♣"], faceUp: ["9♥", "K♠", "4♦"], faceDown: ["5♣", "8♦", "J♥"] },
+      coach: { hand: ["3♥", "J♠", "A♣"], faceUp: ["6♣", "2♦", "Q♦"], faceDown: ["7♠", "10♥", "5♦"] },
+      deck: [],
+      discard: ["5♠", "8♣"],
+      turn: 0,
+      burned: 30,
+    },
+  },
+  {
+    chapter: 5,
+    text: "With your last hand cards you may add matching face-up cards. Tap the 9 in your hand, then the 9 on the table, then Play.",
+    wait: "play",
+    hint: "hand",
+    rank: "9",
+    count: 2,
+    faceRank: "9",
+  },
+  {
+    chapter: 5,
+    text: "Coach plays a Jack.",
+    wait: "coach",
+    coachRank: "J",
+  },
+  {
+    chapter: 5,
+    text: "Your hand is empty, so you play from your face-up cards. Tap the King, then Play.",
+    wait: "play",
+    hint: "faceUp",
+    rank: "K",
+    faceRank: "K",
+  },
+  {
+    chapter: 5,
+    text: "Coach plays an Ace.",
+    wait: "coach",
+    coachRank: "A",
+  },
+  {
+    chapter: 5,
+    text: "Your 4 can't beat an Ace. Tap Take discard — with an empty hand you must also pick up a face-up card. Then tap the 4.",
+    wait: "take",
+    hint: "take",
+  },
+  {
+    chapter: 5,
+    text: "You took the pile together with the 4. Hand cards are played first again, then the table.",
+    wait: "continue",
+  },
+  {
+    chapter: 5,
+    text: "Last stage: face-down cards. Nobody knows what they are — not even you.",
+    wait: "continue",
+    scene: {
+      you: { hand: [], faceUp: [null, null, null], faceDown: ["8♦", "9♦", "J♥"] },
+      coach: { hand: ["4♠", "K♣"], faceUp: [null, null, null], faceDown: ["7♠", "10♥", "5♦"] },
+      deck: [],
+      discard: ["5♣"],
+      turn: 0,
+      burned: 40,
+    },
+  },
+  {
+    chapter: 5,
+    text: "Tap any face-down card. If it can be played, it goes onto the pile.",
+    wait: "flip",
+  },
+  {
+    chapter: 5,
+    text: "Coach plays a King.",
+    wait: "coach",
+    coachRank: "K",
+  },
+  {
+    chapter: 5,
+    text: "Flip another one. If it can't beat the King, you take the pile together with that card.",
+    wait: "flip",
+  },
+  {
+    chapter: 5,
+    text: "No luck — the flipped card went into your hand along with the pile.",
+    wait: "continue",
+  },
+  {
+    chapter: 6,
+    text: "First to get rid of every card takes 1st place. The rest play on until one player is left holding cards — that player loses. You're ready!",
+    wait: "done",
   },
 ];
 
@@ -791,14 +989,13 @@ function buildTutorialDeck(): string[] {
   return slots as string[];
 }
 
-function tutorialFreeIndex(): number {
-  const i = TUTORIAL_STEPS.findIndex((s) => s.wait === "free");
+function tutorialChapterStart(chapter: number): number {
+  const i = TUTORIAL_STEPS.findIndex((s) => s.chapter === chapter);
   return i >= 0 ? i : TUTORIAL_STEPS.length - 1;
 }
 
 function tutorialLockedAt(step: number): boolean {
-  const s = TUTORIAL_STEPS[step];
-  return !!s && s.wait !== "free";
+  return !!TUTORIAL_STEPS[step];
 }
 
 // ─── CSS keyframes ───────────────────────────────────────────────────────────
@@ -2650,12 +2847,14 @@ function MatchResultsOverlay({
   finishOrder,
   youSeat,
   onLobby,
+  onPlayAgain,
   achievementFeed = [],
 }: {
   players: PlayerState[];
   finishOrder: number[];
   youSeat: number | null;
   onLobby: () => void;
+  onPlayAgain?: () => void;
   achievementFeed?: { seatId: string; name: string; avatar: string; achievements: string[] }[];
 }) {
   const feed = (achievementFeed || []).filter((row) => row && Array.isArray(row.achievements) && row.achievements.length);
@@ -2855,21 +3054,36 @@ function MatchResultsOverlay({
                   }}
                 >
                   {row.name}
-                  {row.you ? " (you)" : ""}
+                  {row.you && row.name !== "You" ? " (you)" : ""}
                 </div>
               </div>
             ))}
           </div>
         )}
+        {onPlayAgain ? (
+          <button
+            type="button"
+            className="lobby-play-btn"
+            onClick={onPlayAgain}
+            style={{
+              ...LOBBY_GOLD_BTN,
+              width: "100%",
+              maxWidth: "none",
+              height: 44,
+            }}
+          >
+            Play again
+          </button>
+        ) : null}
         <button
           type="button"
-          className="lobby-play-btn"
+          className={onPlayAgain ? "lobby-ghost-btn" : "lobby-play-btn"}
           onClick={onLobby}
           style={{
-            ...LOBBY_GOLD_BTN,
+            ...(onPlayAgain ? LOBBY_GHOST_BTN : LOBBY_GOLD_BTN),
             width: "100%",
             maxWidth: "none",
-            height: 44,
+            height: onPlayAgain ? 40 : 44,
           }}
         >
           To lobby
@@ -5283,6 +5497,7 @@ function LobbySkinFly({
   trigger,
   panelWidth,
   align = "top",
+  above = false,
   children,
 }: {
   label: string;
@@ -5292,6 +5507,7 @@ function LobbySkinFly({
   trigger: ReactNode;
   panelWidth: number;
   align?: "top" | "bottom";
+  above?: boolean;
   children: ReactNode;
 }) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -5350,8 +5566,12 @@ function LobbySkinFly({
           aria-label={label}
           style={{
             position: "absolute",
-            right: "calc(100% + 8px)",
-            ...(align === "bottom" ? { bottom: 0, top: "auto" } : { top: 18, bottom: "auto" }),
+            ...(above
+              ? { left: "50%", bottom: "calc(100% + 8px)", transform: "translateX(-50%)" }
+              : {
+                  right: "calc(100% + 8px)",
+                  ...(align === "bottom" ? { bottom: 0, top: "auto" } : { top: 18, bottom: "auto" }),
+                }),
             width: panelWidth,
             maxHeight: "min(220px, 70vh)",
             overflowX: "hidden",
@@ -5380,6 +5600,7 @@ function LobbyStylePickers({
   onTable,
   onBack,
   footer,
+  row = false,
 }: {
   table: TableSkinId;
   back: CardBackId;
@@ -5387,6 +5608,7 @@ function LobbyStylePickers({
   onTable?: (id: TableSkinId) => void;
   onBack?: (id: CardBackId) => void;
   footer?: ReactNode;
+  row?: boolean;
 }) {
   const [openKind, setOpenKind] = useState<"table" | "back" | null>(null);
   const tableMeta = TABLE_SKINS.find((s) => s.id === table) || TABLE_SKINS[0];
@@ -5417,13 +5639,13 @@ function LobbyStylePickers({
     <div
       style={{
         flexShrink: 0,
-        width: 88,
-        height: "100%",
+        width: row ? "auto" : 88,
+        height: row ? "auto" : "100%",
         minHeight: 0,
         display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        gap: 10,
+        flexDirection: row ? "row" : "column",
+        alignItems: row ? "flex-end" : "center",
+        gap: row ? 22 : 10,
         paddingTop: 2,
         position: "relative",
         // Stay under the chat IME bar while the keyboard is open.
@@ -5436,6 +5658,7 @@ function LobbyStylePickers({
         open={openKind === "table"}
         onOpenChange={(v) => setOpenKind(v ? "table" : null)}
         disabled={disabled}
+        above={row}
         panelWidth={Math.min(260, 16 + TABLE_SKINS.length * 80)}
         trigger={
           <span
@@ -5495,6 +5718,7 @@ function LobbyStylePickers({
         onOpenChange={(v) => setOpenKind(v ? "back" : null)}
         disabled={disabled}
         align="bottom"
+        above={row}
         panelWidth={Math.min(280, 16 + CARD_BACKS.length * 52)}
         trigger={
           <span
@@ -6367,7 +6591,7 @@ function RulesScreen({ onBack }: { onBack: () => void }) {
             <b style={{ color: "#fff" }}>3 in hand</b>.
           </p>
           <p style={{ margin: "0 0 8px" }}>
-            20 seconds to swap hand cards with face-up cards. Then Ready. First turn is random.
+            20 seconds to swap hand cards with face-up cards. Then Ready. The winner of the last game starts; the very first game starts with a random player.
           </p>
         </RuleBlock>
         <RuleBlock title="Ranking">
@@ -6580,10 +6804,12 @@ function MatchMenu({
   onToLobby,
   onLeave,
   watch,
+  lobbyLabel = "To lobby",
 }: {
   onToLobby: () => void;
   onLeave: () => void;
   watch?: boolean;
+  lobbyLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -6642,7 +6868,7 @@ function MatchMenu({
                 justifyContent: "flex-start",
               }}
             >
-              To lobby
+              {lobbyLabel}
             </button>
             )}
             <button
@@ -7042,13 +7268,23 @@ function Lobby({
   onStart,
   onRules,
   onOnline,
+  soloSkin,
+  soloBack,
+  onSoloSkin,
+  onSoloBack,
+  initialView = "main",
 }: {
   onStart: (count: number, tutorial?: boolean) => void;
   onRules: () => void;
   onOnline: () => void;
+  soloSkin: TableSkinId;
+  soloBack: CardBackId;
+  onSoloSkin: (id: TableSkinId) => void;
+  onSoloBack: (id: CardBackId) => void;
+  initialView?: LobbyView;
 }) {
   const shortLand = useShortLandscape();
-  const [view, setView] = useState<LobbyView>("main");
+  const [view, setView] = useState<LobbyView>(initialView);
   const [selected, setSelected] = useState(4);
   const [popKey, setPopKey] = useState(0);
   const [iosInstall, setIosInstall] = useState(
@@ -7339,6 +7575,9 @@ function Lobby({
                   );
                 })}
               </div>
+              <div style={{ marginTop: shortLand ? 2 : 6 }}>
+                <LobbyStylePickers row table={soloSkin} back={soloBack} onTable={onSoloSkin} onBack={onSoloBack} />
+              </div>
               <div
                 style={{
                   marginTop: 8,
@@ -7543,23 +7782,28 @@ function TutorialBar({
   showSkip,
   onNext,
   onSkip,
+  chapter,
+  nextLabel = "Next",
 }: {
   text: string;
   showNext: boolean;
   showSkip: boolean;
   onNext: () => void;
   onSkip: () => void;
+  chapter?: number;
+  nextLabel?: string;
 }) {
+  const total = TUTORIAL_CHAPTERS.length;
+  const ch = chapter == null ? null : Math.max(0, Math.min(total - 1, chapter));
   return (
     <div
       style={{
         position: "absolute",
-        left: "50%",
-        top: "max(42px, calc(env(safe-area-inset-top) + 30px))",
-        transform: "translateX(-50%)",
+        left: FELT_INSET_LEFT,
+        top: "max(48px, calc(env(safe-area-inset-top) + 36px))",
         zIndex: 92,
-        width: "min(420px, calc(100% - 24px))",
-        minWidth: 160,
+        width: "min(360px, calc(34% - 44px))",
+        minWidth: 200,
         pointerEvents: "auto",
       }}
     >
@@ -7574,16 +7818,40 @@ function TutorialBar({
       >
         <div
           style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "baseline",
+            gap: 8,
             fontSize: 10,
             fontWeight: 800,
             letterSpacing: 1.4,
             textTransform: "uppercase",
             color: "#f1c40f",
-            marginBottom: 4,
+            marginBottom: ch == null ? 4 : 5,
           }}
         >
-          Tutorial
+          <span>{ch == null ? "Tutorial" : `Tutorial · ${TUTORIAL_CHAPTERS[ch]}`}</span>
+          {ch == null ? null : (
+            <span style={{ color: "rgba(255,255,255,0.5)", letterSpacing: 0.6 }}>
+              {ch + 1}/{total}
+            </span>
+          )}
         </div>
+        {ch == null ? null : (
+          <div style={{ display: "flex", gap: 3, marginBottom: 7 }}>
+            {TUTORIAL_CHAPTERS.map((title, i) => (
+              <span
+                key={title}
+                style={{
+                  flex: 1,
+                  height: 3,
+                  borderRadius: 2,
+                  background: i <= ch ? "#f1c40f" : "rgba(255,255,255,0.18)",
+                }}
+              />
+            ))}
+          </div>
+        )}
         <div style={{ color: "#f5f0e6", fontSize: 13, lineHeight: 1.4, fontWeight: 600 }}>
           {text}
         </div>
@@ -7610,7 +7878,7 @@ function TutorialBar({
                 padding: "4px 0",
               }}
             >
-              Skip
+              Skip chapter
             </button>
           ) : (
             <span />
@@ -7630,7 +7898,7 @@ function TutorialBar({
                 cursor: "pointer",
               }}
             >
-              Next
+              {nextLabel}
             </button>
           ) : (
             <span />
@@ -7642,7 +7910,7 @@ function TutorialBar({
 }
 
 function SpecialsMemo({ active, drop }: { active?: TutSpecial | null; drop?: boolean }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(() => typeof window === "undefined" || window.innerHeight >= 560);
   return (
     <div
       style={{
@@ -7790,6 +8058,7 @@ function Table({
   onKickVote,
   matchMenu,
   achievementFeed,
+  onPlayAgain,
 }: {
   players: PlayerState[];
   drawDeck: string[];
@@ -7841,12 +8110,16 @@ function Table({
   kickVote?: KickVoteInfo | null;
   onKickPlayer?: (playerId: string) => void;
   onKickVote?: (yes: boolean) => void;
-  matchMenu?: { onToLobby: () => void; onLeave: () => void };
+  matchMenu?: { onToLobby: () => void; onLeave: () => void; lobbyLabel?: string };
   achievementFeed?: { seatId: string; name: string; avatar: string; achievements: string[] }[];
+  onPlayAgain?: () => void;
   tutorial?: {
     text: string;
     showNext: boolean;
     showSkip: boolean;
+    chapter?: number;
+    nextLabel?: string;
+    allowMeddle?: boolean;
     hint: TutHint;
     rank?: string;
     faceRank?: string;
@@ -7875,7 +8148,7 @@ function Table({
   const humanZone = players[0] ? activePlayZone(players[0], drawDeck.length) : null;
   const canMeddleNow =
     !watching &&
-    !tutorial &&
+    (!tutorial || !!tutorial.allowMeddle) &&
     phase === "playing" &&
     currentPlayer !== 0 &&
     !tableBusy &&
@@ -7896,7 +8169,6 @@ function Table({
     pickupAwaitTable &&
     isHumanTurn &&
     !watching &&
-    !tutorial &&
     !!players[0] &&
     mustTakeTableWithPickup(players[0]);
   const [takeTableHint, setTakeTableHint] = useState(false);
@@ -8199,7 +8471,14 @@ function Table({
           </button>
         )}
       </div>
-        {matchMenu ? <MatchMenu onToLobby={matchMenu.onToLobby} onLeave={matchMenu.onLeave} watch={watching} /> : null}
+        {matchMenu ? (
+          <MatchMenu
+            onToLobby={matchMenu.onToLobby}
+            onLeave={matchMenu.onLeave}
+            watch={watching}
+            lobbyLabel={matchMenu.lobbyLabel}
+          />
+        ) : null}
       {fsNote ? (
         <div
           style={{
@@ -8668,6 +8947,8 @@ function Table({
           showSkip={tutorial.showSkip}
           onNext={tutorial.onNext}
           onSkip={tutorial.onSkip}
+          chapter={tutorial.chapter}
+          nextLabel={tutorial.nextLabel}
         />
       ) : null}
       {phase !== "lobby" && phase !== "rules" && showSpecials ? (
@@ -8679,6 +8960,7 @@ function Table({
           finishOrder={finishOrder}
           youSeat={watching ? null : 0}
           onLobby={toLobby}
+          onPlayAgain={watching ? undefined : onPlayAgain}
           achievementFeed={achievementFeed}
         />
       ) : null}
@@ -13372,9 +13654,40 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
 
 // ─── Root ────────────────────────────────────────────────────────────────────
 
+const SOLO_SKIN_KEY = "citrons-solo-skin";
+const SOLO_BACK_KEY = "citrons-solo-back";
+const SOLO_BOT_NAMES = ["Lime", "Yuzu", "Pomelo", "Kumquat"];
+
+function readSoloLook<T>(key: string, valid: (v: unknown) => v is T, fallback: T): T {
+  try {
+    const v = localStorage.getItem(key);
+    return valid(v) ? v : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function saveSoloLook(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* ignore */
+  }
+}
+
 export default function CardGame() {
   const [online, setOnline] = useState(() => !!pendingJoinCode());
   const [phase, setPhase] = useState<Phase>("lobby");
+  const [lobbyView, setLobbyView] = useState<LobbyView>("main");
+  const [soloSkin, setSoloSkin] = useState<TableSkinId>(() => readSoloLook(SOLO_SKIN_KEY, isTableSkin, "felt"));
+  const [soloBack, setSoloBack] = useState<CardBackId>(() => readSoloLook(SOLO_BACK_KEY, isCardBack, "classic"));
+  const soloAuth = useClerkAuth();
+  const soloIdentityRef = useRef<{ name: string; avatar: string }>({ name: "You", avatar: "" });
+  soloIdentityRef.current = soloAuth.user
+    ? { name: clerkNickname(soloAuth.user) || "You", avatar: String(soloAuth.user.imageUrl || "") }
+    : { name: "You", avatar: "" };
+  const soloCountRef = useRef(4);
+  const soloWinnerRef = useRef<number | null>(null);
   const [players, setPlayers] = useState<PlayerState[]>([]);
   const [drawDeck, setDrawDeck] = useState<string[]>([]);
   const [discard, setDiscard] = useState<string[]>([]);
@@ -13445,41 +13758,71 @@ export default function CardGame() {
     return !!(tutorialRef.current && tutorialLockedAt(tutStepRef.current));
   }
 
-  function advanceTutorial() {
-    const next = Math.min(tutStepRef.current + 1, TUTORIAL_STEPS.length - 1);
+  function applyTutScene(scene: TutScene) {
+    clearTimers();
+    clearAnimState();
+    playLockRef.current = false;
+    const base = playersRef.current;
+    const seat = (src: TutSeat, i: number): PlayerState => ({
+      ...(base[i] || { name: i === 0 ? soloIdentityRef.current.name : "Coach", ready: true }),
+      hand: sortHand(src.hand),
+      faceUp: [...src.faceUp],
+      faceDown: [...src.faceDown],
+      ready: true,
+    });
+    const pls = [seat(scene.you, 0), seat(scene.coach, 1)];
+    playersRef.current = pls;
+    drawDeckRef.current = [...scene.deck];
+    discardRef.current = [...scene.discard];
+    currentPlayerRef.current = scene.turn;
+    finishOrderRef.current = [];
+    phaseRef.current = "playing";
+    setPlayers(pls);
+    setDrawDeck([...scene.deck]);
+    setDiscard([...scene.discard]);
+    setCurrentPlayer(scene.turn);
+    setBurnCount(scene.burned ?? 0);
+    setDealing(false);
+    setLastStep(null);
+    setDealProgress({ faceDown: [3, 3], faceUp: [3, 3], hand: [3, 3] });
+    setSelection(null);
+    setPlaySelected(emptyPlay());
+    setPickupAwaitTable(false);
+    setFinishOrder([]);
+    setPhase("playing");
+    setStatusMsg(`Turn: ${pls[scene.turn].name}`);
+  }
+
+  function goToTutorialStep(next: number) {
     tutStepRef.current = next;
     setTutStep(next);
+    const scene = TUTORIAL_STEPS[next]?.scene;
+    if (scene) applyTutScene(scene);
+  }
+
+  function advanceTutorial() {
+    goToTutorialStep(Math.min(tutStepRef.current + 1, TUTORIAL_STEPS.length - 1));
   }
 
   function maybeAdvanceTutorialAfterPlay(playerIndex: number) {
     if (!tutorialRef.current) return;
     const step = TUTORIAL_STEPS[tutStepRef.current];
     if (!step) return;
-    if (playerIndex === 0 && step.wait === "play") advanceTutorial();
+    if (playerIndex === 0 && (step.wait === "play" || step.wait === "meddle" || step.wait === "flip")) advanceTutorial();
     if (playerIndex === 1 && step.wait === "coach") advanceTutorial();
   }
 
   function skipTutorial() {
     if (!tutorialRef.current) return;
-    const free = tutorialFreeIndex();
-    tutStepRef.current = free;
-    setTutStep(free);
-    const ph = phaseRef.current;
-    if (ph === "dealing" || ph === "swap") {
+    const cur = TUTORIAL_STEPS[tutStepRef.current];
+    const target = tutorialChapterStart((cur?.chapter ?? 0) + 1);
+    if (!TUTORIAL_STEPS[target]?.scene) {
       clearTimers();
+      clearAnimState();
       playLockRef.current = false;
-      setDealing(false);
-      setLastStep(null);
-      const n = Math.max(playersRef.current.length, 2);
-      setDealProgress({
-        faceDown: Array(n).fill(3),
-        faceUp: Array(n).fill(3),
-        hand: Array(n).fill(3),
-      });
-      const ready = playersRef.current.map((p) => ({ ...p, ready: true }));
-      setPlayers(ready);
-      beginPlaying(ready);
+      setPickupAwaitTable(false);
     }
+    goToTutorialStep(target);
   }
 
   useEffect(() => {
@@ -13516,6 +13859,7 @@ export default function CardGame() {
       const standing = resolveStandings(playerIndex, result.players, finishOrderRef.current);
       setFinishOrder(standing.order);
       finishOrderRef.current = standing.order;
+      if (standing.order.length > 0 && !tutorialRef.current) soloWinnerRef.current = standing.order[0];
       const msg = `${result.players[playerIndex].name} — ${placeLabel(standing.place, result.players.length)}!`;
       setStatusMsg(msg);
 
@@ -13741,7 +14085,12 @@ export default function CardGame() {
   }
 
   function beginPlaying(pls: PlayerState[]) {
-    const first = tutorialRef.current ? 0 : Math.floor(Math.random() * pls.length);
+    const winner = soloWinnerRef.current;
+    const first = tutorialRef.current
+      ? 0
+      : winner != null && winner >= 0 && winner < pls.length
+        ? winner
+        : Math.floor(Math.random() * pls.length);
     setCurrentPlayer(first);
     setDiscard([]);
     setBurnCount(0);
@@ -13883,11 +14232,7 @@ export default function CardGame() {
         const label = `${getRank(card)}${card.slice(-1)}`;
         const isHuman = playerIndex === 0;
         const taken = [...discardNext, card];
-        // Human sees the revealed card on the pile; opponents must not learn AI's failed card
-        discardNext = isHuman ? taken : [...discardNext];
-        message = isHuman
-          ? `You flipped ${label} — can't play, take the discard`
-          : `${pl.name} flipped a card — can't play, takes the discard`;
+        message = `${pl.name} flipped ${label} — can't play, ${pl.name === "You" ? "take" : "takes"} the discard`;
         playersNext[playerIndex] = pl;
         return {
           players: playersNext,
@@ -13991,7 +14336,7 @@ export default function CardGame() {
 
     playersNext[playerIndex] = pl;
     const won = playerFinished({ ...pl, hand: sortHand([...pl.hand, ...drawn]) });
-    if (won) message = `${pl.name} is out!`;
+    if (won) message = `${pl.name} ${pl.name === "You" ? "are" : "is"} out!`;
 
     return {
       players: playersNext,
@@ -14101,7 +14446,7 @@ export default function CardGame() {
     return {
       players: playersNext,
       discard: pile,
-      message: `${pls[playerIndex].name} takes the discard (${pile.length})${tableNote}`,
+      message: `${pls[playerIndex].name} ${pls[playerIndex].name === "You" ? "take" : "takes"} the discard (${pile.length})${tableNote}`,
       pickupCards,
     };
   }
@@ -14187,6 +14532,33 @@ export default function CardGame() {
     return () => clearTimeout(t);
   }, [phase, currentPlayer, finishOrder, discard, players, drawDeck, flyAnim, burnAnim, pickupAnim, revealCard, drawAnim, tutorial, tutStep]);
 
+  // Bots may meddle on your turn too (server allows any seat but the current one).
+  useEffect(() => {
+    if (phase !== "playing" || currentPlayer !== 0 || tutorial) return;
+    if (flyAnim || burnAnim || pickupAnim || revealCard || drawAnim) return;
+    const canAny = players.some((p, i) => i > 0 && !playerFinished(p) && !!aiChooseMeddle(p, discard));
+    if (!canAny) return;
+    const t = setTimeout(() => {
+      if (phaseRef.current !== "playing" || currentPlayerRef.current !== 0 || tutorialRef.current) return;
+      if (playLockRef.current) return;
+      const pls = playersRef.current;
+      const deck = drawDeckRef.current;
+      const pile = discardRef.current;
+      for (let i = 1; i < pls.length; i++) {
+        if (playerFinished(pls[i])) continue;
+        const steal = aiChooseMeddle(pls[i], pile);
+        if (!steal) continue;
+        const result = applyPlay(i, { hand: steal.hand, faceUp: [] }, pls, deck, pile);
+        if (!result.willBurn) continue;
+        setPickupAwaitTable(false);
+        result.message = `${pls[i].name} meddles — discard burned!`;
+        runPlayResult(i, result, true);
+        return;
+      }
+    }, 1600 + Math.random() * 1400);
+    return () => clearTimeout(t);
+  }, [phase, currentPlayer, discard, players, flyAnim, burnAnim, pickupAnim, revealCard, drawAnim, tutorial]);
+
   useEffect(() => {
     if (!tutorial) return;
     const step = TUTORIAL_STEPS[tutStep];
@@ -14241,9 +14613,11 @@ export default function CardGame() {
     };
   }, [tutorial, tutStep, phase, currentPlayer, flyAnim, burnAnim, pickupAnim, revealCard, drawAnim]);
 
-  const startGame = useCallback((playerCount: number, asTutorial = false) => {
+  const startGame = useCallback((playerCount: number, asTutorial = false, rematch = false) => {
     void enterFullscreen();
     clearTimers();
+    if (!rematch || asTutorial) soloWinnerRef.current = null;
+    soloCountRef.current = playerCount;
     tutorialRef.current = asTutorial;
     tutStepRef.current = asTutorial ? 0 : 0;
     setTutorial(asTutorial);
@@ -14252,8 +14626,11 @@ export default function CardGame() {
     const deck = asTutorial ? buildTutorialDeck() : shuffle(buildDeck());
     let cursor = 0;
 
+    const me = soloIdentityRef.current;
     const newPlayers: PlayerState[] = Array.from({ length: count }, (_, i) => ({
-      name: i === 0 ? "You" : asTutorial ? "Coach" : `Player ${i + 1}`,
+      id: i === 0 ? "solo-you" : `solo-bot-${i}`,
+      name: i === 0 ? me.name : asTutorial ? "Coach" : SOLO_BOT_NAMES[(i - 1) % SOLO_BOT_NAMES.length],
+      avatar: i === 0 ? me.avatar : "",
       faceDown: [],
       faceUp: [],
       hand: [],
@@ -14357,14 +14734,14 @@ export default function CardGame() {
     const pl = playersRef.current[0];
     if (activePlayZone(pl, drawDeckRef.current.length) !== "hand") return;
     const rank = getRank(pl.hand[index]);
+    const tutNow = tutStepNow();
     if (currentPlayerRef.current !== 0) {
-      if (tutLocked()) return;
+      if (tutLocked() && !(tutNow?.wait === "meddle" && rank === tutNow.rank)) return;
       if (!rankCanMeddle(pl.hand, discardRef.current, rank)) return;
     }
     if (opts?.allOfRank) {
-      if (tutLocked()) {
-        const step = tutStepNow();
-        if (step?.wait !== "play" || rank !== step.rank) return;
+      if (tutLocked() && currentPlayerRef.current === 0) {
+        if (tutNow?.wait !== "play" || rank !== tutNow.rank) return;
       }
       if (currentPlayerRef.current !== 0) {
         const hand = meddleIndicesForRank(pl.hand, discardRef.current, rank);
@@ -14374,8 +14751,8 @@ export default function CardGame() {
       setPlaySelected((prev) => selectAllOfHandRank(pl, prev, index));
       return;
     }
-    if (tutLocked()) {
-      const step = tutStepNow();
+    if (tutLocked() && currentPlayerRef.current === 0) {
+      const step = tutNow;
       if (step?.wait !== "play" || rank !== step.rank) return;
       if (step.count && step.count > 1) {
         const hand = pl.hand
@@ -14456,14 +14833,21 @@ export default function CardGame() {
     }
 
     if (phase !== "playing" || currentPlayerRef.current !== 0 || playLockRef.current) return;
-    if (tutLocked()) return;
+    const pl = playersRef.current[0];
+    if (tutLocked()) {
+      const step = tutStepNow();
+      const face = pl?.faceUp[index];
+      const ok = pickupAwaitTable
+        ? step?.wait === "take"
+        : step?.wait === "play" && !!face && getRank(face) === (step.faceRank ?? step.rank);
+      if (!ok) return;
+    }
 
     if (pickupAwaitTable) {
       executePickUp({ zone: "faceUp", index });
       return;
     }
 
-    const pl = playersRef.current[0];
     const zone = activePlayZone(pl, drawDeckRef.current.length);
     if (zone !== "faceUp" && zone !== "hand") return;
     const card = pl.faceUp[index];
@@ -14503,7 +14887,7 @@ export default function CardGame() {
 
   function handleSelectFaceDown(index: number) {
     if (phase !== "playing" || currentPlayerRef.current !== 0 || playLockRef.current) return;
-    if (tutLocked()) return;
+    if (tutLocked() && tutStepNow()?.wait !== "flip") return;
 
     if (pickupAwaitTable) {
       executePickUp({ zone: "faceDown", index });
@@ -14568,7 +14952,7 @@ export default function CardGame() {
 
   function handleMeddle() {
     if (phase !== "playing" || currentPlayerRef.current === 0 || playLockRef.current) return;
-    if (tutorialRef.current) return;
+    if (tutLocked() && tutStepNow()?.wait !== "meddle") return;
     if (selectionCount(playSelected) === 0) {
       setStatusMsg("Select cards that complete a 4-of-a-kind burn");
       return;
@@ -14599,12 +14983,7 @@ export default function CardGame() {
     if (phase !== "playing" || currentPlayerRef.current !== 0 || playLockRef.current) return;
     const pile = discardRef.current;
     const waiting = playersRef.current[0];
-    if (
-      waiting &&
-      mustTakeTableWithPickup(waiting) &&
-      (!tableTake || tableTake.zone !== "faceUp") &&
-      !tutLocked()
-    ) {
+    if (waiting && mustTakeTableWithPickup(waiting) && (!tableTake || tableTake.zone !== "faceUp")) {
       setStatusMsg("Tap a face-up card to take it with the discard");
       return;
     }
@@ -14659,6 +15038,8 @@ export default function CardGame() {
 
   function resetToLobby() {
     clearTimers();
+    soloWinnerRef.current = null;
+    setLobbyView("solo");
     setPhase("lobby");
     setPlayers([]);
     setDrawDeck([]);
@@ -14692,7 +15073,25 @@ export default function CardGame() {
   if (phase === "lobby") {
     return (
       <VisualFrame>
-        <Lobby onStart={startGame} onRules={() => setPhase("rules")} onOnline={() => setOnline(true)} />
+        <Lobby
+          onStart={startGame}
+          onRules={() => {
+            setLobbyView("solo");
+            setPhase("rules");
+          }}
+          onOnline={() => setOnline(true)}
+          soloSkin={soloSkin}
+          soloBack={soloBack}
+          onSoloSkin={(id) => {
+            setSoloSkin(id);
+            saveSoloLook(SOLO_SKIN_KEY, id);
+          }}
+          onSoloBack={(id) => {
+            setSoloBack(id);
+            saveSoloLook(SOLO_BACK_KEY, id);
+          }}
+          initialView={lobbyView}
+        />
       </VisualFrame>
     );
   }
@@ -14739,6 +15138,15 @@ export default function CardGame() {
       onPickUpOnly={handlePickUpOnly}
       onCancelPickupAwait={handleCancelPickupAwait}
       onReset={resetToLobby}
+      tableSkin={soloSkin}
+      cardBack={soloBack}
+      showSpecials={tutorial}
+      matchMenu={{
+        onToLobby: () => startGame(soloCountRef.current, tutorial),
+        onLeave: resetToLobby,
+        lobbyLabel: tutorial ? "Restart tutorial" : "New game",
+      }}
+      onPlayAgain={tutorial ? undefined : () => startGame(soloCountRef.current, false, true)}
       tutorial={
         tutorial && TUTORIAL_STEPS[tutStep]
           ? (() => {
@@ -14752,15 +15160,29 @@ export default function CardGame() {
               if (step.wait === "swap" && selection?.zone === "hand" && players[0]) {
                 if (getRank(players[0].hand[selection.index]) === step.rank) hint = "faceUp";
               }
+              if (
+                step.wait === "play" &&
+                step.faceRank &&
+                step.hint === "hand" &&
+                playSelected.hand.length > 0 &&
+                playSelected.faceUp.length === 0
+              ) {
+                hint = "faceUp";
+              }
+              if (step.wait === "meddle" && playSelected.hand.length > 0) hint = "play";
+              const done = step.wait === "done";
               return {
                 text: step.text,
-                showNext: step.wait === "continue",
-                showSkip: step.wait !== "free",
+                showNext: step.wait === "continue" || done,
+                showSkip: !done,
+                chapter: step.chapter,
+                nextLabel: done ? "Play a game" : "Next",
+                allowMeddle: step.wait === "meddle",
                 hint,
                 rank: step.rank,
                 faceRank: step.faceRank,
                 special: step.special,
-                onNext: advanceTutorial,
+                onNext: done ? () => startGame(2) : advanceTutorial,
                 onSkip: skipTutorial,
               };
             })()
