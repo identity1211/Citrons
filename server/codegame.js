@@ -39,7 +39,7 @@ function parseDifficulty(raw) {
 /** Public hint for one guess. Never includes the secret. */
 function feedback(difficulty, secret, guess) {
   const places = [0, 1, 2, 3].map((i) => secret[i] === guess[i]);
-  if (difficulty === "hard") return { kind: "hard", hit: places.some(Boolean) };
+  if (difficulty === "hard") return { kind: "hard", count: places.filter(Boolean).length };
   const pool = [];
   const extras = [];
   for (let i = 0; i < 4; i++) {

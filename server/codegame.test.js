@@ -46,13 +46,18 @@ assert(parseDigits("12a4") === null, "rejects letters");
 
 {
   const hint = hard("1234", "1243");
-  assert(hint.kind === "hard" && hint.hit === true, "hard hit");
-  assert(!("places" in hint) && !("extras" in hint), "hard hides which and where");
+  assert(hint.kind === "hard" && hint.count === 2, "hard counts both placed digits");
+  assert(!("places" in hint) && !("extras" in hint) && !("hit" in hint), "hard hides which and where");
+}
+
+{
+  const hint = hard("1111", "1112");
+  assert(hint.count === 3, "repeats still count each placed position");
 }
 
 {
   const hint = hard("1234", "5678");
-  assert(hint.hit === false, "hard miss");
+  assert(hint.count === 0, "hard miss");
 }
 
 function fakeWs() {
@@ -141,7 +146,7 @@ async function play() {
   const after = lastState(host);
   assert(after.yourTurn === false, "turn passes");
   const mine = after.guesses.find((g) => g.byYou);
-  assert(mine.feedback.kind === "hard" && mine.feedback.hit === true, "hard hint is only a hit");
+  assert(mine.feedback.kind === "hard" && mine.feedback.count === 3, "hard hint is the placed count");
   assert(!JSON.stringify(mine).includes("9999") || mine.guess === "1999", "guess is the typed code");
   assert(!JSON.stringify(after).includes('"9999"'), "opponent secret still hidden");
 

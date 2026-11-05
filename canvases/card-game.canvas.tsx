@@ -13731,7 +13731,7 @@ type CodeDifficulty = "easy" | "hard";
 
 type CodeFeedback =
   | { kind: "easy"; places: boolean[]; extras: string[] }
-  | { kind: "hard"; hit: boolean };
+  | { kind: "hard"; count: number };
 
 type CodeRoomView = {
   code: string;
@@ -13805,7 +13805,7 @@ function clearCodeSession() {
 
 function codeDifficultyBlurb(difficulty: CodeDifficulty): string {
   if (difficulty === "hard") {
-    return "You only learn whether some digit is in the right place. Not which digit, and not where.";
+    return "You learn how many digits are in the right place. Not which digit, and not where.";
   }
   return "In place marks a digit on the right position. Other digits that appear in the code are listed, without saying where.";
 }
@@ -13913,6 +13913,13 @@ function CodePad({
   );
 }
 
+function hardMatchLabel(count: number): string {
+  const n = Math.max(0, Math.floor(Number(count) || 0));
+  if (n === 0) return "No digit is in the right place";
+  if (n === 1) return "1 digit is in the right place";
+  return `${n} digits are in the right place`;
+}
+
 function CodeGuessRow({ guess, feedback, solved }: { guess: string; feedback: CodeFeedback; solved?: boolean }) {
   if (solved) {
     return (
@@ -13926,8 +13933,8 @@ function CodeGuessRow({ guess, feedback, solved }: { guess: string; feedback: Co
     return (
       <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 8, alignItems: "center", padding: "6px 0" }}>
         <span style={{ letterSpacing: 3, fontWeight: 800, color: "#f5f0e6" }}>{guess.split("").join(" ")}</span>
-        <span style={{ fontSize: 13, lineHeight: 1.3, textAlign: "right", color: feedback.hit ? "#f1c40f" : "rgba(255,255,255,0.72)" }}>
-          {feedback.hit ? "A digit is in the right place" : "No digit is in the right place"}
+        <span style={{ fontSize: 13, lineHeight: 1.3, textAlign: "right", color: feedback.count > 0 ? "#f1c40f" : "rgba(255,255,255,0.72)" }}>
+          {hardMatchLabel(feedback.count)}
         </span>
       </div>
     );
