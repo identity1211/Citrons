@@ -13810,21 +13810,133 @@ function codeDifficultyBlurb(difficulty: CodeDifficulty): string {
   return "In place marks a digit on the right position. Other digits that appear in the code are listed, without saying where.";
 }
 
+function hardMatchLabel(count: number): string {
+  const n = Math.max(0, Math.floor(Number(count) || 0));
+  if (n === 0) return "No digit is in the right place";
+  if (n === 1) return "1 digit is in the right place";
+  return `${n} digits are in the right place`;
+}
+
+function CodeTile({ digit, gold, compact }: { digit?: string; gold?: boolean; compact?: boolean }) {
+  const size = compact ? 36 : 46;
+  return (
+    <div
+      style={{
+        width: size,
+        height: compact ? 42 : 52,
+        borderRadius: 8,
+        boxSizing: "border-box",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontWeight: 800,
+        fontSize: compact ? 18 : 22,
+        color: gold ? "#1a2e1a" : digit ? "#f5f0e6" : "transparent",
+        background: gold ? "#f1c40f" : "rgba(0,0,0,0.28)",
+        border: gold ? "1.5px solid #f1c40f" : "1.5px solid rgba(255,255,255,0.22)",
+      }}
+    >
+      {digit || ""}
+    </div>
+  );
+}
+
+function CodeFeedbackMark({ feedback, solved }: { feedback: CodeFeedback; solved?: boolean }) {
+  if (solved) {
+    return <span style={{ color: "#f1c40f", fontWeight: 800, fontSize: 11, letterSpacing: 0.8 }}>CRACKED</span>;
+  }
+  if (feedback.kind === "hard") {
+    const n = Math.max(0, Math.min(4, Math.floor(Number(feedback.count) || 0)));
+    return (
+      <span aria-label={hardMatchLabel(n)} style={{ display: "inline-flex", gap: 5, alignItems: "center" }}>
+        {[0, 1, 2, 3].map((i) => (
+          <span
+            key={i}
+            style={{
+              width: 10,
+              height: 10,
+              borderRadius: 5,
+              boxSizing: "border-box",
+              background: i < n ? "#f1c40f" : "transparent",
+              border: "1.5px solid #f1c40f",
+            }}
+          />
+        ))}
+      </span>
+    );
+  }
+  if (!feedback.places.some(Boolean) && feedback.extras.length === 0) {
+    return <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 12 }}>No match</span>;
+  }
+  return (
+    <span style={{ display: "inline-flex", gap: 4, flexWrap: "wrap", justifyContent: "flex-end", maxWidth: 112 }}>
+      {feedback.extras.map((digit, i) => (
+        <span
+          key={`${digit}-${i}`}
+          style={{
+            minWidth: 20,
+            height: 22,
+            padding: "0 4px",
+            borderRadius: 6,
+            border: "1.5px solid rgba(241,196,15,0.9)",
+            color: "#f1c40f",
+            fontSize: 13,
+            fontWeight: 800,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          {digit}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function CodeGuessRow({
+  guess,
+  feedback,
+  solved,
+  compact,
+}: {
+  guess: string;
+  feedback: CodeFeedback;
+  solved?: boolean;
+  compact?: boolean;
+}) {
+  const places = feedback.kind === "easy" ? feedback.places : [];
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: compact ? 10 : 14, padding: "4px 0" }}>
+      <div style={{ display: "flex", gap: compact ? 4 : 6 }}>
+        {guess.split("").map((digit, i) => (
+          <CodeTile key={i} digit={digit} gold={!!solved || !!places[i]} compact={compact} />
+        ))}
+      </div>
+      <CodeFeedbackMark feedback={feedback} solved={solved} />
+    </div>
+  );
+}
+
 function CodePad({
   value,
   onChange,
   onSubmit,
   disabled,
   submitLabel,
+  compact,
 }: {
   value: string;
   onChange: (next: string) => void;
   onSubmit: () => void;
   disabled?: boolean;
   submitLabel: string;
+  compact?: boolean;
 }) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
       if (disabled) return;
       if (e.key >= "0" && e.key <= "9") {
         onChange((value + e.key).slice(0, 4));
@@ -13843,33 +13955,64 @@ function CodePad({
     onChange(value + digit);
   }
 
+  const keyH = compact ? 34 : 42;
+  if (compact) {
+    const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "⌫"];
+    return (
+      <div style={{ width: "100%", display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+          {[0, 1, 2, 3].map((i) => (
+            <CodeTile key={i} digit={value[i]} compact />
+          ))}
+        </div>
+        <div style={{ flex: 1, minWidth: 0, display: "grid", gridTemplateColumns: "repeat(11, minmax(0, 1fr))", gap: 4 }}>
+          {keys.map((key) => (
+            <button
+              key={key}
+              type="button"
+              disabled={disabled}
+              onClick={() => {
+                if (key === "⌫") onChange(value.slice(0, -1));
+                else push(key);
+              }}
+              style={{
+                height: 36,
+                borderRadius: 8,
+                border: "1px solid rgba(255,255,255,0.16)",
+                background: "rgba(0,0,0,0.35)",
+                color: "#f5f0e6",
+                fontSize: 15,
+                fontWeight: 700,
+                padding: 0,
+                cursor: disabled ? "default" : "pointer",
+              }}
+            >
+              {key}
+            </button>
+          ))}
+        </div>
+        <button
+          type="button"
+          className="lobby-play-btn"
+          disabled={disabled || value.length !== 4}
+          onClick={onSubmit}
+          style={{ ...LOBBY_GOLD_BTN, width: 84, maxWidth: "none", height: 36, flexShrink: 0, opacity: value.length === 4 && !disabled ? 1 : 0.45 }}
+        >
+          {submitLabel}
+        </button>
+      </div>
+    );
+  }
   return (
-    <div style={{ width: "100%", maxWidth: 280, display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
-      <div style={{ display: "flex", gap: 8 }}>
+    <div style={{ width: "100%", maxWidth: 340, margin: "0 auto", display: "flex", flexDirection: "column", alignItems: "center", gap: compact ? 6 : 8 }}>
+      <div style={{ display: "flex", gap: compact ? 4 : 6 }}>
         {[0, 1, 2, 3].map((i) => (
-          <div
-            key={i}
-            style={{
-              width: 48,
-              height: 56,
-              borderRadius: 10,
-              border: "1.5px solid rgba(255,255,255,0.28)",
-              background: "rgba(0,0,0,0.28)",
-              color: "#f5f0e6",
-              fontSize: 24,
-              fontWeight: 800,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            {value[i] || ""}
-          </div>
+          <CodeTile key={i} digit={value[i]} compact={compact} />
         ))}
       </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8, width: "100%" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: compact ? 4 : 6, width: "100%" }}>
         {[["1", "2", "3"], ["4", "5", "6"], ["7", "8", "9"], ["", "0", "⌫"]].map((row) => (
-          <div key={row.join("-")} style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+          <div key={row.join("-")} style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: compact ? 4 : 6 }}>
             {row.map((key) =>
               key ? (
                 <button
@@ -13881,12 +14024,12 @@ function CodePad({
                     else push(key);
                   }}
                   style={{
-                    height: 48,
+                    height: keyH,
                     borderRadius: 10,
-                    border: "1px solid rgba(255,255,255,0.18)",
-                    background: "rgba(0,0,0,0.32)",
+                    border: "1px solid rgba(255,255,255,0.16)",
+                    background: "rgba(0,0,0,0.35)",
                     color: "#f5f0e6",
-                    fontSize: 20,
+                    fontSize: compact ? 16 : 20,
                     fontWeight: 700,
                     cursor: disabled ? "default" : "pointer",
                   }}
@@ -13905,58 +14048,10 @@ function CodePad({
         className="lobby-play-btn"
         disabled={disabled || value.length !== 4}
         onClick={onSubmit}
-        style={{ ...LOBBY_GOLD_BTN, maxWidth: "none", opacity: value.length === 4 && !disabled ? 1 : 0.45 }}
+        style={{ ...LOBBY_GOLD_BTN, maxWidth: "none", height: compact ? 34 : 40, opacity: value.length === 4 && !disabled ? 1 : 0.45 }}
       >
         {submitLabel}
       </button>
-    </div>
-  );
-}
-
-function hardMatchLabel(count: number): string {
-  const n = Math.max(0, Math.floor(Number(count) || 0));
-  if (n === 0) return "No digit is in the right place";
-  if (n === 1) return "1 digit is in the right place";
-  return `${n} digits are in the right place`;
-}
-
-function CodeGuessRow({ guess, feedback, solved }: { guess: string; feedback: CodeFeedback; solved?: boolean }) {
-  if (solved) {
-    return (
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", padding: "6px 0" }}>
-        <span style={{ letterSpacing: 3, fontWeight: 800, color: "#f5f0e6" }}>{guess.split("").join(" ")}</span>
-        <span style={{ fontSize: 13, fontWeight: 800, color: "#f1c40f" }}>Cracked</span>
-      </div>
-    );
-  }
-  if (feedback.kind === "hard") {
-    return (
-      <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 8, alignItems: "center", padding: "6px 0" }}>
-        <span style={{ letterSpacing: 3, fontWeight: 800, color: "#f5f0e6" }}>{guess.split("").join(" ")}</span>
-        <span style={{ fontSize: 13, lineHeight: 1.3, textAlign: "right", color: feedback.count > 0 ? "#f1c40f" : "rgba(255,255,255,0.72)" }}>
-          {hardMatchLabel(feedback.count)}
-        </span>
-      </div>
-    );
-  }
-  const allPlaced = feedback.places.every(Boolean);
-  return (
-    <div style={{ padding: "6px 0" }}>
-      <div style={{ display: "flex", gap: 8 }}>
-        {guess.split("").map((digit, i) => (
-          <div key={i} style={{ width: 42, textAlign: "center" }}>
-            <div style={{ fontWeight: 800, fontSize: 18, color: "#f5f0e6" }}>{digit}</div>
-            <div style={{ minHeight: 14, fontSize: 9, fontWeight: 800, letterSpacing: 0.4, color: "#f1c40f" }}>
-              {feedback.places[i] ? "IN PLACE" : ""}
-            </div>
-          </div>
-        ))}
-      </div>
-      {allPlaced ? null : (
-        <div style={{ fontSize: 12, color: "rgba(255,255,255,0.72)", marginTop: 2 }}>
-          {feedback.extras.length ? `Also in the code: ${feedback.extras.join(", ")}` : "No other matches"}
-        </div>
-      )}
     </div>
   );
 }
@@ -13974,6 +14069,7 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
   const [joinCode, setJoinCode] = useState("");
   const [copied, setCopied] = useState(false);
   const [dropped, setDropped] = useState(false);
+  const [yoursOpen, setYoursOpen] = useState(false);
   const [session, setSession] = useState<CodeSession | null>(() => readCodeSession());
   const wsRef = useRef<WebSocket | null>(null);
   const pingRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -13982,6 +14078,7 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
   const reconnectsRef = useRef(0);
   const nameRef = useRef("");
   const leaveSentRef = useRef(false);
+  const boardRef = useRef<HTMLDivElement | null>(null);
   screenRef.current = screen;
   sessionRef.current = session;
 
@@ -14161,6 +14258,15 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
     setEntry("");
   }, [view?.phase]);
 
+  useEffect(() => {
+    if (view?.phase === "finished") setYoursOpen(true);
+  }, [view?.phase]);
+
+  useEffect(() => {
+    const el = boardRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [view?.guesses.length, view?.phase]);
+
   async function createRoom() {
     if (!auth.user) {
       setError("Sign in with Google first");
@@ -14279,70 +14385,49 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
 
   if (screen === "room" && view) {
     const bothHere = view.players.length === 2 && view.players.every((p) => p.connected);
-    return shell(
-      <>
-        <div style={{ fontSize: 13, letterSpacing: 1.4, fontWeight: 800, color: "rgba(255,255,255,0.55)" }}>
-          SECRET CODE · {view.difficulty === "hard" ? "HARD" : "EASY"}
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div style={{ fontSize: 28, fontWeight: 800, letterSpacing: 4, color: "#f5f0e6" }}>{view.code}</div>
-          <button
-            type="button"
-            onClick={() => {
-              const text = view.code;
-              const done = () => {
-                setCopied(true);
-                window.setTimeout(() => setCopied(false), 1200);
-              };
-              if (navigator.clipboard && navigator.clipboard.writeText) {
-                navigator.clipboard.writeText(text).then(done).catch(done);
-              } else done();
-            }}
-            style={{ ...LOBBY_GHOST_BTN, width: "auto", height: 32, padding: "0 10px", fontSize: 12 }}
-          >
-            {copied ? "Copied" : "Copy"}
-          </button>
-        </div>
-        <div style={{ fontSize: 13, lineHeight: 1.4, color: "rgba(255,255,255,0.72)", maxWidth: 340 }}>
-          {codeDifficultyBlurb(view.difficulty)}
-        </div>
-        {view.phase === "waiting" && view.host && view.players.length < 2 ? (
-          <div style={{ display: "flex", gap: 8 }}>
-            {(["easy", "hard"] as CodeDifficulty[]).map((id) => (
-              <button
-                key={id}
-                type="button"
-                onClick={() => send({ type: "codeDifficulty", difficulty: id })}
-                style={{
-                  ...LOBBY_GHOST_BTN,
-                  width: 110,
-                  height: 36,
-                  background: view.difficulty === id ? "#f1c40f" : "transparent",
-                  color: view.difficulty === id ? "#1a2e1a" : "#f5f0e6",
-                }}
-              >
-                {id === "hard" ? "Hard" : "Easy"}
-              </button>
-            ))}
-          </div>
-        ) : null}
-        <div style={{ display: "flex", gap: 22, justifyContent: "center" }}>
-          {view.players.map((p) => (
-            <div key={p.id} style={{ opacity: p.connected ? 1 : 0.45, minWidth: 72 }}>
-              <AvatarBubble src={p.avatar} name={p.name} size={40} />
-              <div style={{ marginTop: 4, fontSize: 13, fontWeight: 700, color: "#f5f0e6" }}>{p.name}</div>
-              {view.phase === "secrets" ? (
-                <div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)" }}>{p.locked ? "Code set" : "Choosing…"}</div>
-              ) : null}
-            </div>
-          ))}
-        </div>
-        <div style={{ fontSize: 15, fontWeight: 700, color: "#f1c40f", minHeight: 22 }}>{statusLine}</div>
-        {view.yourSecret ? (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", justifyContent: "center", fontSize: 13, color: "rgba(255,255,255,0.8)" }}>
-            <span>
-              Your code <span style={{ letterSpacing: 3, fontWeight: 800, color: "#f5f0e6" }}>{view.yourSecret.split("").join(" ")}</span>
-            </span>
+    const split = shortLand && (view.phase === "playing" || view.phase === "finished");
+    const showHint = view.phase === "playing" && yourGuesses.length === 0;
+    const turnLine =
+      opponent && !opponent.connected
+        ? "Opponent reconnecting…"
+        : `${opponent ? opponent.name : "Opponent"} is guessing`;
+    const copyCode = () => {
+      const text = view.code;
+      const done = () => {
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 1200);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done).catch(done);
+      else done();
+    };
+    const yourPanel = view.yourSecret ? (
+      <div style={{ width: "100%", borderTop: split ? "none" : "1px solid rgba(255,255,255,0.1)", background: "rgba(0,0,0,0.16)" }}>
+        <button
+          type="button"
+          onClick={() => {
+            if (!split) setYoursOpen((open) => !open);
+          }}
+          style={{
+            width: "100%",
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "8px 12px",
+            border: "none",
+            background: "transparent",
+            color: "#f5f0e6",
+            cursor: split ? "default" : "pointer",
+            textAlign: "left",
+          }}
+        >
+          <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.8, color: "rgba(255,255,255,0.55)" }}>YOUR CODE</span>
+          <span style={{ letterSpacing: 3, fontWeight: 800 }}>{view.yourSecret.split("").join(" ")}</span>
+          <span style={{ marginLeft: "auto", fontSize: 12, color: "rgba(255,255,255,0.6)" }}>
+            {theirGuesses.length ? theirGuesses.length : ""} {split || yoursOpen ? "▾" : "▸"}
+          </span>
+        </button>
+        {split || yoursOpen ? (
+          <div style={{ padding: "0 12px 8px", maxHeight: split ? undefined : 168, overflowY: "auto" }}>
             {view.phase === "secrets" ? (
               <button
                 type="button"
@@ -14350,63 +14435,70 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
                   setEntry(view.yourSecret || "");
                   send({ type: "codeSecret", clear: true });
                 }}
-                style={{ ...LOBBY_GHOST_BTN, width: "auto", height: 28, padding: "0 8px", fontSize: 12 }}
+                style={{ ...LOBBY_GHOST_BTN, width: "auto", height: 28, padding: "0 10px", fontSize: 12, marginBottom: 6 }}
               >
                 Change
               </button>
             ) : null}
+            {theirGuesses.length === 0 ? (
+              <div style={{ fontSize: 12, color: "rgba(255,255,255,0.5)", textAlign: "left" }}>No guesses yet</div>
+            ) : (
+              theirGuesses.map((row, i) => (
+                <CodeGuessRow
+                  key={i}
+                  guess={row.guess}
+                  feedback={row.feedback}
+                  compact={shortLand}
+                  solved={view.phase === "finished" && view.winner === "them" && i === theirGuesses.length - 1}
+                />
+              ))
+            )}
+          </div>
+        ) : null}
+      </div>
+    ) : null;
+    const history = (
+      <div ref={boardRef} style={{ flex: 1, minHeight: 0, overflowY: "auto", width: "100%", padding: "2px 12px 8px", boxSizing: "border-box" }}>
+        <div style={{ minHeight: "100%", display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
+        {view.phase === "playing" || view.phase === "finished" ? (
+          <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 1.1, color: "rgba(255,255,255,0.45)", textAlign: "left", paddingBottom: 4 }}>
+            THEIR CODE
           </div>
         ) : null}
         {view.phase === "finished" && view.opponentSecret ? (
-          <div style={{ fontSize: 13, color: "rgba(255,255,255,0.8)" }}>
-            Their code <span style={{ letterSpacing: 3, fontWeight: 800, color: "#f5f0e6" }}>{view.opponentSecret.split("").join(" ")}</span>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "2px 0 8px" }}>
+            <div style={{ display: "flex", gap: shortLand ? 4 : 6 }}>
+              {view.opponentSecret.split("").map((digit, i) => (
+                <CodeTile key={i} digit={digit} gold compact={shortLand} />
+              ))}
+            </div>
           </div>
         ) : null}
-        {yourGuesses.length ? (
-          <div style={{ width: "100%", textAlign: "left" }}>
-            <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 1.2, color: "rgba(255,255,255,0.55)" }}>YOUR GUESSES</div>
-            {yourGuesses.map((row, i) => (
-              <CodeGuessRow
-                key={i}
-                guess={row.guess}
-                feedback={row.feedback}
-                solved={view.phase === "finished" && view.winner === "you" && i === yourGuesses.length - 1}
-              />
-            ))}
+        {showHint ? (
+          <div style={{ fontSize: 12, lineHeight: 1.35, color: "rgba(255,255,255,0.62)", textAlign: "left", padding: "2px 0 8px" }}>
+            {view.difficulty === "hard"
+              ? "Dots show how many digits are in place."
+              : "Gold tiles are in place. Outlined digits are in the code, somewhere else."}
           </div>
         ) : null}
-        {theirGuesses.length ? (
-          <div style={{ width: "100%", textAlign: "left" }}>
-            <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 1.2, color: "rgba(255,255,255,0.55)" }}>THEIR GUESSES</div>
-            {theirGuesses.map((row, i) => (
-              <CodeGuessRow
-                key={i}
-                guess={row.guess}
-                feedback={row.feedback}
-                solved={view.phase === "finished" && view.winner === "them" && i === theirGuesses.length - 1}
-              />
-            ))}
-          </div>
-        ) : null}
-        {showPad ? (
-          <CodePad
-            value={entry}
-            onChange={setEntry}
-            onSubmit={submitEntry}
-            submitLabel={view.phase === "secrets" ? "Set code" : "Guess"}
+        {yourGuesses.map((row, i) => (
+          <CodeGuessRow
+            key={i}
+            guess={row.guess}
+            feedback={row.feedback}
+            compact={shortLand}
+            solved={view.phase === "finished" && view.winner === "you" && i === yourGuesses.length - 1}
           />
-        ) : null}
-        {view.phase === "finished" && bothHere ? (
-          <button
-            type="button"
-            className="lobby-play-btn"
-            onClick={() => send({ type: "codeAgain" })}
-            style={LOBBY_GOLD_BTN}
-          >
-            Play again
-          </button>
-        ) : null}
-        {dropped ? (
+        ))}
+        </div>
+      </div>
+    );
+    const dock = (
+      <div style={{ flexShrink: 0, width: "100%", padding: shortLand ? "6px 10px 4px" : "8px 12px 6px", boxSizing: "border-box", borderTop: "1px solid rgba(255,255,255,0.08)", background: "rgba(0,0,0,0.22)" }}>
+        {error ? <div style={{ color: "#f5b7b1", fontSize: 13, lineHeight: 1.4, textAlign: "center", marginBottom: 6 }}>{error}</div> : null}
+        {showPad ? (
+          <CodePad value={entry} onChange={setEntry} onSubmit={submitEntry} submitLabel={view.phase === "secrets" ? "Set code" : "Guess"} compact={shortLand} />
+        ) : dropped ? (
           <button
             type="button"
             className="lobby-play-btn"
@@ -14416,15 +14508,117 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
               reconnectsRef.current = 0;
               connect("rejoin");
             }}
-            style={LOBBY_GOLD_BTN}
+            style={{ ...LOBBY_GOLD_BTN, maxWidth: 340 }}
           >
             Rejoin
           </button>
-        ) : null}
-        {error ? <div style={{ color: "#f5b7b1", fontSize: 13, lineHeight: 1.4 }}>{error}</div> : null}
-      </>
+        ) : view.phase === "finished" && bothHere ? (
+          <button type="button" className="lobby-play-btn" onClick={() => send({ type: "codeAgain" })} style={{ ...LOBBY_GOLD_BTN, maxWidth: 340 }}>
+            Play again
+          </button>
+        ) : (
+          <div style={{ minHeight: 28, display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.75)", fontSize: 14, fontWeight: 700 }}>
+            {view.phase === "playing" ? turnLine : statusLine}
+          </div>
+        )}
+      </div>
+    );
+    return (
+      <FeltShell
+        center={false}
+        overlay={
+          <>
+            <WindowButton />
+            <ProfileButton />
+          </>
+        }
+        style={{
+          padding: `${safeTop(78, 64)} 0 ${safeBottom(16, 12)}`,
+          justifyContent: "flex-start",
+          alignItems: "stretch",
+          overflow: "hidden",
+        }}
+      >
+        <div style={{ flex: 1, minHeight: 0, width: "100%", maxWidth: split ? "none" : 440, margin: "0 auto", display: "flex", flexDirection: "column" }}>
+          <div style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 8, padding: "0 12px 8px" }}>
+            <button type="button" onClick={leaveRoom} aria-label="More games" style={{ ...LOBBY_GHOST_BTN, width: 36, height: 32, padding: 0, fontSize: 16 }}>
+              ←
+            </button>
+            {opponent ? <AvatarBubble src={opponent.avatar} name={opponent.name} size={28} /> : null}
+            <div style={{ flex: 1, minWidth: 0, textAlign: "left", fontSize: 14, fontWeight: 800, color: "#f1c40f", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {statusLine}
+            </div>
+            <button type="button" onClick={copyCode} style={{ ...LOBBY_GHOST_BTN, width: "auto", height: 28, padding: "0 8px", fontSize: 11, letterSpacing: 1 }}>
+              {copied ? "Copied" : view.code}
+            </button>
+            <span
+              style={{
+                fontSize: 10,
+                fontWeight: 800,
+                letterSpacing: 0.7,
+                color: view.difficulty === "hard" ? "#1a2e1a" : "#f5f0e6",
+                background: view.difficulty === "hard" ? "#f1c40f" : "transparent",
+                border: "1px solid rgba(241,196,15,0.75)",
+                borderRadius: 6,
+                padding: "4px 6px",
+              }}
+            >
+              {view.difficulty === "hard" ? "HARD" : "EASY"}
+            </span>
+          </div>
+          {view.phase === "waiting" ? (
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, padding: 16 }}>
+              <div style={{ fontSize: 36, fontWeight: 800, letterSpacing: 6, color: "#f5f0e6" }}>{view.code}</div>
+              <button type="button" onClick={copyCode} style={{ ...LOBBY_GHOST_BTN, width: 120, height: 36 }}>
+                {copied ? "Copied" : "Copy"}
+              </button>
+              {view.host && view.players.length < 2 ? (
+                <div style={{ display: "flex", gap: 8 }}>
+                  {(["easy", "hard"] as CodeDifficulty[]).map((id) => (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => send({ type: "codeDifficulty", difficulty: id })}
+                      style={{
+                        ...LOBBY_GHOST_BTN,
+                        width: 110,
+                        height: 36,
+                        background: view.difficulty === id ? "#f1c40f" : "transparent",
+                        color: view.difficulty === id ? "#1a2e1a" : "#f5f0e6",
+                      }}
+                    >
+                      {id === "hard" ? "Hard" : "Easy"}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              {error ? <div style={{ color: "#f5b7b1", fontSize: 13 }}>{error}</div> : null}
+            </div>
+          ) : (
+            <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+            <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: split ? "row" : "column" }}>
+              <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
+                {view.phase === "secrets" && !view.yourSecret ? (
+                  <div style={{ padding: "4px 16px 0", textAlign: "center", color: "rgba(255,255,255,0.72)", fontSize: 14 }}>
+                    Hide a 4-digit code. Repeats are allowed.
+                  </div>
+                ) : null}
+                {history}
+                {split ? null : yourPanel}
+                {split ? null : dock}
+              </div>
+              {split ? (
+                <div style={{ width: 250, minHeight: 0, overflowY: "auto", borderLeft: "1px solid rgba(255,255,255,0.1)" }}>{yourPanel}</div>
+              ) : null}
+            </div>
+            {split ? dock : null}
+            </div>
+          )}
+        </div>
+      </FeltShell>
     );
   }
+
 
   return shell(
     <>
