@@ -10,6 +10,7 @@ const push = require("./push");
 const daily = require("./daily");
 const stripeBilling = require("./stripe-billing");
 const elimination = require("./elimination");
+const { createCodeGame } = require("./codegame");
 
 push.init();
 
@@ -77,6 +78,17 @@ const GATED_REACT_EMOJIS = new Set(["🖕", ":wide_eyes:"]);
 
 const rooms = new Map();
 const browsers = new Set();
+const codeGame = createCodeGame({
+  send,
+  error,
+  identifyClerk,
+  sanitizeName,
+  sanitizeAvatar,
+  makeId: id,
+  cardCodeTaken: (code) => rooms.has(code),
+  leaveCard: (ws) => leave(ws, true),
+  releaseCardClerk: (clerkUserId) => releaseClerk(clerkUserId, null),
+});
 
 function roomSpectators(room) {
   return Array.isArray(room.spectators) ? room.spectators : [];
@@ -149,7 +161,7 @@ function makeCode() {
 function uniqueCode() {
   for (let i = 0; i < 40; i++) {
     const code = makeCode();
-    if (!rooms.has(code)) return code;
+    if (!rooms.has(code) && !codeGame.hasCode(code)) return code;
   }
   return makeCode() + makeCode();
 }
@@ -676,6 +688,7 @@ async function createRoom(ws, name, avatar, clerkToken, title, mode) {
   const auth = await identifyClerk(ws, clerkToken, { required: true });
   if (!auth) return;
   const clerkUserId = auth.userId;
+  codeGame.dropClerk(clerkUserId);
   releaseClerk(clerkUserId, null);
   leave(ws, true);
   const code = uniqueCode();
@@ -719,6 +732,7 @@ async function joinRoom(ws, code, name, token, avatar, clerkToken, intent) {
   const auth = await identifyClerk(ws, clerkToken, { required: !token });
   if (!auth) return;
   const clerkUserId = auth.userId;
+  codeGame.dropClerk(clerkUserId);
   const want = String(intent || "").trim().toLowerCase();
   const elim = roomMode(room) === "elimination";
 
@@ -1586,6 +1600,11 @@ function onMessage(ws, data) {
     return error(ws, "Invalid message");
   }
   const type = msg && msg.type;
+  if (codeGame.isCodeMessage(type)) {
+    void codeGame.handle(ws, msg);
+    return;
+  }
+  if (type === "create" || type === "join" || type === "rejoin") codeGame.dropSocket(ws, true);
   const room = rooms.get(ws.roomCode);
   const player = room && room.seats.find((p) => p.id === ws.playerId);
   const spectator = room && roomSpectators(room).find((s) => s.id === ws.playerId);
@@ -1715,6 +1734,7 @@ setInterval(() => {
     }
   }
   if (dropped) notifyLobbies();
+  codeGame.sweep(now);
 }, 60 * 1000);
 
 const server = http.createServer((req, res) => {
@@ -1916,6 +1936,7 @@ const server = http.createServer((req, res) => {
       ok: true,
       service: "citrons",
       rooms: rooms.size,
+      codeRooms: codeGame.count(),
       waiting: [...rooms.values()].filter((r) => r.phase === "waiting").length,
       live: [...rooms.values()].filter((r) => roomLive(r)).length,
       clerk: clerk.clerkConfigured(),
@@ -1965,8 +1986,14 @@ const wss = new WebSocketServer({ server });
 wss.on("connection", (ws) => {
   addBrowser(ws);
   ws.on("message", (data) => onMessage(ws, data));
-  ws.on("close", () => leave(ws));
-  ws.on("error", () => leave(ws));
+  ws.on("close", () => {
+    codeGame.dropSocket(ws, false);
+    leave(ws);
+  });
+  ws.on("error", () => {
+    codeGame.dropSocket(ws, false);
+    leave(ws);
+  });
 });
 
 Promise.resolve(leaderboard.hydrateFromClerk())
