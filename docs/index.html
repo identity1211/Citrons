@@ -13838,7 +13838,7 @@ function hardMatchLabel(count: number): string {
   return `${n} digits are in the right place`;
 }
 
-function CodeTile({ digit, gold, compact }: { digit?: string; gold?: boolean; compact?: boolean }) {
+function CodeTile({ digit, gold, compact, live, pinned }: { digit?: string; gold?: boolean; compact?: boolean; live?: boolean; pinned?: boolean }) {
   const size = compact ? 36 : 46;
   return (
     <div
@@ -13854,11 +13854,22 @@ function CodeTile({ digit, gold, compact }: { digit?: string; gold?: boolean; co
         fontSize: compact ? 18 : 22,
         color: gold ? "#1a2e1a" : digit ? "#f5f0e6" : "transparent",
         background: gold ? "#f1c40f" : "rgba(0,0,0,0.28)",
-        border: gold ? "1.5px solid #f1c40f" : "1.5px solid rgba(255,255,255,0.22)",
+        border: gold ? "1.5px solid #f1c40f" : live || pinned ? "1.5px solid rgba(241,196,15,0.85)" : "1.5px solid rgba(255,255,255,0.22)",
+        boxShadow: pinned ? "inset 0 -3px 0 #f1c40f" : undefined,
       }}
     >
       {digit || ""}
     </div>
+  );
+}
+
+function PinLock({ on }: { on: boolean }) {
+  const ink = on ? "#1a2e1a" : "rgba(255,255,255,0.8)";
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+      <rect x="3.2" y="7" width="9.6" height="6.5" rx="1.4" fill={on ? "#1a2e1a" : "none"} stroke={ink} strokeWidth="1.3" />
+      <path d={on ? "M5.2 7.2V5.1a2.8 2.8 0 0 1 5.6 0V7.2" : "M5.2 7.2V4.6a2.8 2.8 0 0 1 5.6 0"} fill="none" stroke={ink} strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
   );
 }
 
@@ -13946,6 +13957,9 @@ function CodePad({
   disabled,
   submitLabel,
   compact,
+  slots = true,
+  onDigit,
+  onDelete,
 }: {
   value: string;
   onChange: (next: string) => void;
@@ -13953,6 +13967,9 @@ function CodePad({
   disabled?: boolean;
   submitLabel: string;
   compact?: boolean;
+  slots?: boolean;
+  onDigit?: (digit: string) => void;
+  onDelete?: () => void;
 }) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -13960,20 +13977,33 @@ function CodePad({
       if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
       if (disabled) return;
       if (e.key >= "0" && e.key <= "9") {
-        onChange((value + e.key).slice(0, 4));
+        if (onDigit) onDigit(e.key);
+        else onChange((value + e.key).slice(0, 4));
       } else if (e.key === "Backspace") {
-        onChange(value.slice(0, -1));
+        if (onDelete) onDelete();
+        else onChange(value.slice(0, -1));
       } else if (e.key === "Enter" && value.length === 4) {
         onSubmit();
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [disabled, onChange, onSubmit, value]);
+  }, [disabled, onChange, onDelete, onDigit, onSubmit, value]);
 
   function push(digit: string) {
-    if (disabled || value.length >= 4) return;
+    if (disabled) return;
+    if (onDigit) {
+      onDigit(digit);
+      return;
+    }
+    if (value.length >= 4) return;
     onChange(value + digit);
+  }
+
+  function erase() {
+    if (disabled) return;
+    if (onDelete) onDelete();
+    else onChange(value.slice(0, -1));
   }
 
   const keyH = compact ? 34 : 42;
@@ -13981,11 +14011,13 @@ function CodePad({
     const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "⌫"];
     return (
       <div style={{ width: "100%", display: "flex", alignItems: "center", gap: 8 }}>
-        <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-          {[0, 1, 2, 3].map((i) => (
-            <CodeTile key={i} digit={value[i]} compact />
-          ))}
-        </div>
+        {slots ? (
+          <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+            {[0, 1, 2, 3].map((i) => (
+              <CodeTile key={i} digit={value[i]} compact />
+            ))}
+          </div>
+        ) : null}
         <div style={{ flex: 1, minWidth: 0, display: "grid", gridTemplateColumns: "repeat(11, minmax(0, 1fr))", gap: 4 }}>
           {keys.map((key) => (
             <button
@@ -13993,7 +14025,7 @@ function CodePad({
               type="button"
               disabled={disabled}
               onClick={() => {
-                if (key === "⌫") onChange(value.slice(0, -1));
+                if (key === "⌫") erase();
                 else push(key);
               }}
               style={{
@@ -14026,11 +14058,13 @@ function CodePad({
   }
   return (
     <div style={{ width: "100%", maxWidth: 340, margin: "0 auto", display: "flex", flexDirection: "column", alignItems: "center", gap: compact ? 6 : 8 }}>
-      <div style={{ display: "flex", gap: compact ? 4 : 6 }}>
-        {[0, 1, 2, 3].map((i) => (
-          <CodeTile key={i} digit={value[i]} compact={compact} />
-        ))}
-      </div>
+      {slots ? (
+        <div style={{ display: "flex", gap: compact ? 4 : 6 }}>
+          {[0, 1, 2, 3].map((i) => (
+            <CodeTile key={i} digit={value[i]} compact={compact} />
+          ))}
+        </div>
+      ) : null}
       <div style={{ display: "flex", flexDirection: "column", gap: compact ? 4 : 6, width: "100%" }}>
         {[["1", "2", "3"], ["4", "5", "6"], ["7", "8", "9"], ["", "0", "⌫"]].map((row) => (
           <div key={row.join("-")} style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: compact ? 4 : 6 }}>
@@ -14041,7 +14075,7 @@ function CodePad({
                   type="button"
                   disabled={disabled}
                   onClick={() => {
-                    if (key === "⌫") onChange(value.slice(0, -1));
+                    if (key === "⌫") erase();
                     else push(key);
                   }}
                   style={{
@@ -14086,7 +14120,8 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
   const [lobbies, setLobbies] = useState<CodeLobbyInfo[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [entry, setEntry] = useState("");
+  const [slots, setSlots] = useState<string[]>(["", "", "", ""]);
+  const [pins, setPins] = useState<boolean[]>([false, false, false, false]);
   const [dropped, setDropped] = useState(false);
   const [yoursOpen, setYoursOpen] = useState(false);
   const [session, setSession] = useState<CodeSession | null>(() => readCodeSession());
@@ -14172,7 +14207,8 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
       forgetSession();
       setView(null);
       setScreen("pick");
-      setEntry("");
+      setSlots(["", "", "", ""]);
+      setPins([false, false, false, false]);
       setBusy(false);
       const ws = wsRef.current;
       if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "codeBrowse" }));
@@ -14274,7 +14310,8 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
   }, []);
 
   useEffect(() => {
-    setEntry("");
+    setSlots(["", "", "", ""]);
+    setPins([false, false, false, false]);
   }, [view?.phase]);
 
   useEffect(() => {
@@ -14326,21 +14363,52 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
     forgetSession();
     setView(null);
     setScreen("pick");
-    setEntry("");
+    setSlots(["", "", "", ""]);
+    setPins([false, false, false, false]);
     setBusy(false);
     onLeave();
   }
 
+  function typeDigit(digit: string) {
+    setSlots((prev) => {
+      const next = prev.slice();
+      const index = next.findIndex((cell, i) => !cell && !pins[i]);
+      if (index < 0) return prev;
+      next[index] = digit;
+      return next;
+    });
+  }
+
+  function eraseDigit() {
+    setSlots((prev) => {
+      const next = prev.slice();
+      for (let i = next.length - 1; i >= 0; i--) {
+        if (next[i] && !pins[i]) {
+          next[i] = "";
+          return next;
+        }
+      }
+      return prev;
+    });
+  }
+
+  function togglePin(index: number) {
+    if (!slots[index]) return;
+    setPins((prev) => prev.map((on, i) => (i === index ? !on : on)));
+  }
+
   function submitEntry() {
-    if (!view || entry.length !== 4) return;
+    const guess = slots.join("");
+    if (!view || guess.length !== 4) return;
     if (view.phase === "secrets" && !view.yourSecret) {
-      send({ type: "codeSecret", secret: entry });
-      setEntry("");
+      send({ type: "codeSecret", secret: guess });
+      setSlots(["", "", "", ""]);
+      setPins([false, false, false, false]);
       return;
     }
     if (view.phase === "playing" && view.yourTurn) {
-      send({ type: "codeGuess", guess: entry });
-      setEntry("");
+      send({ type: "codeGuess", guess });
+      setSlots((prev) => prev.map((digit, i) => (pins[i] ? digit : "")));
     }
   }
 
@@ -14411,7 +14479,7 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
         ? "Opponent reconnecting…"
         : `${opponent ? opponent.name : "Opponent"} is guessing`;
     const yourPanel = view.yourSecret ? (
-      <div style={{ width: "100%", borderTop: split ? "none" : "1px solid rgba(255,255,255,0.1)", background: "rgba(0,0,0,0.16)" }}>
+      <div style={{ width: "100%", borderBottom: "1px solid rgba(255,255,255,0.1)", background: "rgba(0,0,0,0.16)" }}>
         <button
           type="button"
           onClick={() => {
@@ -14442,7 +14510,10 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
               <button
                 type="button"
                 onClick={() => {
-                  setEntry(view.yourSecret || "");
+                  const next = (view.yourSecret || "").split("").slice(0, 4);
+                  while (next.length < 4) next.push("");
+                  setSlots(next);
+                  setPins([false, false, false, false]);
                   send({ type: "codeSecret", clear: true });
                 }}
                 style={{ ...LOBBY_GHOST_BTN, width: "auto", height: 28, padding: "0 10px", fontSize: 12, marginBottom: 6 }}
@@ -14500,6 +14571,42 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
             solved={view.phase === "finished" && view.winner === "you" && i === yourGuesses.length - 1}
           />
         ))}
+        {showPad && view.phase === "playing" ? (
+          <div style={{ display: "flex", alignItems: "center", gap: shortLand ? 10 : 14, padding: "10px 10px 4px 0" }}>
+            <div style={{ display: "flex", gap: shortLand ? 4 : 6 }}>
+              {[0, 1, 2, 3].map((i) => (
+                <div key={i} style={{ position: "relative" }}>
+                  <CodeTile digit={slots[i]} compact={shortLand} live pinned={pins[i]} />
+                  <button
+                    type="button"
+                    aria-label={pins[i] ? `Unpin ${slots[i]}` : slots[i] ? `Pin ${slots[i]}` : "Pin digit"}
+                    aria-pressed={pins[i]}
+                    disabled={!slots[i]}
+                    onClick={() => togglePin(i)}
+                    style={{
+                      position: "absolute",
+                      top: -8,
+                      right: -8,
+                      width: 22,
+                      height: 22,
+                      padding: 0,
+                      borderRadius: 11,
+                      border: pins[i] ? "none" : "1px solid rgba(255,255,255,0.35)",
+                      background: pins[i] ? "#f1c40f" : "rgba(0,0,0,0.55)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      cursor: slots[i] ? "pointer" : "default",
+                      opacity: slots[i] ? 1 : 0.7,
+                    }}
+                  >
+                    <PinLock on={pins[i]} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
         </div>
       </div>
     );
@@ -14507,7 +14614,7 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
       <div style={{ flexShrink: 0, width: "100%", padding: shortLand ? "6px 10px 4px" : "8px 12px 6px", boxSizing: "border-box", borderTop: "1px solid rgba(255,255,255,0.08)", background: "rgba(0,0,0,0.22)" }}>
         {error ? <div style={{ color: "#f5b7b1", fontSize: 13, lineHeight: 1.4, textAlign: "center", marginBottom: 6 }}>{error}</div> : null}
         {showPad ? (
-          <CodePad value={entry} onChange={setEntry} onSubmit={submitEntry} submitLabel={view.phase === "secrets" ? "Set code" : "Guess"} compact={shortLand} />
+          <CodePad value={slots.join("")} onChange={() => undefined} onDigit={typeDigit} onDelete={eraseDigit} onSubmit={submitEntry} submitLabel={view.phase === "secrets" ? "Set code" : "Guess"} compact={shortLand} slots={view.phase !== "playing"} />
         ) : dropped ? (
           <button
             type="button"
@@ -14573,6 +14680,7 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
               {view.difficulty === "hard" ? "HARD" : "EASY"}
             </span>
           </div>
+          {view.phase !== "waiting" && !split ? yourPanel : null}
           {view.phase === "waiting" ? (
             <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, padding: 16 }}>
               <div style={{ fontSize: 15, lineHeight: 1.4, color: "rgba(255,255,255,0.75)", maxWidth: 280 }}>
@@ -14610,7 +14718,6 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
                   </div>
                 ) : null}
                 {history}
-                {split ? null : yourPanel}
                 {split ? null : dock}
               </div>
               {split ? (
