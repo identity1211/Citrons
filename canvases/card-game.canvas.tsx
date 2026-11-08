@@ -7382,6 +7382,8 @@ function Lobby({
         padding:
           view === "board"
             ? `${safeTop(28, 40)} 16px ${safeBottom(28, 28)}`
+            : view === "games"
+              ? `${safeTop(72, 56)} 16px ${safeBottom(28, 28)}`
             : shortLand
               ? `${safeTop(8, 4)} 12px ${safeBottom(8, 8)}`
               : `${safeTop(16, 22)} 16px ${safeBottom(16, 40)}`,
@@ -7465,7 +7467,7 @@ function Lobby({
           padding: view === "board" ? 0 : "0 8px",
         }}
       >
-        {view !== "board" ? (
+        {view !== "board" && view !== "games" ? (
           <div
             className="lobby-brand-in"
             style={{
@@ -7499,7 +7501,7 @@ function Lobby({
           </div>
         ) : null}
 
-        {view !== "board" && (
+        {view !== "board" && view !== "games" && (
           <div style={{ flex: shortLand ? "0 0 8px" : 1, minHeight: shortLand ? 4 : 12, width: "100%" }} />
         )}
 
@@ -7518,7 +7520,7 @@ function Lobby({
             minHeight: view === "board" ? 0 : undefined,
             position: "relative",
             zIndex: 3,
-            marginTop: view === "board" ? 0 : shortLand ? 0 : "auto",
+            marginTop: view === "board" || view === "games" ? 0 : shortLand ? 0 : "auto",
             paddingBottom: 4,
           }}
         >
@@ -7556,22 +7558,31 @@ function Lobby({
               <button
                 type="button"
                 onClick={onCodeGame}
+                aria-label="Secret code"
                 style={{
                   width: "100%",
-                  maxWidth: 340,
-                  textAlign: "left",
-                  padding: "14px 14px",
-                  borderRadius: 12,
-                  border: "1.5px solid rgba(241,196,15,0.45)",
-                  background: "rgba(0,0,0,0.28)",
-                  color: "#f5f0e6",
+                  maxWidth: 380,
+                  padding: 0,
+                  border: "none",
+                  background: "transparent",
                   cursor: "pointer",
                 }}
               >
-                <div style={{ fontWeight: 800, fontSize: 16 }}>Secret code</div>
-                <div style={{ marginTop: 4, fontSize: 13, lineHeight: 1.4, color: "rgba(255,255,255,0.72)" }}>
-                  2 players. Each hides a 4-digit code. Take turns guessing. First to crack the other code wins.
-                </div>
+                <img
+                  src="secret-code-logo.png"
+                  alt=""
+                  width={800}
+                  height={230}
+                  draggable={false}
+                  style={{
+                    width: "100%",
+                    height: "auto",
+                    display: "block",
+                    filter: "drop-shadow(0 8px 16px rgba(0,0,0,0.35))",
+                    userSelect: "none",
+                    pointerEvents: "none",
+                  }}
+                />
               </button>
             </>
           )}
@@ -10415,48 +10426,6 @@ function pendingJoinCode(): string {
   }
 }
 
-function lobbyInviteUrl(code: string): string {
-  const clean = String(code || "")
-    .trim()
-    .toUpperCase()
-    .replace(/[^A-Z0-9]/g, "")
-    .slice(0, 12);
-  let origin = "https://citrons.lat";
-  if (typeof window !== "undefined") {
-    const host = window.location.hostname;
-    if (host === "citrons.lat" || host === "www.citrons.lat") origin = "https://citrons.lat";
-    else if (host === "localhost" || host === "127.0.0.1" || host.endsWith(".local")) origin = window.location.origin;
-    else if (host) origin = window.location.origin;
-  }
-  if (!clean) return `${origin}/`;
-  return `${origin}/?join=${encodeURIComponent(clean)}`;
-}
-
-async function copyTextToClipboard(text: string): Promise<boolean> {
-  try {
-    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
-      await navigator.clipboard.writeText(text);
-      return true;
-    }
-  } catch {
-    /* fall through */
-  }
-  try {
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    ta.setAttribute("readonly", "");
-    ta.style.position = "fixed";
-    ta.style.left = "-9999px";
-    document.body.appendChild(ta);
-    ta.select();
-    const ok = document.execCommand("copy");
-    ta.remove();
-    return ok;
-  } catch {
-    return false;
-  }
-}
-
 function registerCitronsSW(): Promise<ServiceWorkerRegistration | null> {
   if (typeof window === "undefined" || !("serviceWorker" in navigator)) return Promise.resolve(null);
   if (!swRegisterPromise) {
@@ -11650,7 +11619,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       setBusy(false);
       setJoinChoice({
         code: String(msg.code),
-        title: String(msg.title || msg.code),
+        title: String(msg.title || "This table"),
         live: !!msg.live,
         queue: Math.max(0, Number(msg.queue) || 0),
       });
@@ -12034,41 +12003,6 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
       setInviteMsg("This browser cannot receive invites.");
     }
     requestInviteList();
-  }
-
-  async function copyInviteLink() {
-    const code = viewRef.current?.code || "";
-    if (!code) {
-      setInviteMsg("No lobby code yet");
-      return;
-    }
-    const url = lobbyInviteUrl(code);
-    const ok = await copyTextToClipboard(url);
-    setInviteMsg(ok ? "Link copied" : "Couldn't copy the link");
-  }
-
-  async function shareInviteLink() {
-    const code = viewRef.current?.code || "";
-    if (!code) {
-      setInviteMsg("No lobby code yet");
-      return;
-    }
-    const url = lobbyInviteUrl(code);
-    const title = viewRef.current?.title || "Citrons";
-    try {
-      if (typeof navigator.share === "function") {
-        await navigator.share({
-          title: "Citrons",
-          text: `Join ${title} on Citrons`,
-          url,
-        });
-        setInviteMsg("Invite shared");
-        return;
-      }
-    } catch (e: any) {
-      if (e && (e.name === "AbortError" || e.name === "NotAllowedError")) return;
-    }
-    await copyInviteLink();
   }
 
   async function enableInvites() {
@@ -13126,36 +13060,6 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
                   >
                     Invite
                   </div>
-                  <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-                    <button
-                      type="button"
-                      onClick={() => void copyInviteLink()}
-                      style={{
-                        ...LOBBY_GOLD_BTN,
-                        flex: 1,
-                        maxWidth: "none",
-                        height: 36,
-                        fontSize: 13,
-                      }}
-                    >
-                      Copy link
-                    </button>
-                    {typeof navigator !== "undefined" && typeof navigator.share === "function" ? (
-                      <button
-                        type="button"
-                        onClick={() => void shareInviteLink()}
-                        style={{
-                          ...LOBBY_GHOST_BTN,
-                          flex: 1,
-                          maxWidth: "none",
-                          height: 36,
-                          fontSize: 13,
-                        }}
-                      >
-                        Share
-                      </button>
-                    ) : null}
-                  </div>
                   <div
                     style={{
                       fontSize: 11,
@@ -13167,7 +13071,7 @@ function OnlineGame({ onLeave }: { onLeave: () => void }) {
                       textAlign: "center",
                     }}
                   >
-                    Or notify a player
+                    Notify a player
                   </div>
                   {inviteNeedInstall ? (
                     <div style={{ fontSize: 13, lineHeight: 1.45, color: "rgba(255,255,255,0.78)", textAlign: "center", marginBottom: 10 }}>
@@ -14066,8 +13970,6 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [entry, setEntry] = useState("");
-  const [joinCode, setJoinCode] = useState("");
-  const [copied, setCopied] = useState(false);
   const [dropped, setDropped] = useState(false);
   const [yoursOpen, setYoursOpen] = useState(false);
   const [session, setSession] = useState<CodeSession | null>(() => readCodeSession());
@@ -14391,15 +14293,6 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
       opponent && !opponent.connected
         ? "Opponent reconnecting…"
         : `${opponent ? opponent.name : "Opponent"} is guessing`;
-    const copyCode = () => {
-      const text = view.code;
-      const done = () => {
-        setCopied(true);
-        window.setTimeout(() => setCopied(false), 1200);
-      };
-      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done).catch(done);
-      else done();
-    };
     const yourPanel = view.yourSecret ? (
       <div style={{ width: "100%", borderTop: split ? "none" : "1px solid rgba(255,255,255,0.1)", background: "rgba(0,0,0,0.16)" }}>
         <button
@@ -14548,9 +14441,6 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
             <div style={{ flex: 1, minWidth: 0, textAlign: "left", fontSize: 14, fontWeight: 800, color: "#f1c40f", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
               {statusLine}
             </div>
-            <button type="button" onClick={copyCode} style={{ ...LOBBY_GHOST_BTN, width: "auto", height: 28, padding: "0 8px", fontSize: 11, letterSpacing: 1 }}>
-              {copied ? "Copied" : view.code}
-            </button>
             <span
               style={{
                 fontSize: 10,
@@ -14568,10 +14458,9 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
           </div>
           {view.phase === "waiting" ? (
             <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, padding: 16 }}>
-              <div style={{ fontSize: 36, fontWeight: 800, letterSpacing: 6, color: "#f5f0e6" }}>{view.code}</div>
-              <button type="button" onClick={copyCode} style={{ ...LOBBY_GHOST_BTN, width: 120, height: 36 }}>
-                {copied ? "Copied" : "Copy"}
-              </button>
+              <div style={{ fontSize: 15, lineHeight: 1.4, color: "rgba(255,255,255,0.75)", maxWidth: 280 }}>
+                {view.players.length < 2 ? "Your room is in the list. The other player joins from there." : statusLine}
+              </div>
               {view.host && view.players.length < 2 ? (
                 <div style={{ display: "flex", gap: 8 }}>
                   {(["easy", "hard"] as CodeDifficulty[]).map((id) => (
@@ -14695,7 +14584,7 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
                 <div style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
                   <div style={{ color: "#f5f0e6", fontWeight: 700, fontSize: 14 }}>{lobby.host}</div>
                   <div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)" }}>
-                    {lobby.code} · {lobby.difficulty === "hard" ? "Hard" : "Easy"} · {lobby.count}/{lobby.max}
+                    {lobby.difficulty === "hard" ? "Hard" : "Easy"} · {lobby.count}/{lobby.max}
                   </div>
                 </div>
                 <button
@@ -14711,17 +14600,6 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
           </div>
         )}
       </div>
-      <input
-        value={joinCode}
-        onChange={(e) => setJoinCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8))}
-        placeholder="Room code"
-        aria-label="Room code"
-        autoCapitalize="characters"
-        style={{ ...LOBBY_INPUT, height: shortLand ? 36 : 44 }}
-      />
-      <button type="button" className="lobby-ghost-btn" style={{ ...LOBBY_GHOST_BTN, height: shortLand ? 36 : 44 }} disabled={busy || joinCode.length < 4} onClick={() => void joinRoom(joinCode)}>
-        Join with code
-      </button>
       {error ? <div style={{ color: "#f5b7b1", fontSize: 13, lineHeight: 1.4 }}>{error}</div> : null}
     </>
   );

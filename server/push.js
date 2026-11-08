@@ -517,7 +517,7 @@ async function sendInvite({ fromName, code, title, userIds }) {
     .trim()
     .slice(0, 28);
   const payload = sitePayload(
-    roomTitle ? `${bodyTitle} invited you to ${roomTitle}` : `${bodyTitle} invited you to play · ${room}`,
+    roomTitle ? `${bodyTitle} invited you to ${roomTitle}` : `${bodyTitle} invited you to play`,
     `${SITE}/?join=${encodeURIComponent(room)}`
   );
   let sent = 0;
