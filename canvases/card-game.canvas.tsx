@@ -5409,12 +5409,16 @@ function FeltShell({
   center,
   style,
   skin = "felt",
+  glow = true,
+  plain,
 }: {
   children: ReactNode;
   overlay?: ReactNode;
   center?: boolean;
   style?: CSSProperties;
   skin?: TableSkinId;
+  glow?: boolean;
+  plain?: CSSProperties;
 }) {
   return (
     <div
@@ -5427,9 +5431,10 @@ function FeltShell({
         display: "flex",
         flexDirection: "column",
         ...feltShellStyle(skin),
+        ...plain,
       }}
     >
-      {skin === "felt" ? <div className="lobby-felt-glow" /> : (
+      {skin === "felt" ? (glow ? <div className="lobby-felt-glow" /> : null) : (
         <div
           style={{
             position: "absolute",
@@ -13721,24 +13726,139 @@ function hardMatchLabel(count: number): string {
   return `${n} digits are in the right place`;
 }
 
-function CodeTile({ digit, gold, compact, live, pinned }: { digit?: string; gold?: boolean; compact?: boolean; live?: boolean; pinned?: boolean }) {
+type CodeLook = "classic" | "dossier";
+
+const CODE_LOOK_KEY = "citrons-code-look";
+const CODE_DIGIT_FONT = '"Courier New", Courier, monospace';
+
+function readCodeLook(): CodeLook {
+  try {
+    return localStorage.getItem(CODE_LOOK_KEY) === "classic" ? "classic" : "dossier";
+  } catch {
+    return "dossier";
+  }
+}
+
+function writeCodeLook(look: CodeLook) {
+  try {
+    localStorage.setItem(CODE_LOOK_KEY, look);
+  } catch {
+    /* ignore */
+  }
+}
+
+function codeActionBtn(look: CodeLook): CSSProperties {
+  if (look === "classic") return LOBBY_GOLD_BTN;
+  return {
+    width: "100%",
+    maxWidth: 300,
+    height: 50,
+    borderRadius: 2,
+    border: "none",
+    background: "#1a140f",
+    color: "#efe6d6",
+    fontSize: 16,
+    fontWeight: 700,
+    fontFamily: CODE_DIGIT_FONT,
+    letterSpacing: 0.6,
+    cursor: "pointer",
+  };
+}
+
+function codeGhostBtn(look: CodeLook): CSSProperties {
+  if (look === "classic") return LOBBY_GHOST_BTN;
+  return {
+    width: "100%",
+    maxWidth: 300,
+    height: 50,
+    borderRadius: 2,
+    border: "1.5px solid #1a140f",
+    background: "transparent",
+    color: "#1a140f",
+    fontSize: 16,
+    fontWeight: 700,
+    fontFamily: CODE_DIGIT_FONT,
+    cursor: "pointer",
+  };
+}
+
+function codeChoiceBtn(look: CodeLook, on: boolean): CSSProperties {
+  if (look === "classic") {
+    return {
+      ...LOBBY_GHOST_BTN,
+      background: on ? "#f1c40f" : "transparent",
+      color: on ? "#1a2e1a" : "#f5f0e6",
+    };
+  }
+  return {
+    ...codeGhostBtn(look),
+    background: on ? "#9d1c1c" : "transparent",
+    color: on ? "#efe6d6" : "#1a140f",
+  };
+}
+
+function codeDeskPlain(look: CodeLook): CSSProperties | undefined {
+  if (look !== "dossier") return undefined;
+  return {
+    background: "#1b1714",
+    backgroundImage: "radial-gradient(circle at 18% 0%, rgba(255,255,255,0.05), transparent 38%)",
+    boxShadow: "inset 0 0 0 10px #2a211b",
+  };
+}
+
+function codeSheetStyle(look: CodeLook): CSSProperties {
+  if (look !== "dossier") return {};
+  return {
+    background: "#efe6d6",
+    color: "#1a140f",
+    boxShadow: "0 16px 36px rgba(0,0,0,0.4)",
+  };
+}
+
+function CodeTile({
+  digit,
+  gold,
+  compact,
+  live,
+  pinned,
+  look,
+}: {
+  digit?: string;
+  gold?: boolean;
+  compact?: boolean;
+  live?: boolean;
+  pinned?: boolean;
+  look: CodeLook;
+}) {
   const size = compact ? 36 : 46;
+  const dossier = look === "dossier";
   return (
     <div
       style={{
         width: size,
         height: compact ? 42 : 52,
-        borderRadius: 8,
+        borderRadius: dossier ? 2 : 8,
         boxSizing: "border-box",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
         fontWeight: 800,
         fontSize: compact ? 18 : 22,
-        color: gold ? "#1a2e1a" : digit ? "#f5f0e6" : "transparent",
-        background: gold ? "#f1c40f" : "rgba(0,0,0,0.28)",
-        border: gold ? "1.5px solid #f1c40f" : live || pinned ? "1.5px solid rgba(241,196,15,0.85)" : "1.5px solid rgba(255,255,255,0.22)",
-        boxShadow: pinned ? "inset 0 -3px 0 #f1c40f" : undefined,
+        fontFamily: dossier ? CODE_DIGIT_FONT : undefined,
+        color: gold ? (dossier ? "#efe6d6" : "#1a2e1a") : digit ? (dossier ? "#1a140f" : "#f5f0e6") : "transparent",
+        background: gold ? (dossier ? "#1a140f" : "#f1c40f") : dossier ? "#f7f1e4" : "rgba(0,0,0,0.28)",
+        border: gold
+          ? dossier
+            ? "1.5px solid #1a140f"
+            : "1.5px solid #f1c40f"
+          : live || pinned
+            ? dossier
+              ? "1.5px solid #9d1c1c"
+              : "1.5px solid rgba(241,196,15,0.85)"
+            : dossier
+              ? "1px solid rgba(26,20,15,0.28)"
+              : "1.5px solid rgba(255,255,255,0.22)",
+        boxShadow: pinned ? (dossier ? "inset 0 -3px 0 #9d1c1c" : "inset 0 -3px 0 #f1c40f") : undefined,
       }}
     >
       {digit || ""}
@@ -13746,22 +13866,30 @@ function CodeTile({ digit, gold, compact, live, pinned }: { digit?: string; gold
   );
 }
 
-function PinLock({ on }: { on: boolean }) {
-  const ink = on ? "#1a2e1a" : "rgba(255,255,255,0.8)";
+function PinLock({ on, look }: { on: boolean; look: CodeLook }) {
+  const dossier = look === "dossier";
+  const ink = on ? (dossier ? "#efe6d6" : "#1a2e1a") : dossier ? "#1a140f" : "rgba(255,255,255,0.8)";
+  const fill = dossier ? "#efe6d6" : "#1a2e1a";
   return (
     <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
-      <rect x="3.2" y="7" width="9.6" height="6.5" rx="1.4" fill={on ? "#1a2e1a" : "none"} stroke={ink} strokeWidth="1.3" />
+      <rect x="3.2" y="7" width="9.6" height="6.5" rx="1.4" fill={on ? fill : "none"} stroke={ink} strokeWidth="1.3" />
       <path d={on ? "M5.2 7.2V5.1a2.8 2.8 0 0 1 5.6 0V7.2" : "M5.2 7.2V4.6a2.8 2.8 0 0 1 5.6 0"} fill="none" stroke={ink} strokeWidth="1.5" strokeLinecap="round" />
     </svg>
   );
 }
 
-function CodeFeedbackMark({ feedback, solved }: { feedback: CodeFeedback; solved?: boolean }) {
+function CodeFeedbackMark({ feedback, solved, look }: { feedback: CodeFeedback; solved?: boolean; look: CodeLook }) {
+  const dossier = look === "dossier";
   if (solved) {
-    return <span style={{ color: "#f1c40f", fontWeight: 800, fontSize: 11, letterSpacing: 0.8 }}>CRACKED</span>;
+    return (
+      <span style={{ color: dossier ? "#9d1c1c" : "#f1c40f", fontWeight: 800, fontSize: 11, letterSpacing: 0.8, fontFamily: dossier ? CODE_DIGIT_FONT : undefined }}>
+        CRACKED
+      </span>
+    );
   }
   if (feedback.kind === "hard") {
     const n = Math.max(0, Math.min(4, Math.floor(Number(feedback.count) || 0)));
+    const mark = dossier ? "#1a140f" : "#f1c40f";
     return (
       <span aria-label={hardMatchLabel(n)} style={{ display: "inline-flex", gap: 5, alignItems: "center" }}>
         {[0, 1, 2, 3].map((i) => (
@@ -13770,10 +13898,10 @@ function CodeFeedbackMark({ feedback, solved }: { feedback: CodeFeedback; solved
             style={{
               width: 10,
               height: 10,
-              borderRadius: 5,
+              borderRadius: dossier ? 1 : 5,
               boxSizing: "border-box",
-              background: i < n ? "#f1c40f" : "transparent",
-              border: "1.5px solid #f1c40f",
+              background: i < n ? mark : "transparent",
+              border: `1.5px solid ${mark}`,
             }}
           />
         ))}
@@ -13781,7 +13909,7 @@ function CodeFeedbackMark({ feedback, solved }: { feedback: CodeFeedback; solved
     );
   }
   if (!feedback.places.some(Boolean) && feedback.extras.length === 0) {
-    return <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 12 }}>No match</span>;
+    return <span style={{ color: dossier ? "#6d5c49" : "rgba(255,255,255,0.35)", fontSize: 12 }}>No match</span>;
   }
   return (
     <span style={{ display: "inline-flex", gap: 4, flexWrap: "wrap", justifyContent: "flex-end", maxWidth: 112 }}>
@@ -13792,11 +13920,12 @@ function CodeFeedbackMark({ feedback, solved }: { feedback: CodeFeedback; solved
             minWidth: 20,
             height: 22,
             padding: "0 4px",
-            borderRadius: 6,
-            border: "1.5px solid rgba(241,196,15,0.9)",
-            color: "#f1c40f",
+            borderRadius: dossier ? 2 : 6,
+            border: dossier ? "1.5px solid #9d1c1c" : "1.5px solid rgba(241,196,15,0.9)",
+            color: dossier ? "#9d1c1c" : "#f1c40f",
             fontSize: 13,
             fontWeight: 800,
+            fontFamily: dossier ? CODE_DIGIT_FONT : undefined,
             display: "inline-flex",
             alignItems: "center",
             justifyContent: "center",
@@ -13814,21 +13943,23 @@ function CodeGuessRow({
   feedback,
   solved,
   compact,
+  look,
 }: {
   guess: string;
   feedback: CodeFeedback;
   solved?: boolean;
   compact?: boolean;
+  look: CodeLook;
 }) {
   const places = feedback.kind === "easy" ? feedback.places : [];
   return (
     <div style={{ display: "flex", alignItems: "center", gap: compact ? 10 : 14, padding: "4px 0" }}>
       <div style={{ display: "flex", gap: compact ? 4 : 6 }}>
         {guess.split("").map((digit, i) => (
-          <CodeTile key={i} digit={digit} gold={!!solved || !!places[i]} compact={compact} />
+          <CodeTile key={i} digit={digit} gold={!!solved || !!places[i]} compact={compact} look={look} />
         ))}
       </div>
-      <CodeFeedbackMark feedback={feedback} solved={solved} />
+      <CodeFeedbackMark feedback={feedback} solved={solved} look={look} />
     </div>
   );
 }
@@ -13843,6 +13974,7 @@ function CodePad({
   slots = true,
   onDigit,
   onDelete,
+  look,
 }: {
   value: string;
   onChange: (next: string) => void;
@@ -13853,6 +13985,7 @@ function CodePad({
   slots?: boolean;
   onDigit?: (digit: string) => void;
   onDelete?: () => void;
+  look: CodeLook;
 }) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -13890,6 +14023,16 @@ function CodePad({
   }
 
   const keyH = compact ? 34 : 42;
+  const dossier = look === "dossier";
+  const keyStyle: CSSProperties = {
+    borderRadius: dossier ? 2 : compact ? 8 : 10,
+    border: dossier ? "none" : "1px solid rgba(255,255,255,0.16)",
+    background: dossier ? "#1a140f" : "rgba(0,0,0,0.35)",
+    color: dossier ? "#efe6d6" : "#f5f0e6",
+    fontWeight: 700,
+    fontFamily: dossier ? CODE_DIGIT_FONT : undefined,
+    cursor: disabled ? "default" : "pointer",
+  };
   if (compact) {
     const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "⌫"];
     return (
@@ -13897,7 +14040,7 @@ function CodePad({
         {slots ? (
           <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
             {[0, 1, 2, 3].map((i) => (
-              <CodeTile key={i} digit={value[i]} compact />
+              <CodeTile key={i} digit={value[i]} compact look={look} />
             ))}
           </div>
         ) : null}
@@ -13912,15 +14055,10 @@ function CodePad({
                 else push(key);
               }}
               style={{
+                ...keyStyle,
                 height: 36,
-                borderRadius: 8,
-                border: "1px solid rgba(255,255,255,0.16)",
-                background: "rgba(0,0,0,0.35)",
-                color: "#f5f0e6",
                 fontSize: 15,
-                fontWeight: 700,
                 padding: 0,
-                cursor: disabled ? "default" : "pointer",
               }}
             >
               {key}
@@ -13932,7 +14070,7 @@ function CodePad({
           className="lobby-play-btn"
           disabled={disabled || value.length !== 4}
           onClick={onSubmit}
-          style={{ ...LOBBY_GOLD_BTN, width: 84, maxWidth: "none", height: 36, flexShrink: 0, opacity: value.length === 4 && !disabled ? 1 : 0.45 }}
+          style={{ ...codeActionBtn(look), width: 84, maxWidth: "none", height: 36, flexShrink: 0, opacity: value.length === 4 && !disabled ? 1 : 0.45 }}
         >
           {submitLabel}
         </button>
@@ -13944,7 +14082,7 @@ function CodePad({
       {slots ? (
         <div style={{ display: "flex", gap: compact ? 4 : 6 }}>
           {[0, 1, 2, 3].map((i) => (
-            <CodeTile key={i} digit={value[i]} compact={compact} />
+            <CodeTile key={i} digit={value[i]} compact={compact} look={look} />
           ))}
         </div>
       ) : null}
@@ -13962,14 +14100,9 @@ function CodePad({
                     else push(key);
                   }}
                   style={{
+                    ...keyStyle,
                     height: keyH,
-                    borderRadius: 10,
-                    border: "1px solid rgba(255,255,255,0.16)",
-                    background: "rgba(0,0,0,0.35)",
-                    color: "#f5f0e6",
                     fontSize: compact ? 16 : 20,
-                    fontWeight: 700,
-                    cursor: disabled ? "default" : "pointer",
                   }}
                 >
                   {key}
@@ -13986,7 +14119,7 @@ function CodePad({
         className="lobby-play-btn"
         disabled={disabled || value.length !== 4}
         onClick={onSubmit}
-        style={{ ...LOBBY_GOLD_BTN, maxWidth: "none", height: compact ? 34 : 40, opacity: value.length === 4 && !disabled ? 1 : 0.45 }}
+        style={{ ...codeActionBtn(look), maxWidth: "none", height: compact ? 34 : 40, opacity: value.length === 4 && !disabled ? 1 : 0.45 }}
       >
         {submitLabel}
       </button>
@@ -14007,6 +14140,7 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
   const [pins, setPins] = useState<boolean[]>([false, false, false, false]);
   const [dropped, setDropped] = useState(false);
   const [yoursOpen, setYoursOpen] = useState(false);
+  const [look, setLook] = useState<CodeLook>(() => readCodeLook());
   const [session, setSession] = useState<CodeSession | null>(() => readCodeSession());
   const wsRef = useRef<WebSocket | null>(null);
   const pingRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -14295,7 +14429,13 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
     }
   }
 
+  function chooseLook(next: CodeLook) {
+    writeCodeLook(next);
+    setLook(next);
+  }
+
   const shownDifficulty: CodeDifficulty = view?.difficulty === "hard" ? "hard" : difficulty;
+  const dossier = look === "dossier";
   const opponent = view?.players.find((p) => !p.you) || null;
   const yourGuesses = (view?.guesses || []).filter((g) => g.byYou);
   const theirGuesses = (view?.guesses || []).filter((g) => !g.byYou);
@@ -14317,6 +14457,8 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
   const shell = (children: ReactNode) => (
     <FeltShell
       center={false}
+      glow={!dossier}
+      plain={codeDeskPlain(look)}
       overlay={
         <>
           <WindowButton />
@@ -14327,7 +14469,7 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
       style={{
         padding: shortLand
           ? `${safeTop(8, 4)} 16px ${safeBottom(8, 8)}`
-          : `${safeTop(16, 12)} 16px ${safeBottom(72, 64)}`,
+          : `${safeTop(dossier ? 72 : 16, dossier ? 56 : 12)} 16px ${safeBottom(72, 64)}`,
         justifyContent: "flex-start",
       }}
     >
@@ -14342,6 +14484,8 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
           textAlign: "center",
           paddingTop: shortLand ? 0 : 8,
           paddingBottom: shortLand ? 44 : 0,
+          ...codeSheetStyle(look),
+          ...(dossier ? { flex: shortLand ? undefined : 1, padding: shortLand ? "10px 12px" : "18px 16px 16px" } : {}),
         }}
       >
         {children}
@@ -14350,7 +14494,7 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
   );
 
   if (screen === "room" && !view) {
-    return shell(<div style={{ fontSize: 15, color: "rgba(255,255,255,0.75)" }}>Connecting…</div>);
+    return shell(<div style={{ fontSize: 15, color: dossier ? "#6d5c49" : "rgba(255,255,255,0.75)" }}>Connecting…</div>);
   }
 
   if (screen === "room" && view) {
@@ -14362,7 +14506,7 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
         ? "Opponent reconnecting…"
         : `${opponent ? opponent.name : "Opponent"} is guessing`;
     const yourPanel = view.yourSecret ? (
-      <div style={{ width: "100%", borderBottom: "1px solid rgba(255,255,255,0.1)", background: "rgba(0,0,0,0.16)" }}>
+      <div style={{ width: "100%", borderBottom: dossier ? "1px solid rgba(26,20,15,0.16)" : "1px solid rgba(255,255,255,0.1)", background: dossier ? "rgba(26,20,15,0.04)" : "rgba(0,0,0,0.16)" }}>
         <button
           type="button"
           onClick={() => {
@@ -14376,14 +14520,15 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
             padding: "8px 12px",
             border: "none",
             background: "transparent",
-            color: "#f5f0e6",
+            color: dossier ? "#1a140f" : "#f5f0e6",
             cursor: split ? "default" : "pointer",
             textAlign: "left",
+            fontFamily: dossier ? CODE_DIGIT_FONT : undefined,
           }}
         >
-          <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.8, color: "rgba(255,255,255,0.55)" }}>YOUR CODE</span>
+          <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.8, color: dossier ? "#6d5c49" : "rgba(255,255,255,0.55)" }}>YOUR CODE</span>
           <span style={{ letterSpacing: 3, fontWeight: 800 }}>{view.yourSecret.split("").join(" ")}</span>
-          <span style={{ marginLeft: "auto", fontSize: 12, color: "rgba(255,255,255,0.6)" }}>
+          <span style={{ marginLeft: "auto", fontSize: 12, color: dossier ? "#6d5c49" : "rgba(255,255,255,0.6)" }}>
             {theirGuesses.length ? theirGuesses.length : ""} {split || yoursOpen ? "▾" : "▸"}
           </span>
         </button>
@@ -14399,13 +14544,13 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
                   setPins([false, false, false, false]);
                   send({ type: "codeSecret", clear: true });
                 }}
-                style={{ ...LOBBY_GHOST_BTN, width: "auto", height: 28, padding: "0 10px", fontSize: 12, marginBottom: 6 }}
+                style={{ ...codeGhostBtn(look), width: "auto", height: 28, padding: "0 10px", fontSize: 12, marginBottom: 6 }}
               >
                 Change
               </button>
             ) : null}
             {theirGuesses.length === 0 ? (
-              <div style={{ fontSize: 12, color: "rgba(255,255,255,0.5)", textAlign: "left" }}>No guesses yet</div>
+              <div style={{ fontSize: 12, color: dossier ? "#6d5c49" : "rgba(255,255,255,0.5)", textAlign: "left" }}>No guesses yet</div>
             ) : (
               theirGuesses.map((row, i) => (
                 <CodeGuessRow
@@ -14413,6 +14558,7 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
                   guess={row.guess}
                   feedback={row.feedback}
                   compact={shortLand}
+                  look={look}
                   solved={view.phase === "finished" && view.winner === "them" && i === theirGuesses.length - 1}
                 />
               ))
@@ -14425,7 +14571,7 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
       <div ref={boardRef} style={{ flex: 1, minHeight: 0, overflowY: "auto", width: "100%", padding: "2px 12px 8px", boxSizing: "border-box" }}>
         <div style={{ minHeight: "100%", display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
         {view.phase === "playing" || view.phase === "finished" ? (
-          <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 1.1, color: "rgba(255,255,255,0.45)", textAlign: "left", paddingBottom: 4 }}>
+          <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 1.1, color: dossier ? "#6d5c49" : "rgba(255,255,255,0.45)", textAlign: "left", paddingBottom: 4, fontFamily: dossier ? CODE_DIGIT_FONT : undefined }}>
             THEIR CODE
           </div>
         ) : null}
@@ -14433,16 +14579,20 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "2px 0 8px" }}>
             <div style={{ display: "flex", gap: shortLand ? 4 : 6 }}>
               {view.opponentSecret.split("").map((digit, i) => (
-                <CodeTile key={i} digit={digit} gold compact={shortLand} />
+                <CodeTile key={i} digit={digit} gold compact={shortLand} look={look} />
               ))}
             </div>
           </div>
         ) : null}
         {showHint ? (
-          <div style={{ fontSize: 12, lineHeight: 1.35, color: "rgba(255,255,255,0.62)", textAlign: "left", padding: "2px 0 8px" }}>
+          <div style={{ fontSize: 12, lineHeight: 1.35, color: dossier ? "#6d5c49" : "rgba(255,255,255,0.62)", textAlign: "left", padding: "2px 0 8px" }}>
             {view.difficulty === "hard"
-              ? "Dots show how many digits are in place."
-              : "Gold tiles are in place. Outlined digits are in the code, somewhere else."}
+              ? dossier
+                ? "Marks show how many digits are in place."
+                : "Dots show how many digits are in place."
+              : dossier
+                ? "Black tiles are in place. Red digits are in the code, somewhere else."
+                : "Gold tiles are in place. Outlined digits are in the code, somewhere else."}
           </div>
         ) : null}
         {yourGuesses.map((row, i) => (
@@ -14451,6 +14601,7 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
             guess={row.guess}
             feedback={row.feedback}
             compact={shortLand}
+            look={look}
             solved={view.phase === "finished" && view.winner === "you" && i === yourGuesses.length - 1}
           />
         ))}
@@ -14459,7 +14610,7 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
             <div style={{ display: "flex", gap: shortLand ? 4 : 6 }}>
               {[0, 1, 2, 3].map((i) => (
                 <div key={i} style={{ position: "relative" }}>
-                  <CodeTile digit={slots[i]} compact={shortLand} live pinned={pins[i]} />
+                  <CodeTile digit={slots[i]} compact={shortLand} live pinned={pins[i]} look={look} />
                   <button
                     type="button"
                     aria-label={pins[i] ? `Unpin ${slots[i]}` : slots[i] ? `Pin ${slots[i]}` : "Pin digit"}
@@ -14474,8 +14625,8 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
                       height: 22,
                       padding: 0,
                       borderRadius: 11,
-                      border: pins[i] ? "none" : "1px solid rgba(255,255,255,0.35)",
-                      background: pins[i] ? "#f1c40f" : "rgba(0,0,0,0.55)",
+                      border: pins[i] ? "none" : dossier ? "1px solid rgba(26,20,15,0.35)" : "1px solid rgba(255,255,255,0.35)",
+                      background: pins[i] ? (dossier ? "#9d1c1c" : "#f1c40f") : dossier ? "#efe6d6" : "rgba(0,0,0,0.55)",
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
@@ -14483,7 +14634,7 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
                       opacity: slots[i] ? 1 : 0.7,
                     }}
                   >
-                    <PinLock on={pins[i]} />
+                    <PinLock on={pins[i]} look={look} />
                   </button>
                 </div>
               ))}
@@ -14494,10 +14645,10 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
       </div>
     );
     const dock = (
-      <div style={{ flexShrink: 0, width: "100%", padding: shortLand ? "6px 10px 4px" : "8px 12px 6px", boxSizing: "border-box", borderTop: "1px solid rgba(255,255,255,0.08)", background: "rgba(0,0,0,0.22)" }}>
-        {error ? <div style={{ color: "#f5b7b1", fontSize: 13, lineHeight: 1.4, textAlign: "center", marginBottom: 6 }}>{error}</div> : null}
+      <div style={{ flexShrink: 0, width: "100%", padding: shortLand ? "6px 10px 4px" : "8px 12px 6px", boxSizing: "border-box", borderTop: dossier ? "1px solid rgba(26,20,15,0.16)" : "1px solid rgba(255,255,255,0.08)", background: dossier ? "#e7dcc8" : "rgba(0,0,0,0.22)" }}>
+        {error ? <div style={{ color: dossier ? "#9d1c1c" : "#f5b7b1", fontSize: 13, lineHeight: 1.4, textAlign: "center", marginBottom: 6 }}>{error}</div> : null}
         {showPad ? (
-          <CodePad value={slots.join("")} onChange={() => undefined} onDigit={typeDigit} onDelete={eraseDigit} onSubmit={submitEntry} submitLabel={view.phase === "secrets" ? "Set code" : "Guess"} compact={shortLand} slots={view.phase !== "playing"} />
+          <CodePad value={slots.join("")} onChange={() => undefined} onDigit={typeDigit} onDelete={eraseDigit} onSubmit={submitEntry} submitLabel={view.phase === "secrets" ? "Set code" : "Guess"} compact={shortLand} slots={view.phase !== "playing"} look={look} />
         ) : dropped ? (
           <button
             type="button"
@@ -14508,16 +14659,16 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
               reconnectsRef.current = 0;
               connect("rejoin");
             }}
-            style={{ ...LOBBY_GOLD_BTN, maxWidth: 340 }}
+            style={{ ...codeActionBtn(look), maxWidth: 340 }}
           >
             Rejoin
           </button>
         ) : view.phase === "finished" && bothHere ? (
-          <button type="button" className="lobby-play-btn" onClick={() => send({ type: "codeAgain" })} style={{ ...LOBBY_GOLD_BTN, maxWidth: 340 }}>
+          <button type="button" className="lobby-play-btn" onClick={() => send({ type: "codeAgain" })} style={{ ...codeActionBtn(look), maxWidth: 340 }}>
             Play again
           </button>
         ) : (
-          <div style={{ minHeight: 28, display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.75)", fontSize: 14, fontWeight: 700 }}>
+          <div style={{ minHeight: 28, display: "flex", alignItems: "center", justifyContent: "center", color: dossier ? "#6d5c49" : "rgba(255,255,255,0.75)", fontSize: 14, fontWeight: 700 }}>
             {view.phase === "playing" ? turnLine : statusLine}
           </div>
         )}
@@ -14526,6 +14677,8 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
     return (
       <FeltShell
         center={false}
+        glow={!dossier}
+        plain={codeDeskPlain(look)}
         overlay={
           <>
             <WindowButton />
@@ -14539,24 +14692,42 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
           overflow: "hidden",
         }}
       >
-        <div style={{ flex: 1, minHeight: 0, width: "100%", maxWidth: split ? "none" : 440, margin: "0 auto", display: "flex", flexDirection: "column" }}>
+        <div style={{ flex: 1, minHeight: 0, width: "100%", maxWidth: split ? "none" : 440, margin: "0 auto", display: "flex", flexDirection: "column", ...codeSheetStyle(look) }}>
           <div style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 8, padding: "0 12px 8px" }}>
-            <button type="button" onClick={leaveRoom} aria-label="More games" style={{ ...LOBBY_GHOST_BTN, width: 36, height: 32, padding: 0, fontSize: 16 }}>
+            <button type="button" onClick={leaveRoom} aria-label="More games" style={{ ...codeGhostBtn(look), width: 36, height: 32, maxWidth: "none", padding: 0, fontSize: 16 }}>
               ←
             </button>
             {opponent ? <AvatarBubble src={opponent.avatar} name={opponent.name} size={28} /> : null}
-            <div style={{ flex: 1, minWidth: 0, textAlign: "left", fontSize: 14, fontWeight: 800, color: "#f1c40f", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            <div style={{ flex: 1, minWidth: 0, textAlign: "left", fontSize: 14, fontWeight: 800, color: dossier ? "#9d1c1c" : "#f1c40f", fontFamily: dossier ? "Georgia, serif" : undefined, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
               {statusLine}
             </div>
+            <button
+              type="button"
+              onClick={() => chooseLook(dossier ? "classic" : "dossier")}
+              style={{
+                border: "none",
+                background: "transparent",
+                color: dossier ? "#6d5c49" : "rgba(255,255,255,0.55)",
+                fontSize: 11,
+                fontWeight: 700,
+                cursor: "pointer",
+                padding: "4px 0",
+                textDecoration: "underline",
+                flexShrink: 0,
+              }}
+            >
+              {dossier ? "Classic" : "Dossier"}
+            </button>
             <span
               style={{
                 fontSize: 10,
                 fontWeight: 800,
                 letterSpacing: 0.7,
-                color: view.difficulty === "hard" ? "#1a2e1a" : "#f5f0e6",
-                background: view.difficulty === "hard" ? "#f1c40f" : "transparent",
-                border: "1px solid rgba(241,196,15,0.75)",
-                borderRadius: 6,
+                fontFamily: dossier ? CODE_DIGIT_FONT : undefined,
+                color: view.difficulty === "hard" ? (dossier ? "#efe6d6" : "#1a2e1a") : dossier ? "#1a140f" : "#f5f0e6",
+                background: view.difficulty === "hard" ? (dossier ? "#9d1c1c" : "#f1c40f") : "transparent",
+                border: dossier ? "1px solid #1a140f" : "1px solid rgba(241,196,15,0.75)",
+                borderRadius: dossier ? 2 : 6,
                 padding: "4px 6px",
               }}
             >
@@ -14566,7 +14737,7 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
           {view.phase !== "waiting" && !split ? yourPanel : null}
           {view.phase === "waiting" ? (
             <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, padding: 16 }}>
-              <div style={{ fontSize: 15, lineHeight: 1.4, color: "rgba(255,255,255,0.75)", maxWidth: 280 }}>
+              <div style={{ fontSize: 15, lineHeight: 1.4, color: dossier ? "#6d5c49" : "rgba(255,255,255,0.75)", maxWidth: 280 }}>
                 {view.players.length < 2 ? "Your room is in the list. The other player joins from there." : statusLine}
               </div>
               {view.host && view.players.length < 2 ? (
@@ -14576,27 +14747,21 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
                       key={id}
                       type="button"
                       onClick={() => send({ type: "codeDifficulty", difficulty: id })}
-                      style={{
-                        ...LOBBY_GHOST_BTN,
-                        width: 110,
-                        height: 36,
-                        background: view.difficulty === id ? "#f1c40f" : "transparent",
-                        color: view.difficulty === id ? "#1a2e1a" : "#f5f0e6",
-                      }}
+                      style={{ ...codeChoiceBtn(look, view.difficulty === id), width: 110, height: 36 }}
                     >
                       {id === "hard" ? "Hard" : "Easy"}
                     </button>
                   ))}
                 </div>
               ) : null}
-              {error ? <div style={{ color: "#f5b7b1", fontSize: 13 }}>{error}</div> : null}
+              {error ? <div style={{ color: dossier ? "#9d1c1c" : "#f5b7b1", fontSize: 13 }}>{error}</div> : null}
             </div>
           ) : (
             <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
             <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: split ? "row" : "column" }}>
               <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
                 {view.phase === "secrets" && !view.yourSecret ? (
-                  <div style={{ padding: "4px 16px 0", textAlign: "center", color: "rgba(255,255,255,0.72)", fontSize: 14 }}>
+                  <div style={{ padding: "4px 16px 0", textAlign: "center", color: dossier ? "#6d5c49" : "rgba(255,255,255,0.72)", fontSize: 14 }}>
                     Hide a 4-digit code. Repeats are allowed.
                   </div>
                 ) : null}
@@ -14604,7 +14769,7 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
                 {split ? null : dock}
               </div>
               {split ? (
-                <div style={{ width: 250, minHeight: 0, overflowY: "auto", borderLeft: "1px solid rgba(255,255,255,0.1)" }}>{yourPanel}</div>
+                <div style={{ width: 250, minHeight: 0, overflowY: "auto", borderLeft: dossier ? "1px solid rgba(26,20,15,0.16)" : "1px solid rgba(255,255,255,0.1)" }}>{yourPanel}</div>
               ) : null}
             </div>
             {split ? dock : null}
@@ -14618,13 +14783,20 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
 
   return shell(
     <>
-      <div style={{ fontSize: shortLand ? 22 : 26, fontWeight: 700, color: "#f5f0e6", fontFamily: 'Georgia, "Times New Roman", serif' }}>
-        Secret code
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
+        <div style={{ fontSize: shortLand ? 22 : 26, fontWeight: 700, color: dossier ? "#1a140f" : "#f5f0e6", fontFamily: 'Georgia, "Times New Roman", serif' }}>
+          Secret code
+        </div>
+        {dossier ? (
+          <span style={{ border: "2px solid #9d1c1c", color: "#9d1c1c", fontFamily: CODE_DIGIT_FONT, fontSize: 11, fontWeight: 700, letterSpacing: 1, padding: "3px 5px", transform: "rotate(6deg)" }}>
+            EYES ONLY
+          </span>
+        ) : null}
       </div>
       {auth.user ? (
-        <div style={{ fontSize: 13, color: "rgba(255,255,255,0.7)" }}>Playing as {clerkNickname(auth.user)}</div>
+        <div style={{ fontSize: 13, color: dossier ? "#6d5c49" : "rgba(255,255,255,0.7)" }}>Playing as {clerkNickname(auth.user)}</div>
       ) : (
-        <div style={{ fontSize: 13, color: "rgba(255,255,255,0.7)", maxWidth: 300, lineHeight: 1.4 }}>
+        <div style={{ fontSize: 13, color: dossier ? "#6d5c49" : "rgba(255,255,255,0.7)", maxWidth: 300, lineHeight: 1.4 }}>
           Sign in with Google first — button at the top right.
         </div>
       )}
@@ -14636,30 +14808,24 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
               key={id}
               type="button"
               onClick={() => setDifficulty(id)}
-              style={{
-                ...LOBBY_GHOST_BTN,
-                width: 120,
-                height: 40,
-                background: on ? "#f1c40f" : "transparent",
-                color: on ? "#1a2e1a" : "#f5f0e6",
-              }}
+              style={{ ...codeChoiceBtn(look, on), width: 120, height: 40 }}
             >
               {id === "hard" ? "Hard" : "Easy"}
             </button>
           );
         })}
       </div>
-      <div style={{ fontSize: 13, lineHeight: 1.4, color: "rgba(255,255,255,0.72)", maxWidth: 340 }}>
+      <div style={{ fontSize: 13, lineHeight: 1.4, color: dossier ? "#6d5c49" : "rgba(255,255,255,0.72)", maxWidth: 340 }}>
         {codeDifficultyBlurb(shownDifficulty)} Digits may repeat. No time limit.
       </div>
-      <button type="button" className="lobby-play-btn" style={{ ...LOBBY_GOLD_BTN, height: shortLand ? 40 : 50 }} disabled={busy} onClick={() => void createRoom()}>
+      <button type="button" className="lobby-play-btn" style={{ ...codeActionBtn(look), height: shortLand ? 40 : 50 }} disabled={busy} onClick={() => void createRoom()}>
         {busy ? "Connecting…" : "Create room"}
       </button>
       {session ? (
         <button
           type="button"
           className="lobby-play-btn"
-          style={LOBBY_GOLD_BTN}
+          style={codeActionBtn(look)}
           disabled={busy}
           onClick={() => {
             if (!auth.user) {
@@ -14676,21 +14842,21 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
         </button>
       ) : null}
       <div style={{ width: "100%", maxWidth: 340, textAlign: "left" }}>
-        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.4, textTransform: "uppercase", color: "rgba(255,255,255,0.55)", marginBottom: 8, textAlign: "center" }}>
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.4, textTransform: "uppercase", color: dossier ? "#6d5c49" : "rgba(255,255,255,0.55)", marginBottom: 8, textAlign: "center", fontFamily: dossier ? CODE_DIGIT_FONT : undefined }}>
           Open rooms
         </div>
         {lobbies.length === 0 ? (
-          <div style={{ padding: shortLand ? "8px 12px" : "14px 12px", borderRadius: 10, background: "rgba(0,0,0,0.28)", color: "rgba(255,255,255,0.62)", fontSize: 13, textAlign: "center" }}>
+          <div style={{ padding: shortLand ? "8px 12px" : "14px 12px", borderRadius: dossier ? 2 : 10, background: dossier ? "#f7f1e4" : "rgba(0,0,0,0.28)", color: dossier ? "#6d5c49" : "rgba(255,255,255,0.62)", fontSize: 13, textAlign: "center", border: dossier ? "1px solid rgba(26,20,15,0.16)" : undefined }}>
             No rooms yet
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {lobbies.map((lobby) => (
-              <div key={lobby.code} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 10, background: "rgba(0,0,0,0.32)", border: "1px solid rgba(255,255,255,0.12)" }}>
+              <div key={lobby.code} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: dossier ? 2 : 10, background: dossier ? "#f7f1e4" : "rgba(0,0,0,0.32)", border: dossier ? "1px solid rgba(26,20,15,0.16)" : "1px solid rgba(255,255,255,0.12)" }}>
                 <AvatarBubble src={lobby.hostAvatar} name={lobby.host} size={32} />
                 <div style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
-                  <div style={{ color: "#f5f0e6", fontWeight: 700, fontSize: 14 }}>{lobby.host}</div>
-                  <div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)" }}>
+                  <div style={{ color: dossier ? "#1a140f" : "#f5f0e6", fontWeight: 700, fontSize: 14 }}>{lobby.host}</div>
+                  <div style={{ fontSize: 11, color: dossier ? "#6d5c49" : "rgba(255,255,255,0.6)" }}>
                     {lobby.difficulty === "hard" ? "Hard" : "Easy"} · {lobby.count}/{lobby.max}
                   </div>
                 </div>
@@ -14698,7 +14864,7 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
                   type="button"
                   disabled={busy}
                   onClick={() => void joinRoom(lobby.code)}
-                  style={{ ...LOBBY_GOLD_BTN, width: 72, height: 36, fontSize: 14 }}
+                  style={{ ...codeActionBtn(look), width: 72, height: 36, fontSize: 14 }}
                 >
                   Join
                 </button>
@@ -14707,7 +14873,23 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
           </div>
         )}
       </div>
-      {error ? <div style={{ color: "#f5b7b1", fontSize: 13, lineHeight: 1.4 }}>{error}</div> : null}
+      <button
+        type="button"
+        onClick={() => chooseLook(dossier ? "classic" : "dossier")}
+        style={{
+          border: "none",
+          background: "transparent",
+          color: dossier ? "#6d5c49" : "rgba(255,255,255,0.55)",
+          fontSize: 12,
+          fontWeight: 700,
+          cursor: "pointer",
+          textDecoration: "underline",
+          padding: 0,
+        }}
+      >
+        {dossier ? "Classic look" : "Dossier look"}
+      </button>
+      {error ? <div style={{ color: dossier ? "#9d1c1c" : "#f5b7b1", fontSize: 13, lineHeight: 1.4 }}>{error}</div> : null}
     </>
   );
 }
