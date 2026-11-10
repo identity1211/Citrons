@@ -11,6 +11,7 @@ const daily = require("./daily");
 const stripeBilling = require("./stripe-billing");
 const elimination = require("./elimination");
 const { createCodeGame } = require("./codegame");
+const prize = require("./prize");
 
 push.init();
 
@@ -88,6 +89,16 @@ const codeGame = createCodeGame({
   cardCodeTaken: (code) => rooms.has(code),
   leaveCard: (ws) => leave(ws, true),
   releaseCardClerk: (clerkUserId) => releaseClerk(clerkUserId, null),
+  async onTournamentWin(_room, seat) {
+    try {
+      const email = await clerk.userEmail(seat && seat.clerkUserId);
+      const result = await prize.deliverPrize({ to: email });
+      return !!(result && result.ok);
+    } catch (err) {
+      console.error("prize", err);
+      return false;
+    }
+  },
 });
 
 function roomSpectators(room) {

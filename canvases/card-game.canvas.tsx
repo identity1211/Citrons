@@ -13653,6 +13653,11 @@ type CodeRoomView = {
   players: { id: string; name: string; avatar?: string; connected: boolean; locked: boolean; you: boolean }[];
   guesses: { byYou: boolean; guess: string; feedback: CodeFeedback }[];
   winner: "you" | "them" | null;
+  tournament?: boolean;
+  yourWins?: number;
+  theirWins?: number;
+  tournamentOver?: boolean;
+  prize?: boolean;
   status: string;
 };
 
@@ -13661,6 +13666,7 @@ type CodeLobbyInfo = {
   host: string;
   hostAvatar?: string;
   difficulty: CodeDifficulty;
+  tournament?: boolean;
   count: number;
   max: number;
 };
@@ -14132,6 +14138,7 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
   const shortLand = useShortLandscape();
   const [screen, setScreen] = useState<"pick" | "room">("pick");
   const [difficulty, setDifficulty] = useState<CodeDifficulty>("easy");
+  const [tournament, setTournament] = useState(false);
   const [view, setView] = useState<CodeRoomView | null>(null);
   const [lobbies, setLobbies] = useState<CodeLobbyInfo[]>([]);
   const [error, setError] = useState("");
@@ -14349,7 +14356,7 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
     setError("");
     try {
       const payload = await clerkPayload();
-      send({ type: "codeCreate", ...payload, difficulty });
+      send({ type: "codeCreate", ...payload, difficulty, tournament });
     } catch (err) {
       setBusy(false);
       setError(clerkErrorText(err));
@@ -14450,8 +14457,11 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
     else if (view.phase === "playing") {
       if (opponent && !opponent.connected) statusLine = "Opponent reconnecting…";
       else statusLine = view.yourTurn ? "Your turn" : "Opponent's turn";
-    } else if (view.winner === "you") statusLine = "You cracked the code";
-    else statusLine = "Your code was cracked";
+    } else if (view.tournamentOver) {
+      if (view.winner === "you") statusLine = "You won the tournament";
+      else statusLine = `${opponent ? opponent.name : "Opponent"} won the tournament`;
+    } else if (view.winner === "you") statusLine = view.tournament ? `Round won · ${view.yourWins || 0}–${view.theirWins || 0}` : "You cracked the code";
+    else statusLine = view.tournament ? `Round lost · ${view.yourWins || 0}–${view.theirWins || 0}` : "Your code was cracked";
   }
 
   const shell = (children: ReactNode) => (
@@ -14663,13 +14673,13 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
           >
             Rejoin
           </button>
-        ) : view.phase === "finished" && bothHere ? (
+        ) : view.phase === "finished" && bothHere && !view.tournamentOver ? (
           <button type="button" className="lobby-play-btn" onClick={() => send({ type: "codeAgain" })} style={{ ...codeActionBtn(look), maxWidth: 340 }}>
             Play again
           </button>
         ) : (
-          <div style={{ minHeight: 28, display: "flex", alignItems: "center", justifyContent: "center", color: dossier ? "#6d5c49" : "rgba(255,255,255,0.75)", fontSize: 14, fontWeight: 700 }}>
-            {view.phase === "playing" ? turnLine : statusLine}
+          <div style={{ minHeight: 28, display: "flex", alignItems: "center", justifyContent: "center", color: view.tournamentOver && view.prize ? (dossier ? "#9d1c1c" : "#f1c40f") : dossier ? "#6d5c49" : "rgba(255,255,255,0.75)", fontSize: 14, fontWeight: 700, lineHeight: 1.35, textAlign: "center", padding: "4px 8px" }}>
+            {view.tournamentOver && view.prize ? "You won the tournament. The prize was sent to your email." : view.phase === "playing" ? turnLine : statusLine}
           </div>
         )}
       </div>
@@ -14718,6 +14728,11 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
             >
               {dossier ? "Classic" : "Dossier"}
             </button>
+            {view.tournament ? (
+              <span style={{ fontSize: 12, fontWeight: 800, color: dossier ? "#1a140f" : "#f5f0e6", flexShrink: 0 }}>
+                {view.yourWins || 0}–{view.theirWins || 0}
+              </span>
+            ) : null}
             <span
               style={{
                 fontSize: 10,
@@ -14738,10 +14753,14 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
           {view.phase === "waiting" ? (
             <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, padding: 16 }}>
               <div style={{ fontSize: 15, lineHeight: 1.4, color: dossier ? "#6d5c49" : "rgba(255,255,255,0.75)", maxWidth: 280 }}>
-                {view.players.length < 2 ? "Your room is in the list. The other player joins from there." : statusLine}
+                {view.players.length < 2
+                  ? view.tournament
+                    ? "First to 5 wins. Your room is in the list. The other player joins from there."
+                    : "Your room is in the list. The other player joins from there."
+                  : statusLine}
               </div>
               {view.host && view.players.length < 2 ? (
-                <div style={{ display: "flex", gap: 8 }}>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
                   {(["easy", "hard"] as CodeDifficulty[]).map((id) => (
                     <button
                       key={id}
@@ -14752,6 +14771,13 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
                       {id === "hard" ? "Hard" : "Easy"}
                     </button>
                   ))}
+                  <button
+                    type="button"
+                    onClick={() => send({ type: "codeTournament", tournament: !view.tournament })}
+                    style={{ ...codeChoiceBtn(look, !!view.tournament), width: 168, height: 36 }}
+                  >
+                    {view.tournament ? "Tournament · 5" : "Single game"}
+                  </button>
                 </div>
               ) : null}
               {error ? <div style={{ color: dossier ? "#9d1c1c" : "#f5b7b1", fontSize: 13 }}>{error}</div> : null}
@@ -14800,7 +14826,7 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
           Sign in with Google first — button at the top right.
         </div>
       )}
-      <div style={{ display: "flex", gap: 8 }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
         {(["easy", "hard"] as CodeDifficulty[]).map((id) => {
           const on = shownDifficulty === id;
           return (
@@ -14814,9 +14840,17 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
             </button>
           );
         })}
+        <button
+          type="button"
+          onClick={() => setTournament((on) => !on)}
+          style={{ ...codeChoiceBtn(look, tournament), width: 200, height: 40 }}
+        >
+          {tournament ? "Tournament · first to 5" : "Single game"}
+        </button>
       </div>
       <div style={{ fontSize: 13, lineHeight: 1.4, color: dossier ? "#6d5c49" : "rgba(255,255,255,0.72)", maxWidth: 340 }}>
         {codeDifficultyBlurb(shownDifficulty)} Digits may repeat. No time limit.
+        {tournament ? " First player to win 5 rounds takes the match." : ""}
       </div>
       <button type="button" className="lobby-play-btn" style={{ ...codeActionBtn(look), height: shortLand ? 40 : 50 }} disabled={busy} onClick={() => void createRoom()}>
         {busy ? "Connecting…" : "Create room"}
@@ -14857,7 +14891,7 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
                 <div style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
                   <div style={{ color: dossier ? "#1a140f" : "#f5f0e6", fontWeight: 700, fontSize: 14 }}>{lobby.host}</div>
                   <div style={{ fontSize: 11, color: dossier ? "#6d5c49" : "rgba(255,255,255,0.6)" }}>
-                    {lobby.difficulty === "hard" ? "Hard" : "Easy"} · {lobby.count}/{lobby.max}
+                    {lobby.difficulty === "hard" ? "Hard" : "Easy"}{lobby.tournament ? " · Tournament" : ""} · {lobby.count}/{lobby.max}
                   </div>
                 </div>
                 <button

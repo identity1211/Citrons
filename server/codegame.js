@@ -7,6 +7,7 @@ const ROOM_TTL_MS = 3 * 60 * 60 * 1000;
 const REJOIN_MS = 3 * 60 * 1000;
 const WAITING_REJOIN_MS = 2 * 60 * 1000;
 const MAX_GUESSES = 800;
+const TOURNAMENT_GOAL = 5;
 
 const CODE_TYPES = new Set([
   "codeBrowse",
@@ -17,6 +18,7 @@ const CODE_TYPES = new Set([
   "codeGuess",
   "codeDifficulty",
   "codeAgain",
+  "codeTournament",
   "codeLeave",
 ]);
 
@@ -34,6 +36,10 @@ function parseDigits(raw) {
 
 function parseDifficulty(raw) {
   return String(raw || "").trim().toLowerCase() === "hard" ? "hard" : "easy";
+}
+
+function parseTournament(raw) {
+  return raw === true || raw === 1 || String(raw || "").trim().toLowerCase() === "true";
 }
 
 /** Public hint for one guess. Never includes the secret. */
@@ -120,6 +126,11 @@ function createCodeGame(deps) {
         feedback: g.feedback,
       })),
       winner: room.winnerId ? (room.winnerId === seat.id ? "you" : "them") : null,
+      tournament: !!room.tournament,
+      yourWins: seat.wins || 0,
+      theirWins: opponent ? opponent.wins || 0 : 0,
+      tournamentOver: !!room.tournamentOver,
+      prize: !!(room.prizeSent && room.matchWinnerId === seat.id),
       status: room.status || "",
     };
   }
@@ -142,6 +153,7 @@ function createCodeGame(deps) {
         host: host.name,
         hostAvatar: host.avatar || "",
         difficulty: room.difficulty,
+        tournament: !!room.tournament,
         count: room.seats.length,
         max: 2,
       });
@@ -222,7 +234,13 @@ function createCodeGame(deps) {
       room.turn = 0;
       room.pendingFirstId = null;
       room.status = "Opponent left";
-      for (const s of room.seats) s.secret = null;
+      room.tournamentOver = false;
+      room.matchWinnerId = null;
+      room.prizeSent = false;
+      for (const s of room.seats) {
+        s.secret = null;
+        s.wins = 0;
+      }
     }
     broadcast(room);
     notifyBrowsers();
@@ -296,6 +314,7 @@ function createCodeGame(deps) {
       name: deps.sanitizeName(name),
       avatar: deps.sanitizeAvatar(avatar),
       clerkUserId: clerkUserId || null,
+      wins: 0,
       ws: null,
       secret: null,
       leaveTimer: null,
@@ -306,6 +325,25 @@ function createCodeGame(deps) {
     const result = await deps.identifyClerk(ws, token, { required });
     if (!result) return null;
     return { userId: result.userId || null };
+  }
+
+  function noteTournamentWin(room, seat) {
+    if (!room.tournament || room.tournamentOver) return;
+    seat.wins = (seat.wins || 0) + 1;
+    if (seat.wins < TOURNAMENT_GOAL) return;
+    room.tournamentOver = true;
+    room.matchWinnerId = seat.id;
+    if (typeof deps.onTournamentWin !== "function") return;
+    Promise.resolve(deps.onTournamentWin(room, seat))
+      .then((sent) => {
+        const live = codeRooms.get(room.code);
+        if (!live || live.matchWinnerId !== seat.id) return;
+        if (sent) live.prizeSent = true;
+        broadcast(live);
+      })
+      .catch((err) => {
+        console.error("prize", err);
+      });
   }
 
   async function handle(ws, msg) {
@@ -333,6 +371,10 @@ function createCodeGame(deps) {
         guesses: [],
         turn: 0,
         winnerId: null,
+        tournament: parseTournament(msg.tournament),
+        tournamentOver: false,
+        matchWinnerId: null,
+        prizeSent: false,
         pendingFirstId: null,
         status: "",
         createdAt: Date.now(),
@@ -436,6 +478,7 @@ function createCodeGame(deps) {
         room.phase = "finished";
         room.winnerId = seat.id;
         room.status = "";
+        noteTournamentWin(room, seat);
       } else {
         const next = room.seats.findIndex((s) => s.id !== seat.id);
         room.turn = next < 0 ? room.turn : next;
@@ -445,12 +488,27 @@ function createCodeGame(deps) {
     }
     if (type === "codeAgain") {
       if (room.phase !== "finished") return deps.error(ws, "Finish the round first");
+      if (room.tournamentOver) return deps.error(ws, "The tournament is over");
       if (room.seats.length < 2 || room.seats.some((s) => !isOnline(s))) {
         return deps.error(ws, "Wait for your opponent");
       }
       const loser = room.seats.find((s) => s.id !== room.winnerId);
       startSecrets(room, loser ? loser.id : null);
       broadcast(room);
+      return;
+    }
+    if (type === "codeTournament") {
+      if (room.hostId !== seat.id) return deps.error(ws, "Only the host can change the match");
+      if (room.phase !== "waiting" || room.seats.length > 1) {
+        return deps.error(ws, "The match is locked");
+      }
+      room.tournament = parseTournament(msg.tournament);
+      room.tournamentOver = false;
+      room.matchWinnerId = null;
+      room.prizeSent = false;
+      for (const s of room.seats) s.wins = 0;
+      broadcast(room);
+      notifyBrowsers();
       return;
     }
     deps.error(ws, "Unknown command");

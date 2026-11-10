@@ -228,12 +228,28 @@ function clerkConfigured() {
   return !!DEFAULT_CLERK_PK;
 }
 
+async function userEmail(userId) {
+  const id = String(userId || "").trim();
+  if (!id || !clerkSecret()) return "";
+  try {
+    const data = await clerkApi("GET", `/users/${encodeURIComponent(id)}`);
+    if (!data) return "";
+    const list = Array.isArray(data.email_addresses) ? data.email_addresses : [];
+    const primary = list.find((entry) => entry.id === data.primary_email_address_id) || list[0];
+    return String((primary && primary.email_address) || "").trim().toLowerCase();
+  } catch (err) {
+    console.error("clerk email", err);
+    return "";
+  }
+}
+
 module.exports = {
   verifyClerkToken,
   clerkConfigured,
   userHasPlus,
   userHasSupporter,
   userHasEmojiPerks,
+  userEmail,
   claimsIndicatePlus,
   setPlusCache,
   peekPlusCache,
