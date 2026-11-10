@@ -14254,8 +14254,6 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
   const auth = useClerkAuth();
   const shortLand = useShortLandscape();
   const [screen, setScreen] = useState<"pick" | "room">("pick");
-  const [difficulty, setDifficulty] = useState<CodeDifficulty>("easy");
-  const [tournament, setTournament] = useState(false);
   const [view, setView] = useState<CodeRoomView | null>(null);
   const [lobbies, setLobbies] = useState<CodeLobbyInfo[]>([]);
   const [error, setError] = useState("");
@@ -14464,7 +14462,7 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
     if (el) el.scrollTop = el.scrollHeight;
   }, [view?.guesses.length, view?.phase]);
 
-  async function createRoom() {
+  async function createRoom(asTournament: boolean) {
     if (!auth.user) {
       setError("Sign in with Google first");
       return;
@@ -14473,7 +14471,7 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
     setError("");
     try {
       const payload = await clerkPayload();
-      send({ type: "codeCreate", ...payload, difficulty, tournament });
+      send({ type: "codeCreate", ...payload, difficulty: "easy", tournament: asTournament });
     } catch (err) {
       setBusy(false);
       setError(clerkErrorText(err));
@@ -14558,7 +14556,6 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
     setLook(next);
   }
 
-  const shownDifficulty: CodeDifficulty = view?.difficulty === "hard" ? "hard" : difficulty;
   const dossier = look === "dossier";
   const opponent = view?.players.find((p) => !p.you) || null;
   const yourGuesses = (view?.guesses || []).filter((g) => g.byYou);
@@ -14877,24 +14874,47 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
                   : statusLine}
               </div>
               {view.host && view.players.length < 2 ? (
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
-                  {(["easy", "hard"] as CodeDifficulty[]).map((id) => (
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
+                  <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
                     <button
-                      key={id}
                       type="button"
-                      onClick={() => send({ type: "codeDifficulty", difficulty: id })}
-                      style={{ ...codeChoiceBtn(look, view.difficulty === id), width: 110, height: 36 }}
+                      onClick={() => {
+                        if (!view.tournament) return;
+                        send({ type: "codeTournament", tournament: false });
+                      }}
+                      style={{ ...codeChoiceBtn(look, !view.tournament), width: 120, height: 36 }}
                     >
-                      {id === "hard" ? "Hard" : "Easy"}
+                      Duel
                     </button>
-                  ))}
-                  <button
-                    type="button"
-                    onClick={() => send({ type: "codeTournament", tournament: !view.tournament })}
-                    style={{ ...codeChoiceBtn(look, !!view.tournament), width: 168, height: 36 }}
-                  >
-                    {view.tournament ? "Tournament · 5" : "Single game"}
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (view.tournament) return;
+                        send({ type: "codeTournament", tournament: true });
+                      }}
+                      style={{ ...codeChoiceBtn(look, !!view.tournament), width: 140, height: 36 }}
+                    >
+                      Tournament
+                    </button>
+                  </div>
+                  <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+                    {(["easy", "hard"] as CodeDifficulty[]).map((id) => (
+                      <button
+                        key={id}
+                        type="button"
+                        onClick={() => {
+                          if (view.difficulty === id) return;
+                          send({ type: "codeDifficulty", difficulty: id });
+                        }}
+                        style={{ ...codeChoiceBtn(look, view.difficulty === id), width: 110, height: 36 }}
+                      >
+                        {id === "hard" ? "Hard" : "Easy"}
+                      </button>
+                    ))}
+                  </div>
+                  <div style={{ fontSize: 13, lineHeight: 1.4, color: dossier ? "#6d5c49" : "rgba(255,255,255,0.72)", maxWidth: 280, textAlign: "center" }}>
+                    {codeDifficultyBlurb(view.difficulty === "hard" ? "hard" : "easy")}
+                  </div>
                 </div>
               ) : null}
               {error ? <div style={{ color: dossier ? "#9d1c1c" : "#f5b7b1", fontSize: 13 }}>{error}</div> : null}
@@ -14943,35 +14963,29 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
           Sign in with Google first — button at the top right.
         </div>
       )}
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
-        {(["easy", "hard"] as CodeDifficulty[]).map((id) => {
-          const on = shownDifficulty === id;
-          return (
-            <button
-              key={id}
-              type="button"
-              onClick={() => setDifficulty(id)}
-              style={{ ...codeChoiceBtn(look, on), width: 120, height: 40 }}
-            >
-              {id === "hard" ? "Hard" : "Easy"}
-            </button>
-          );
-        })}
+      <div style={{ display: "flex", gap: 8, width: "100%", maxWidth: 340 }}>
         <button
           type="button"
-          onClick={() => setTournament((on) => !on)}
-          style={{ ...codeChoiceBtn(look, tournament), width: 200, height: 40 }}
+          className="lobby-play-btn"
+          style={{ ...codeActionBtn(look), flex: 1, width: "auto", maxWidth: "none", height: shortLand ? 40 : 50, fontSize: 15 }}
+          disabled={busy}
+          onClick={() => void createRoom(false)}
         >
-          {tournament ? "Tournament · first to 5" : "Single game"}
+          Duel
+        </button>
+        <button
+          type="button"
+          className="lobby-play-btn"
+          style={{ ...codeActionBtn(look), flex: 1, width: "auto", maxWidth: "none", height: shortLand ? 40 : 50, fontSize: 15 }}
+          disabled={busy}
+          onClick={() => void createRoom(true)}
+        >
+          Tournament
         </button>
       </div>
       <div style={{ fontSize: 13, lineHeight: 1.4, color: dossier ? "#6d5c49" : "rgba(255,255,255,0.72)", maxWidth: 340 }}>
-        {codeDifficultyBlurb(shownDifficulty)} Digits may repeat. No time limit.
-        {tournament ? " First player to win 5 rounds takes the match." : ""}
+        Duel is one round. Tournament is first to 5. Digits may repeat. No time limit.
       </div>
-      <button type="button" className="lobby-play-btn" style={{ ...codeActionBtn(look), height: shortLand ? 40 : 50 }} disabled={busy} onClick={() => void createRoom()}>
-        {busy ? "Connecting…" : "Create room"}
-      </button>
       {session ? (
         <button
           type="button"
@@ -15008,7 +15022,7 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
                 <div style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
                   <div style={{ color: dossier ? "#1a140f" : "#f5f0e6", fontWeight: 700, fontSize: 14 }}>{lobby.host}</div>
                   <div style={{ fontSize: 11, color: dossier ? "#6d5c49" : "rgba(255,255,255,0.6)" }}>
-                    {lobby.difficulty === "hard" ? "Hard" : "Easy"}{lobby.tournament ? " · Tournament" : ""} · {lobby.count}/{lobby.max}
+                    {lobby.tournament ? "Tournament" : "Duel"} · {lobby.difficulty === "hard" ? "Hard" : "Easy"} · {lobby.count}/{lobby.max}
                   </div>
                 </div>
                 <button
