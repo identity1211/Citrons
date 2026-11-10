@@ -7,7 +7,7 @@ const ROOM_TTL_MS = 3 * 60 * 60 * 1000;
 const REJOIN_MS = 3 * 60 * 1000;
 const WAITING_REJOIN_MS = 2 * 60 * 1000;
 const MAX_GUESSES = 800;
-const TOURNAMENT_GOAL = 5;
+const TOURNAMENT_GOAL = 3;
 
 const CODE_TYPES = new Set([
   "codeBrowse",

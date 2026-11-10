@@ -225,7 +225,7 @@ async function tournament() {
   await game.handle(guest, { type: "codeJoin", code: created.code, name: "Marta", clerkToken: "user-b" });
   assert(lastState(host).tournament === true && lastState(host).yourWins === 0, "tournament starts at zero");
 
-  for (let round = 1; round <= 4; round++) {
+  for (let round = 1; round <= 2; round++) {
     await game.handle(host, { type: "codeSecret", secret: "1111" });
     await game.handle(guest, { type: "codeSecret", secret: "2222" });
     await game.handle(host, { type: "codeGuess", guess: "0000" });
@@ -233,7 +233,7 @@ async function tournament() {
     const done = lastState(guest);
     assert(done.phase === "finished" && done.winner === "you", "guest wins the round");
     assert(done.yourWins === round && done.theirWins === 0, "score follows the rounds");
-    assert(done.tournamentOver === false && done.prize === false, "four wins do not end it");
+    assert(done.tournamentOver === false && done.prize === false, "two wins do not end it");
     await game.handle(guest, { type: "codeAgain" });
     assert(lastState(guest).phase === "secrets" && lastState(guest).yourWins === round, "rematch keeps the score");
   }
@@ -243,14 +243,70 @@ async function tournament() {
   await game.handle(host, { type: "codeGuess", guess: "9999" });
   await game.handle(guest, { type: "codeGuess", guess: "1111" });
   const won = lastState(guest);
-  assert(won.tournamentOver === true && won.winner === "you" && won.yourWins === 5, "fifth guest win closes the tournament");
+  assert(won.tournamentOver === true && won.winner === "you" && won.yourWins === 3, "third guest win closes the tournament");
   assert(lastState(host).tournamentOver === true && lastState(host).winner === "them" && lastState(host).prize === false, "the other player does not see the prize");
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert(awarded.length === 1 && awarded[0] === "user-b", "prize runs once for the winner");
   assert(lastState(guest).prize === true, "winner sees the prize after it is accepted");
   assert(lastState(host).prize === false, "prize stays off the other screen");
   await game.handle(host, { type: "codeAgain" });
-  assert(host.sent[host.sent.length - 1].type === "error", "no rematch after five");
+  assert(host.sent[host.sent.length - 1].type === "error", "no rematch after three");
+
+  const other = createCodeGame({
+    rng: () => 0,
+    send(ws, msg) {
+      ws.send(JSON.stringify(msg));
+    },
+    error(ws, message) {
+      ws.send(JSON.stringify({ type: "error", message }));
+    },
+    identifyClerk(_ws, token) {
+      if (!token) return null;
+      return { userId: String(token) };
+    },
+    sanitizeName(name) {
+      return String(name || "Player").slice(0, 18);
+    },
+    sanitizeAvatar() {
+      return "";
+    },
+    makeId() {
+      return "id" + Math.random().toString(16).slice(2);
+    },
+    cardCodeTaken() {
+      return false;
+    },
+    leaveCard() {},
+    releaseCardClerk() {},
+    onTournamentWin(_room, seat) {
+      awarded.push(seat.clerkUserId);
+      return seat.clerkUserId === "user-b";
+    },
+  });
+  const host2 = fakeWs();
+  const guest2 = fakeWs();
+  await other.handle(host2, { type: "codeCreate", name: "Lime", clerkToken: "user-a", difficulty: "easy", tournament: true });
+  const created2 = host2.sent.find((m) => m.type === "codeJoined");
+  await other.handle(guest2, { type: "codeJoin", code: created2.code, name: "Marta", clerkToken: "user-b" });
+  await other.handle(host2, { type: "codeSecret", secret: "1111" });
+  await other.handle(guest2, { type: "codeSecret", secret: "2222" });
+  await other.handle(host2, { type: "codeGuess", guess: "2222" });
+  assert(lastState(host2).yourWins === 1 && lastState(host2).tournamentOver === false, "the other player can lead without ending it");
+  await other.handle(host2, { type: "codeAgain" });
+  for (let round = 2; round <= 3; round++) {
+    await other.handle(host2, { type: "codeSecret", secret: "1111" });
+    await other.handle(guest2, { type: "codeSecret", secret: "4444" });
+    await other.handle(guest2, { type: "codeGuess", guess: "0000" });
+    await other.handle(host2, { type: "codeGuess", guess: "4444" });
+    if (round < 3) {
+      assert(lastState(host2).yourWins === round && lastState(host2).tournamentOver === false, "two wins by anyone else do not end it");
+      await other.handle(host2, { type: "codeAgain" });
+    }
+  }
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert(lastState(host2).tournamentOver === true && lastState(host2).yourWins === 3 && lastState(host2).prize === false, "three wins by anyone else do not send the prize");
+  assert(lastState(guest2).prize === false, "the prize stays off when she does not win");
+  assert(awarded.filter((id) => id === "user-a").length === 1, "the prize check still runs for that winner");
 
   console.log("tournament tests ok");
 }

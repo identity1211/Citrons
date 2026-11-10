@@ -14869,7 +14869,7 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
               <div style={{ fontSize: 15, lineHeight: 1.4, color: dossier ? "#6d5c49" : "rgba(255,255,255,0.75)", maxWidth: 280 }}>
                 {view.players.length < 2
                   ? view.tournament
-                    ? "First to 5 wins. Your room is in the list. The other player joins from there."
+                    ? "First to 3 wins. Your room is in the list. The other player joins from there."
                     : "Your room is in the list. The other player joins from there."
                   : statusLine}
               </div>
@@ -14984,7 +14984,7 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
         </button>
       </div>
       <div style={{ fontSize: 13, lineHeight: 1.4, color: dossier ? "#6d5c49" : "rgba(255,255,255,0.72)", maxWidth: 340 }}>
-        Duel is one round. Tournament is first to 5. Digits may repeat. No time limit.
+        Duel is one round. Tournament is first to 3. Digits may repeat. No time limit.
       </div>
       {session ? (
         <button
