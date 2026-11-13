@@ -152,8 +152,14 @@ Set in the Railway dashboard, not in git:
    - DNS away from `identity1211.github.io`  
    - Optionally `DEFAULT_WS` → `wss://citrons.lat`  
    - Full plan was written in chat (Oct 2026); code not started
-2. Android UX polish as needed (lobby spacing / keyboard mostly fixed in 1.0.5–1.0.6)
-3. Do not commit: `.cursor/`, `previews/`, `android/.kotlin/`, canvas status/tsconfig, `server/private/` unless asked
+2. **Secret code rework (13 Nov 2026, commits `117683c` and `fdf0076`) is live but not checked on real devices.** Still to verify by hand:
+   - Google sign-in, then two real players in one room joined by a `?room=CODE` link, including rematch
+   - Safari on iPhone and the Android WebView app (Profile → **Refresh game** first)
+   - The system share sheet, and how loud the sounds are
+   - It was tested only in headless Chrome against a local copy of `server/codegame.js` with a fake sign-in. That test rig was not saved in the repo
+   - Decisions already made by the owner, do not undo: soft sine tones and bells for sound (no clicks, no 8-bit beeps); the Classic look stays removed; the server was not changed for this work
+3. Android UX polish as needed (lobby spacing / keyboard mostly fixed in 1.0.5–1.0.6)
+4. Do not commit: `.cursor/`, `previews/`, `android/.kotlin/`, canvas status/tsconfig, `server/private/` unless asked
 
 ---
 
