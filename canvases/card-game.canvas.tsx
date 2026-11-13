@@ -14010,48 +14010,59 @@ function codeAudio(): AudioContext | null {
   }
 }
 
-function codeTone(ctx: AudioContext, freq: number, at: number, dur: number, type: OscillatorType, peak: number) {
+/** A sine with a soft attack. `to` slides the pitch, which reads as a knock and not a beep. */
+function codeTone(ctx: AudioContext, freq: number, at: number, dur: number, peak: number, to?: number) {
+  const t = ctx.currentTime + at;
   const osc = ctx.createOscillator();
   const gain = ctx.createGain();
-  osc.type = type;
-  osc.frequency.setValueAtTime(freq, ctx.currentTime + at);
-  gain.gain.setValueAtTime(0.0001, ctx.currentTime + at);
-  gain.gain.exponentialRampToValueAtTime(peak, ctx.currentTime + at + 0.012);
-  gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + at + dur);
+  osc.type = "sine";
+  osc.frequency.setValueAtTime(freq, t);
+  if (to) osc.frequency.exponentialRampToValueAtTime(to, t + dur);
+  gain.gain.setValueAtTime(0.0001, t);
+  gain.gain.exponentialRampToValueAtTime(peak, t + 0.008);
+  gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
   osc.connect(gain);
   gain.connect(ctx.destination);
-  osc.start(ctx.currentTime + at);
-  osc.stop(ctx.currentTime + at + dur + 0.03);
+  osc.start(t);
+  osc.stop(t + dur + 0.03);
+}
+
+/** A small bell: the note plus two quiet overtones that die sooner. */
+function codeBell(ctx: AudioContext, freq: number, at: number, dur: number, peak: number) {
+  codeTone(ctx, freq, at, dur, peak);
+  codeTone(ctx, freq * 2, at, dur * 0.6, peak * 0.22);
+  codeTone(ctx, freq * 3.01, at, dur * 0.35, peak * 0.08);
 }
 
 type CodeSfx = "key" | "erase" | "pin" | "deny" | "reveal" | "turn" | "win" | "lose" | "stamp";
 
-/** Short synthesized cues. No audio files, so nothing extra to download. */
+/**
+ * Short synthesized cues: soft rounded sine tones and small bells, nothing else.
+ * Square and saw waves sounded like an old console, and noise clicks were dropped by the owner's choice.
+ * No audio files, so nothing extra to download.
+ */
 function codeSfx(kind: CodeSfx) {
   if (!codeSoundOn()) return;
   const ctx = codeAudio();
   if (!ctx) return;
   try {
-    if (kind === "key") codeTone(ctx, 520, 0, 0.05, "triangle", 0.03);
-    else if (kind === "erase") codeTone(ctx, 300, 0, 0.05, "triangle", 0.03);
+    if (kind === "key") codeTone(ctx, 420, 0, 0.05, 0.05, 300);
+    else if (kind === "erase") codeTone(ctx, 300, 0, 0.06, 0.045, 220);
     else if (kind === "pin") {
-      codeTone(ctx, 700, 0, 0.05, "square", 0.02);
-      codeTone(ctx, 980, 0.05, 0.06, "square", 0.02);
-    } else if (kind === "deny") {
-      codeTone(ctx, 170, 0, 0.09, "sawtooth", 0.03);
-      codeTone(ctx, 140, 0.09, 0.12, "sawtooth", 0.03);
-    } else if (kind === "reveal") {
-      for (let i = 0; i < 4; i++) codeTone(ctx, 400 + i * 45, i * 0.11, 0.07, "triangle", 0.035);
+      codeTone(ctx, 1320, 0, 0.12, 0.03);
+      codeTone(ctx, 1760, 0.05, 0.15, 0.025);
+    } else if (kind === "deny") codeTone(ctx, 150, 0, 0.16, 0.07, 110);
+    else if (kind === "reveal") {
+      for (let i = 0; i < 4; i++) codeTone(ctx, 520, i * 0.11, 0.05, 0.04, 400);
     } else if (kind === "turn") {
-      codeTone(ctx, 660, 0, 0.09, "sine", 0.05);
-      codeTone(ctx, 880, 0.1, 0.14, "sine", 0.05);
-    } else if (kind === "stamp") {
-      codeTone(ctx, 90, 0, 0.16, "sine", 0.12);
-      codeTone(ctx, 60, 0.02, 0.2, "triangle", 0.08);
-    } else if (kind === "win") {
-      [523, 659, 784, 1047].forEach((f, i) => codeTone(ctx, f, i * 0.1, 0.2, "triangle", 0.05));
+      codeBell(ctx, 784, 0, 0.5, 0.05);
+      codeBell(ctx, 1175, 0.12, 0.6, 0.04);
+    } else if (kind === "stamp") codeTone(ctx, 95, 0, 0.24, 0.2, 45);
+    else if (kind === "win") {
+      [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => codeBell(ctx, f, i * 0.09, 0.7, 0.05));
     } else if (kind === "lose") {
-      [392, 330, 262].forEach((f, i) => codeTone(ctx, f, i * 0.14, 0.24, "triangle", 0.045));
+      codeBell(ctx, 392, 0, 0.6, 0.05);
+      codeBell(ctx, 311, 0.18, 0.8, 0.05);
     }
   } catch {
     /* ignore */
