@@ -13752,12 +13752,23 @@ function saveSoloLook(key: string, value: string) {
 }
 
 const CODE_SESSION_KEY = "citrons-code-session";
+const CODE_JOIN_KEY = "citrons-code-join";
+const CODE_SOUND_KEY = "citrons-code-sound";
+const CODE_HOWTO_KEY = "citrons-code-howto-seen";
+const CODE_DAILY_KEY = "citrons-code-daily";
+const CODE_DAILY_STATS_KEY = "citrons-code-daily-stats";
+const CODE_BOT_NAME = "Agent Zero";
+/** Daily code #1 is this UTC day. */
+const CODE_DAILY_EPOCH_DAY = Math.floor(Date.UTC(2026, 10, 13) / 86400000);
+const CODE_DAILY_MAX_GUESSES = 200;
 
 type CodeDifficulty = "easy" | "hard";
 
 type CodeFeedback =
   | { kind: "easy"; places: boolean[]; extras: string[] }
   | { kind: "hard"; count: number };
+
+type CodeGuess = { byYou: boolean; guess: string; feedback: CodeFeedback };
 
 type CodeRoomView = {
   code: string;
@@ -13768,7 +13779,7 @@ type CodeRoomView = {
   opponentSecret: string | null;
   yourTurn: boolean;
   players: { id: string; name: string; avatar?: string; connected: boolean; locked: boolean; you: boolean }[];
-  guesses: { byYou: boolean; guess: string; feedback: CodeFeedback }[];
+  guesses: CodeGuess[];
   winner: "you" | "them" | null;
   tournament?: boolean;
   yourWins?: number;
@@ -13789,6 +13800,73 @@ type CodeLobbyInfo = {
 };
 
 type CodeSession = { code: string; token: string; name: string; savedAt: number };
+
+type CodeMode = "online" | "bot" | "daily";
+
+type CodeBotGame = {
+  difficulty: CodeDifficulty;
+  phase: "secrets" | "playing" | "finished";
+  yourSecret: string | null;
+  botSecret: string;
+  guesses: CodeGuess[];
+  yourTurn: boolean;
+  youFirst: boolean;
+  winner: "you" | "them" | null;
+  yourWins: number;
+  theirWins: number;
+  round: number;
+};
+
+type CodeDailySave = { day: number; guesses: string[]; solved: boolean };
+
+type CodeDailyStats = { streak: number; lastSolvedDay: number; solved: number; best: number };
+
+/** A link with ?room=CODE opens Secret code and joins that room. ?room=daily opens the daily code. */
+function rememberCodeJoinFromUrl() {
+  if (typeof window === "undefined") return;
+  try {
+    const page = new URL(window.location.href);
+    const q = page.searchParams.get("room");
+    if (q == null) return;
+    const code = String(q)
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, "")
+      .slice(0, 12);
+    if (code) sessionStorage.setItem(CODE_JOIN_KEY, code);
+    // Drop the parameter so a reload does not try to join the same room again.
+    page.searchParams.delete("room");
+    window.history.replaceState({}, "", `${page.pathname}${page.search}${page.hash}` || "/");
+  } catch {
+    /* ignore */
+  }
+}
+
+rememberCodeJoinFromUrl();
+
+function pendingCodeJoin(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    return String(sessionStorage.getItem(CODE_JOIN_KEY) || "")
+      .trim()
+      .toUpperCase();
+  } catch {
+    return "";
+  }
+}
+
+function clearCodeJoin() {
+  try {
+    sessionStorage.removeItem(CODE_JOIN_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+function codeInviteUrl(code: string): string {
+  const base = appUrl() || "https://citrons.lat/";
+  return `${base}?room=${encodeURIComponent(code)}`;
+}
 
 function readCodeSession(): CodeSession | null {
   try {
@@ -13835,6 +13913,180 @@ function clearCodeSession() {
   }
 }
 
+function codeParse(raw: unknown): string | null {
+  const s = String(raw == null ? "" : raw).trim();
+  return /^\d{4}$/.test(s) ? s : null;
+}
+
+/** Same rules as feedback() in server/codegame.js. Used by the solo modes, which never reach the server. */
+function codeFeedback(difficulty: CodeDifficulty, secret: string, guess: string): CodeFeedback {
+  const places = [0, 1, 2, 3].map((i) => secret[i] === guess[i]);
+  if (difficulty === "hard") return { kind: "hard", count: places.filter(Boolean).length };
+  const pool: string[] = [];
+  const extras: string[] = [];
+  for (let i = 0; i < 4; i++) {
+    if (!places[i]) pool.push(secret[i]);
+  }
+  for (let i = 0; i < 4; i++) {
+    if (places[i]) continue;
+    const at = pool.indexOf(guess[i]);
+    if (at < 0) continue;
+    extras.push(guess[i]);
+    pool.splice(at, 1);
+  }
+  return { kind: "easy", places, extras };
+}
+
+function codeInPlace(feedback: CodeFeedback): number {
+  return feedback.kind === "hard" ? Math.max(0, Math.min(4, Math.floor(Number(feedback.count) || 0))) : feedback.places.filter(Boolean).length;
+}
+
+function codeBestInPlace(guesses: CodeGuess[]): number {
+  let best = 0;
+  for (const g of guesses) best = Math.max(best, codeInPlace(g.feedback));
+  return best;
+}
+
+/** Digits that Easy feedback has ruled out, and digits it has confirmed. Hard feedback rules nothing out. */
+function codeDigitNotes(guesses: CodeGuess[]): { dead: Set<string>; known: Set<string> } {
+  const dead = new Set<string>();
+  const known = new Set<string>();
+  for (const g of guesses) {
+    if (g.feedback.kind !== "easy") continue;
+    const credited: Record<string, number> = {};
+    for (let i = 0; i < 4; i++) {
+      if (g.feedback.places[i]) credited[g.guess[i]] = (credited[g.guess[i]] || 0) + 1;
+    }
+    for (const d of g.feedback.extras) credited[d] = (credited[d] || 0) + 1;
+    for (const d of g.guess.split("")) {
+      if (credited[d]) known.add(d);
+      else dead.add(d);
+    }
+  }
+  for (const d of known) dead.delete(d);
+  return { dead, known };
+}
+
+let codeAllCache: string[] | null = null;
+
+function codeAllCodes(): string[] {
+  if (!codeAllCache) {
+    codeAllCache = [];
+    for (let i = 0; i < 10000; i++) codeAllCache.push(String(i).padStart(4, "0"));
+  }
+  return codeAllCache;
+}
+
+function codeRandom(): string {
+  return String(Math.floor(Math.random() * 10000)).padStart(4, "0");
+}
+
+function codeDailyDay(): number {
+  return Math.floor(Date.now() / 86400000);
+}
+
+function codeDailyNumber(day: number): number {
+  return Math.max(1, day - CODE_DAILY_EPOCH_DAY + 1);
+}
+
+/** One code per UTC day, the same in every browser. Nothing is at stake, so it is derived here and not on the server. */
+function codeDailySecret(day: number): string {
+  const seed = `citrons-secret-code-${day}`;
+  let h = 2166136261 ^ day;
+  for (let i = 0; i < seed.length; i++) {
+    h ^= seed.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  h ^= h >>> 13;
+  h = Math.imul(h, 0x5bd1e995);
+  h ^= h >>> 15;
+  return String((h >>> 0) % 10000).padStart(4, "0");
+}
+
+function codeDailyLoad(): CodeDailySave {
+  const day = codeDailyDay();
+  try {
+    const parsed = JSON.parse(localStorage.getItem(CODE_DAILY_KEY) || "null");
+    if (parsed && Number(parsed.day) === day && Array.isArray(parsed.guesses)) {
+      const guesses = parsed.guesses.map((g: unknown) => codeParse(g)).filter(Boolean).slice(0, CODE_DAILY_MAX_GUESSES) as string[];
+      return { day, guesses, solved: guesses.includes(codeDailySecret(day)) };
+    }
+  } catch {
+    /* ignore */
+  }
+  return { day, guesses: [], solved: false };
+}
+
+function codeDailyStore(save: CodeDailySave) {
+  try {
+    localStorage.setItem(CODE_DAILY_KEY, JSON.stringify(save));
+  } catch {
+    /* ignore */
+  }
+}
+
+function codeDailyStatsLoad(): CodeDailyStats {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(CODE_DAILY_STATS_KEY) || "null");
+    if (parsed) {
+      return {
+        streak: Math.max(0, Math.floor(Number(parsed.streak) || 0)),
+        lastSolvedDay: Math.floor(Number(parsed.lastSolvedDay) || 0),
+        solved: Math.max(0, Math.floor(Number(parsed.solved) || 0)),
+        best: Math.max(0, Math.floor(Number(parsed.best) || 0)),
+      };
+    }
+  } catch {
+    /* ignore */
+  }
+  return { streak: 0, lastSolvedDay: 0, solved: 0, best: 0 };
+}
+
+function codeDailyNoteSolved(save: CodeDailySave): CodeDailyStats {
+  const prev = codeDailyStatsLoad();
+  if (prev.lastSolvedDay === save.day) return prev;
+  const next: CodeDailyStats = {
+    streak: prev.lastSolvedDay === save.day - 1 ? prev.streak + 1 : 1,
+    lastSolvedDay: save.day,
+    solved: prev.solved + 1,
+    best: prev.best > 0 ? Math.min(prev.best, save.guesses.length) : save.guesses.length,
+  };
+  try {
+    localStorage.setItem(CODE_DAILY_STATS_KEY, JSON.stringify(next));
+  } catch {
+    /* ignore */
+  }
+  return next;
+}
+
+/** The streak only counts while yesterday or today is solved. */
+function codeDailyLiveStreak(stats: CodeDailyStats, day: number): number {
+  return stats.lastSolvedDay >= day - 1 ? stats.streak : 0;
+}
+
+function codeNextDailyIn(): string {
+  const ms = (codeDailyDay() + 1) * 86400000 - Date.now();
+  const mins = Math.max(1, Math.ceil(ms / 60000));
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+function codeGuessCount(n: number): string {
+  return n === 1 ? "1 guess" : `${n} guesses`;
+}
+
+function codeDailyShareText(save: CodeDailySave): string {
+  const secret = codeDailySecret(save.day);
+  const rows = save.guesses.slice(-12).map((guess) => {
+    const fb = codeFeedback("easy", secret, guess);
+    const marks = fb.kind === "easy" ? fb.places.map((on) => (on ? "■" : "□")).join("") : "";
+    const extra = fb.kind === "easy" && fb.extras.length ? ` +${fb.extras.length}` : "";
+    return `${marks}${extra}`;
+  });
+  return [`Secret code · Daily #${codeDailyNumber(save.day)}`, `Cracked in ${codeGuessCount(save.guesses.length)}`, ...rows].join("\n");
+}
+
 function codeDifficultyBlurb(difficulty: CodeDifficulty): string {
   if (difficulty === "hard") {
     return "You learn how many digits are in the right place. Not which digit, and not where.";
@@ -13849,206 +14101,495 @@ function hardMatchLabel(count: number): string {
   return `${n} digits are in the right place`;
 }
 
-type CodeLook = "classic" | "dossier";
-
-const CODE_LOOK_KEY = "citrons-code-look";
-const CODE_DIGIT_FONT = '"Courier New", Courier, monospace';
-
-function readCodeLook(): CodeLook {
+function codeSoundOn(): boolean {
   try {
-    return localStorage.getItem(CODE_LOOK_KEY) === "classic" ? "classic" : "dossier";
+    return localStorage.getItem(CODE_SOUND_KEY) !== "off";
   } catch {
-    return "dossier";
+    return true;
   }
 }
 
-function writeCodeLook(look: CodeLook) {
+let codeAudioCtx: AudioContext | null = null;
+
+function codeAudio(): AudioContext | null {
+  if (typeof window === "undefined") return null;
   try {
-    localStorage.setItem(CODE_LOOK_KEY, look);
+    if (!codeAudioCtx) {
+      const AC = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AC) return null;
+      codeAudioCtx = new AC();
+    }
+    const ctx = codeAudioCtx as AudioContext;
+    if (ctx.state === "suspended") void ctx.resume();
+    return ctx;
+  } catch {
+    return null;
+  }
+}
+
+function codeTone(ctx: AudioContext, freq: number, at: number, dur: number, type: OscillatorType, peak: number) {
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, ctx.currentTime + at);
+  gain.gain.setValueAtTime(0.0001, ctx.currentTime + at);
+  gain.gain.exponentialRampToValueAtTime(peak, ctx.currentTime + at + 0.012);
+  gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + at + dur);
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start(ctx.currentTime + at);
+  osc.stop(ctx.currentTime + at + dur + 0.03);
+}
+
+type CodeSfx = "key" | "erase" | "pin" | "deny" | "reveal" | "turn" | "win" | "lose" | "stamp";
+
+/** Short synthesized cues. No audio files, so nothing extra to download. */
+function codeSfx(kind: CodeSfx) {
+  if (!codeSoundOn()) return;
+  const ctx = codeAudio();
+  if (!ctx) return;
+  try {
+    if (kind === "key") codeTone(ctx, 520, 0, 0.05, "triangle", 0.03);
+    else if (kind === "erase") codeTone(ctx, 300, 0, 0.05, "triangle", 0.03);
+    else if (kind === "pin") {
+      codeTone(ctx, 700, 0, 0.05, "square", 0.02);
+      codeTone(ctx, 980, 0.05, 0.06, "square", 0.02);
+    } else if (kind === "deny") {
+      codeTone(ctx, 170, 0, 0.09, "sawtooth", 0.03);
+      codeTone(ctx, 140, 0.09, 0.12, "sawtooth", 0.03);
+    } else if (kind === "reveal") {
+      for (let i = 0; i < 4; i++) codeTone(ctx, 400 + i * 45, i * 0.11, 0.07, "triangle", 0.035);
+    } else if (kind === "turn") {
+      codeTone(ctx, 660, 0, 0.09, "sine", 0.05);
+      codeTone(ctx, 880, 0.1, 0.14, "sine", 0.05);
+    } else if (kind === "stamp") {
+      codeTone(ctx, 90, 0, 0.16, "sine", 0.12);
+      codeTone(ctx, 60, 0.02, 0.2, "triangle", 0.08);
+    } else if (kind === "win") {
+      [523, 659, 784, 1047].forEach((f, i) => codeTone(ctx, f, i * 0.1, 0.2, "triangle", 0.05));
+    } else if (kind === "lose") {
+      [392, 330, 262].forEach((f, i) => codeTone(ctx, f, i * 0.14, 0.24, "triangle", 0.045));
+    }
   } catch {
     /* ignore */
   }
 }
 
-function codeActionBtn(look: CodeLook): CSSProperties {
-  if (look === "classic") return LOBBY_GOLD_BTN;
-  return {
-    width: "100%",
-    maxWidth: 300,
-    height: 50,
-    borderRadius: 2,
-    border: "none",
-    background: "#1a140f",
-    color: "#efe6d6",
-    fontSize: 16,
-    fontWeight: 700,
-    fontFamily: CODE_DIGIT_FONT,
-    letterSpacing: 0.6,
-    cursor: "pointer",
-  };
-}
-
-function codeGhostBtn(look: CodeLook): CSSProperties {
-  if (look === "classic") return LOBBY_GHOST_BTN;
-  return {
-    width: "100%",
-    maxWidth: 300,
-    height: 50,
-    borderRadius: 2,
-    border: "1.5px solid #1a140f",
-    background: "transparent",
-    color: "#1a140f",
-    fontSize: 16,
-    fontWeight: 700,
-    fontFamily: CODE_DIGIT_FONT,
-    cursor: "pointer",
-  };
-}
-
-function codeChoiceBtn(look: CodeLook, on: boolean): CSSProperties {
-  if (look === "classic") {
-    return {
-      ...LOBBY_GHOST_BTN,
-      background: on ? "#f1c40f" : "transparent",
-      color: on ? "#1a2e1a" : "#f5f0e6",
-    };
+function codeBuzz(pattern: number | number[]) {
+  try {
+    if (typeof navigator !== "undefined" && typeof navigator.vibrate === "function") navigator.vibrate(pattern);
+  } catch {
+    /* ignore */
   }
+}
+
+/** Share sheet when the device has one, the clipboard when it does not. */
+async function codeShare(text: string, url?: string): Promise<"shared" | "copied" | "failed"> {
+  const full = url ? `${text}\n${url}` : text;
+  try {
+    if (typeof navigator.share === "function" && !isCitronsAndroidApp()) {
+      await navigator.share(url ? { text, url } : { text });
+      return "shared";
+    }
+  } catch (err) {
+    if (err && (err as { name?: string }).name === "AbortError") return "shared";
+  }
+  try {
+    await navigator.clipboard.writeText(full);
+    return "copied";
+  } catch {
+    /* fall through */
+  }
+  try {
+    const area = document.createElement("textarea");
+    area.value = full;
+    area.setAttribute("readonly", "");
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(area);
+    if (ok) return "copied";
+  } catch {
+    /* ignore */
+  }
+  return "failed";
+}
+
+const CODE_INK = "#1a140f";
+const CODE_PAPER = "#efe6d6";
+const CODE_PAPER_LIGHT = "#f7f1e4";
+const CODE_PAPER_DARK = "#e7dcc8";
+const CODE_RED = "#9d1c1c";
+const CODE_MUTED = "#6d5c49";
+const CODE_RULE = "rgba(26,20,15,0.16)";
+const CODE_MONO = '"Plex Mono Code", "IBM Plex Mono", "Courier New", Courier, monospace';
+const CODE_SERIF = 'Georgia, "Times New Roman", serif';
+const CODE_GRAIN =
+  "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .1 0 0 0 0 .08 0 0 0 0 .06 0 0 0 .55 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.16'/%3E%3C/svg%3E\")";
+
+function ensureCodeStyles() {
+  if (typeof document === "undefined" || document.getElementById("citrons-code-style")) return;
+  const style = document.createElement("style");
+  style.id = "citrons-code-style";
+  style.textContent = `
+    @font-face { font-family: "Plex Mono Code"; src: url("fonts/IBMPlexMono-Regular-Latin1.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: swap; }
+    @font-face { font-family: "Plex Mono Code"; src: url("fonts/IBMPlexMono-SemiBold-Latin1.woff2") format("woff2"); font-weight: 600; font-style: normal; font-display: swap; }
+    @font-face { font-family: "Plex Mono Code"; src: url("fonts/IBMPlexMono-Bold-Latin1.woff2") format("woff2"); font-weight: 700 800; font-style: normal; font-display: swap; }
+    .code-press { transition: transform 0.08s ease-out, opacity 0.12s ease-out, background-color 0.12s ease-out; }
+    .code-press:active:not(:disabled) { transform: scale(0.96); }
+    .code-press:focus-visible { outline: 2px solid ${CODE_RED}; outline-offset: 2px; }
+    @keyframes codeFlip {
+      0% { transform: rotateX(0deg); background: ${CODE_PAPER_LIGHT}; color: ${CODE_INK}; border-color: rgba(26,20,15,0.28); }
+      49.9% { transform: rotateX(90deg); background: ${CODE_PAPER_LIGHT}; color: ${CODE_INK}; border-color: rgba(26,20,15,0.28); }
+      50% { transform: rotateX(90deg); background: var(--ct-bg); color: var(--ct-fg); border-color: var(--ct-bd); }
+      100% { transform: rotateX(0deg); background: var(--ct-bg); color: var(--ct-fg); border-color: var(--ct-bd); }
+    }
+    .code-flip { animation: codeFlip 0.44s ease-in-out both; }
+    @keyframes codePop {
+      0% { transform: scale(0.82); }
+      60% { transform: scale(1.08); }
+      100% { transform: scale(1); }
+    }
+    .code-pop { animation: codePop 0.16s ease-out both; }
+    @keyframes codeShake {
+      0%, 100% { transform: translateX(0); }
+      20% { transform: translateX(-7px); }
+      40% { transform: translateX(6px); }
+      60% { transform: translateX(-4px); }
+      80% { transform: translateX(3px); }
+    }
+    .code-shake { animation: codeShake 0.34s ease-in-out both; }
+    @keyframes codeRise {
+      0% { opacity: 0; transform: translateY(8px); }
+      100% { opacity: 1; transform: translateY(0); }
+    }
+    .code-rise { animation: codeRise 0.3s ease-out both; }
+    @keyframes codeSheetIn {
+      0% { opacity: 0; transform: translateY(22px) scale(0.98); }
+      100% { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .code-sheet-in { animation: codeSheetIn 0.28s cubic-bezier(0.22, 1, 0.36, 1) both; }
+    @keyframes codeFade {
+      0% { opacity: 0; }
+      100% { opacity: 1; }
+    }
+    .code-fade { animation: codeFade 0.22s ease-out both; }
+    @keyframes codeStamp {
+      0% { opacity: 0; transform: rotate(var(--cs-rot, -7deg)) scale(2.6); }
+      55% { opacity: 1; transform: rotate(var(--cs-rot, -7deg)) scale(0.92); }
+      75% { transform: rotate(var(--cs-rot, -7deg)) scale(1.05); }
+      100% { opacity: 1; transform: rotate(var(--cs-rot, -7deg)) scale(1); }
+    }
+    .code-stamp { animation: codeStamp 0.42s cubic-bezier(0.3, 0.9, 0.3, 1) both; }
+    @keyframes codeDot {
+      0%, 80%, 100% { opacity: 0.25; transform: translateY(0); }
+      40% { opacity: 1; transform: translateY(-2px); }
+    }
+    .code-dots { display: inline-flex; gap: 3px; margin-left: 4px; vertical-align: middle; }
+    .code-dots i { width: 4px; height: 4px; border-radius: 2px; background: currentColor; animation: codeDot 1.2s ease-in-out infinite; }
+    .code-dots i:nth-child(2) { animation-delay: 0.16s; }
+    .code-dots i:nth-child(3) { animation-delay: 0.32s; }
+    @keyframes codeTurn {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(157,28,28,0.42); }
+      50% { box-shadow: 0 0 0 6px rgba(157,28,28,0); }
+    }
+    .code-turn-dot { animation: codeTurn 1.5s ease-out infinite; }
+    @keyframes codeScrap {
+      0% { opacity: 0; transform: translate3d(0, -20px, 0) rotate(0deg); }
+      12% { opacity: 1; }
+      100% { opacity: 0; transform: translate3d(var(--cx, 0px), 320px, 0) rotate(var(--cr, 220deg)); }
+    }
+    .code-scrap { animation: codeScrap 1.5s cubic-bezier(0.2, 0.6, 0.4, 1) both; }
+    @media (prefers-reduced-motion: reduce) {
+      .code-flip, .code-pop, .code-shake, .code-rise, .code-sheet-in, .code-fade, .code-stamp, .code-turn-dot, .code-dots i { animation: none !important; }
+      .code-scrap { animation: none !important; opacity: 0 !important; }
+      .code-press { transition: none !important; }
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+function codeBtn(kind: "solid" | "ghost" | "red", extra?: CSSProperties): CSSProperties {
   return {
-    ...codeGhostBtn(look),
-    background: on ? "#9d1c1c" : "transparent",
-    color: on ? "#efe6d6" : "#1a140f",
+    width: "100%",
+    maxWidth: 340,
+    height: 48,
+    boxSizing: "border-box",
+    borderRadius: 2,
+    border: kind === "ghost" ? `1.5px solid ${CODE_INK}` : "none",
+    background: kind === "solid" ? CODE_INK : kind === "red" ? CODE_RED : "transparent",
+    color: kind === "ghost" ? CODE_INK : CODE_PAPER,
+    fontSize: 15,
+    fontWeight: 700,
+    fontFamily: CODE_MONO,
+    letterSpacing: 0.4,
+    cursor: "pointer",
+    padding: "0 12px",
+    ...extra,
   };
 }
 
-function codeDeskPlain(look: CodeLook): CSSProperties | undefined {
-  if (look !== "dossier") return undefined;
+function codeLabel(extra?: CSSProperties): CSSProperties {
   return {
-    background: "#1b1714",
-    backgroundImage: "radial-gradient(circle at 18% 0%, rgba(255,255,255,0.05), transparent 38%)",
-    boxShadow: "inset 0 0 0 10px #2a211b",
+    fontSize: 12,
+    fontWeight: 700,
+    letterSpacing: 1.2,
+    textTransform: "uppercase",
+    color: CODE_MUTED,
+    fontFamily: CODE_MONO,
+    ...extra,
   };
 }
 
-function codeSheetStyle(look: CodeLook): CSSProperties {
-  if (look !== "dossier") return {};
-  return {
-    background: "#efe6d6",
-    color: "#1a140f",
-    boxShadow: "0 16px 36px rgba(0,0,0,0.4)",
-  };
-}
+const CODE_DESK: CSSProperties = {
+  background: "#1b1714",
+  backgroundImage: "radial-gradient(circle at 18% 0%, rgba(255,255,255,0.05), transparent 38%)",
+  boxShadow: "inset 0 0 0 10px #2a211b",
+};
 
-function CodeTile({
-  digit,
-  gold,
-  compact,
-  live,
-  pinned,
-  look,
-}: {
-  digit?: string;
-  gold?: boolean;
-  compact?: boolean;
-  live?: boolean;
-  pinned?: boolean;
-  look: CodeLook;
-}) {
-  const size = compact ? 36 : 46;
-  const dossier = look === "dossier";
+const CODE_SHEET: CSSProperties = {
+  backgroundColor: CODE_PAPER,
+  backgroundImage: `${CODE_GRAIN}, linear-gradient(180deg, rgba(255,255,255,0.28), rgba(255,255,255,0) 140px)`,
+  color: CODE_INK,
+  boxShadow: "0 16px 36px rgba(0,0,0,0.4)",
+  position: "relative",
+};
+
+function CodeDots() {
   return (
-    <div
-      style={{
-        width: size,
-        height: compact ? 42 : 52,
-        borderRadius: dossier ? 2 : 8,
-        boxSizing: "border-box",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        fontWeight: 800,
-        fontSize: compact ? 18 : 22,
-        fontFamily: dossier ? CODE_DIGIT_FONT : undefined,
-        color: gold ? (dossier ? "#efe6d6" : "#1a2e1a") : digit ? (dossier ? "#1a140f" : "#f5f0e6") : "transparent",
-        background: gold ? (dossier ? "#1a140f" : "#f1c40f") : dossier ? "#f7f1e4" : "rgba(0,0,0,0.28)",
-        border: gold
-          ? dossier
-            ? "1.5px solid #1a140f"
-            : "1.5px solid #f1c40f"
-          : live || pinned
-            ? dossier
-              ? "1.5px solid #9d1c1c"
-              : "1.5px solid rgba(241,196,15,0.85)"
-            : dossier
-              ? "1px solid rgba(26,20,15,0.28)"
-              : "1.5px solid rgba(255,255,255,0.22)",
-        boxShadow: pinned ? (dossier ? "inset 0 -3px 0 #9d1c1c" : "inset 0 -3px 0 #f1c40f") : undefined,
-      }}
-    >
-      {digit || ""}
-    </div>
+    <span className="code-dots" aria-hidden="true">
+      <i />
+      <i />
+      <i />
+    </span>
   );
 }
 
-function PinLock({ on, look }: { on: boolean; look: CodeLook }) {
-  const dossier = look === "dossier";
-  const ink = on ? (dossier ? "#efe6d6" : "#1a2e1a") : dossier ? "#1a140f" : "rgba(255,255,255,0.8)";
-  const fill = dossier ? "#efe6d6" : "#1a2e1a";
+function CodeLockIcon({ on, size = 12 }: { on: boolean; size?: number }) {
+  const ink = on ? CODE_PAPER : CODE_INK;
   return (
-    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
-      <rect x="3.2" y="7" width="9.6" height="6.5" rx="1.4" fill={on ? fill : "none"} stroke={ink} strokeWidth="1.3" />
+    <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden="true">
+      <rect x="3.2" y="7" width="9.6" height="6.5" rx="1.2" fill={on ? CODE_PAPER : "none"} stroke={ink} strokeWidth="1.4" />
       <path d={on ? "M5.2 7.2V5.1a2.8 2.8 0 0 1 5.6 0V7.2" : "M5.2 7.2V4.6a2.8 2.8 0 0 1 5.6 0"} fill="none" stroke={ink} strokeWidth="1.5" strokeLinecap="round" />
     </svg>
   );
 }
 
-function CodeFeedbackMark({ feedback, solved, look }: { feedback: CodeFeedback; solved?: boolean; look: CodeLook }) {
-  const dossier = look === "dossier";
+function CodeClip() {
+  return (
+    <svg
+      width="26"
+      height="58"
+      viewBox="0 0 26 58"
+      aria-hidden="true"
+      style={{ position: "absolute", top: -16, right: 22, transform: "rotate(7deg)", pointerEvents: "none", filter: "drop-shadow(0 2px 2px rgba(0,0,0,0.35))" }}
+    >
+      <path d="M8 44V13a6 6 0 0 1 12 0v33a9 9 0 0 1-18 0V16" fill="none" stroke="#8d8d8a" strokeWidth="2.6" strokeLinecap="round" />
+      <path d="M8 44V13a6 6 0 0 1 12 0v33a9 9 0 0 1-18 0V16" fill="none" stroke="rgba(255,255,255,0.45)" strokeWidth="0.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function CodeStamp({
+  text,
+  tone = "red",
+  size = 12,
+  rotate = 6,
+  slam,
+  delay = 0,
+}: {
+  text: string;
+  tone?: "red" | "ink";
+  size?: number;
+  rotate?: number;
+  slam?: boolean;
+  delay?: number;
+}) {
+  const color = tone === "red" ? CODE_RED : CODE_INK;
+  return (
+    <span
+      className={slam ? "code-stamp" : undefined}
+      style={{
+        display: "inline-block",
+        border: `${size >= 20 ? 3 : 2}px solid ${color}`,
+        color,
+        fontFamily: CODE_MONO,
+        fontSize: size,
+        fontWeight: 700,
+        letterSpacing: size >= 20 ? 3 : 1,
+        lineHeight: 1,
+        padding: size >= 20 ? "8px 12px" : "4px 6px",
+        transform: `rotate(${rotate}deg)`,
+        ["--cs-rot" as string]: `${rotate}deg`,
+        animationDelay: slam && delay ? `${delay}ms` : undefined,
+        whiteSpace: "nowrap",
+        flexShrink: 0,
+      }}
+    >
+      {text}
+    </span>
+  );
+}
+
+function CodePips({ n, of = 4, color = CODE_INK, size = 9, label }: { n: number; of?: number; color?: string; size?: number; label?: string }) {
+  const cells = [];
+  for (let i = 0; i < of; i++) {
+    cells.push(
+      <span
+        key={i}
+        style={{
+          width: size,
+          height: size,
+          borderRadius: 1,
+          boxSizing: "border-box",
+          background: i < n ? color : "transparent",
+          border: `1.5px solid ${color}`,
+        }}
+      />
+    );
+  }
+  return (
+    <span aria-label={label} role={label ? "img" : undefined} style={{ display: "inline-flex", gap: 4, alignItems: "center", flexShrink: 0 }}>
+      {cells}
+    </span>
+  );
+}
+
+function CodeTile({
+  digit,
+  tone = "paper",
+  size = "md",
+  live,
+  pinned,
+  flipDelay,
+  pop,
+  redacted,
+  onClick,
+  label,
+}: {
+  digit?: string;
+  tone?: "paper" | "ink";
+  size?: "sm" | "md";
+  live?: boolean;
+  pinned?: boolean;
+  flipDelay?: number;
+  pop?: boolean;
+  redacted?: boolean;
+  onClick?: () => void;
+  label?: string;
+}) {
+  const w = size === "sm" ? 34 : 44;
+  const h = size === "sm" ? 40 : 52;
+  const ink = tone === "ink";
+  const bg = redacted ? CODE_INK : ink ? CODE_INK : CODE_PAPER_LIGHT;
+  const fg = redacted ? "transparent" : ink ? CODE_PAPER : digit ? CODE_INK : "transparent";
+  const bd = ink || redacted ? CODE_INK : live || pinned ? CODE_RED : "rgba(26,20,15,0.28)";
+  const flipping = typeof flipDelay === "number";
+  const style: CSSProperties = {
+    width: w,
+    height: h,
+    padding: 0,
+    borderRadius: 2,
+    boxSizing: "border-box",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    position: "relative",
+    fontWeight: 700,
+    fontSize: size === "sm" ? 18 : 23,
+    fontFamily: CODE_MONO,
+    color: fg,
+    background: bg,
+    border: `${live || pinned || ink ? 1.5 : 1}px solid ${bd}`,
+    boxShadow: pinned ? `inset 0 -4px 0 ${CODE_RED}` : undefined,
+    cursor: onClick ? "pointer" : "default",
+    flexShrink: 0,
+    ["--ct-bg" as string]: bg,
+    ["--ct-fg" as string]: fg,
+    ["--ct-bd" as string]: bd,
+    animationDelay: flipping ? `${flipDelay}ms` : undefined,
+  };
+  const cls = flipping ? "code-flip" : pop ? "code-pop" : undefined;
+  const lock = pinned ? (
+    <span
+      aria-hidden="true"
+      style={{
+        position: "absolute",
+        top: -7,
+        right: -7,
+        width: 18,
+        height: 18,
+        borderRadius: 9,
+        background: CODE_RED,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      <CodeLockIcon on size={11} />
+    </span>
+  ) : null;
+  if (onClick) {
+    return (
+      <button type="button" className={`code-press${cls ? ` ${cls}` : ""}`} onClick={onClick} aria-label={label} aria-pressed={!!pinned} style={style}>
+        {digit || ""}
+        {lock}
+      </button>
+    );
+  }
+  return (
+    <div className={cls} style={style} aria-label={label}>
+      {digit || ""}
+      {lock}
+    </div>
+  );
+}
+
+function CodeFeedbackMark({ feedback, solved, delay }: { feedback: CodeFeedback; solved?: boolean; delay?: number }) {
+  const anim = typeof delay === "number";
+  const wrap: CSSProperties = { animationDelay: anim ? `${delay}ms` : undefined };
+  const cls = anim ? "code-rise" : undefined;
   if (solved) {
     return (
-      <span style={{ color: dossier ? "#9d1c1c" : "#f1c40f", fontWeight: 800, fontSize: 11, letterSpacing: 0.8, fontFamily: dossier ? CODE_DIGIT_FONT : undefined }}>
-        CRACKED
+      <span className={cls} style={wrap}>
+        <CodeStamp text="CRACKED" rotate={-4} />
       </span>
     );
   }
   if (feedback.kind === "hard") {
-    const n = Math.max(0, Math.min(4, Math.floor(Number(feedback.count) || 0)));
-    const mark = dossier ? "#1a140f" : "#f1c40f";
+    const n = codeInPlace(feedback);
     return (
-      <span aria-label={hardMatchLabel(n)} style={{ display: "inline-flex", gap: 5, alignItems: "center" }}>
-        {[0, 1, 2, 3].map((i) => (
-          <span
-            key={i}
-            style={{
-              width: 10,
-              height: 10,
-              borderRadius: dossier ? 1 : 5,
-              boxSizing: "border-box",
-              background: i < n ? mark : "transparent",
-              border: `1.5px solid ${mark}`,
-            }}
-          />
-        ))}
+      <span className={cls} style={{ ...wrap, display: "inline-flex", alignItems: "center", gap: 8 }}>
+        <CodePips n={n} size={11} label={hardMatchLabel(n)} />
+        <span style={{ fontFamily: CODE_MONO, fontSize: 13, fontWeight: 700, color: CODE_INK }}>{n}/4</span>
       </span>
     );
   }
   if (!feedback.places.some(Boolean) && feedback.extras.length === 0) {
-    return <span style={{ color: dossier ? "#6d5c49" : "rgba(255,255,255,0.35)", fontSize: 12 }}>No match</span>;
+    return (
+      <span className={cls} style={{ ...wrap, color: CODE_MUTED, fontSize: 12, fontFamily: CODE_MONO }}>
+        no match
+      </span>
+    );
   }
   return (
-    <span style={{ display: "inline-flex", gap: 4, flexWrap: "wrap", justifyContent: "flex-end", maxWidth: 112 }}>
+    <span className={cls} style={{ ...wrap, display: "inline-flex", gap: 4, flexWrap: "wrap", maxWidth: 100 }}>
       {feedback.extras.map((digit, i) => (
         <span
           key={`${digit}-${i}`}
           style={{
-            minWidth: 20,
-            height: 22,
+            minWidth: 22,
+            height: 24,
             padding: "0 4px",
-            borderRadius: dossier ? 2 : 6,
-            border: dossier ? "1.5px solid #9d1c1c" : "1.5px solid rgba(241,196,15,0.9)",
-            color: dossier ? "#9d1c1c" : "#f1c40f",
-            fontSize: 13,
-            fontWeight: 800,
-            fontFamily: dossier ? CODE_DIGIT_FONT : undefined,
+            boxSizing: "border-box",
+            borderRadius: 2,
+            border: `1.5px solid ${CODE_RED}`,
+            color: CODE_RED,
+            fontSize: 14,
+            fontWeight: 700,
+            fontFamily: CODE_MONO,
             display: "inline-flex",
             alignItems: "center",
             justifyContent: "center",
@@ -14062,218 +14603,347 @@ function CodeFeedbackMark({ feedback, solved, look }: { feedback: CodeFeedback; 
 }
 
 function CodeGuessRow({
+  index,
   guess,
   feedback,
   solved,
   compact,
-  look,
+  fresh,
 }: {
+  index?: number;
   guess: string;
   feedback: CodeFeedback;
   solved?: boolean;
   compact?: boolean;
-  look: CodeLook;
+  fresh?: boolean;
 }) {
   const places = feedback.kind === "easy" ? feedback.places : [];
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: compact ? 10 : 14, padding: "4px 0" }}>
-      <div style={{ display: "flex", gap: compact ? 4 : 6 }}>
+    <div style={{ display: "flex", alignItems: "center", gap: compact ? 8 : 10, padding: "4px 0" }}>
+      {typeof index === "number" ? (
+        <span style={{ width: 20, flexShrink: 0, textAlign: "right", fontFamily: CODE_MONO, fontSize: 12, color: CODE_MUTED }}>{String(index + 1).padStart(2, "0")}</span>
+      ) : null}
+      <div style={{ display: "flex", gap: compact ? 4 : 5, perspective: 400 }}>
         {guess.split("").map((digit, i) => (
-          <CodeTile key={i} digit={digit} gold={!!solved || !!places[i]} compact={compact} look={look} />
+          <CodeTile
+            key={i}
+            digit={digit}
+            tone={solved || places[i] ? "ink" : "paper"}
+            size={compact ? "sm" : "md"}
+            flipDelay={fresh ? i * 110 : undefined}
+          />
         ))}
       </div>
-      <CodeFeedbackMark feedback={feedback} solved={solved} look={look} />
+      <CodeFeedbackMark feedback={feedback} solved={solved} delay={fresh ? 560 : undefined} />
     </div>
   );
 }
 
 function CodePad({
-  value,
-  onChange,
+  filled,
+  onDigit,
+  onDelete,
   onSubmit,
   disabled,
   submitLabel,
   compact,
-  slots = true,
-  onDigit,
-  onDelete,
-  look,
+  tight,
+  slots,
+  dead,
+  known,
 }: {
-  value: string;
-  onChange: (next: string) => void;
+  filled: number;
+  onDigit: (digit: string) => void;
+  onDelete: () => void;
   onSubmit: () => void;
   disabled?: boolean;
   submitLabel: string;
   compact?: boolean;
-  slots?: boolean;
-  onDigit?: (digit: string) => void;
-  onDelete?: () => void;
-  look: CodeLook;
+  tight?: boolean;
+  slots?: ReactNode;
+  dead?: Set<string>;
+  known?: Set<string>;
 }) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const target = e.target as HTMLElement | null;
       if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
-      if (disabled) return;
-      if (e.key >= "0" && e.key <= "9") {
-        if (onDigit) onDigit(e.key);
-        else onChange((value + e.key).slice(0, 4));
-      } else if (e.key === "Backspace") {
-        if (onDelete) onDelete();
-        else onChange(value.slice(0, -1));
-      } else if (e.key === "Enter" && value.length === 4) {
+      if (disabled || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key >= "0" && e.key <= "9") onDigit(e.key);
+      else if (e.key === "Backspace") onDelete();
+      else if (e.key === "Enter") {
+        // Enter on a focused button outside the keypad belongs to that button.
+        if (target && target.tagName === "BUTTON" && !target.closest("[data-code-pad]")) return;
+        // Otherwise a focused key would also be clicked and type its digit again.
+        e.preventDefault();
         onSubmit();
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [disabled, onChange, onDelete, onDigit, onSubmit, value]);
+  }, [disabled, onDelete, onDigit, onSubmit]);
 
-  function push(digit: string) {
-    if (disabled) return;
-    if (onDigit) {
-      onDigit(digit);
-      return;
-    }
-    if (value.length >= 4) return;
-    onChange(value + digit);
+  const ready = filled === 4 && !disabled;
+  function keyStyle(key: string, height: number, fontSize: number): CSSProperties {
+    const isDead = !!dead && dead.has(key);
+    const isKnown = !!known && known.has(key);
+    return {
+      height,
+      padding: 0,
+      borderRadius: 2,
+      border: "none",
+      background: isDead ? "rgba(26,20,15,0.18)" : CODE_INK,
+      color: isDead ? "rgba(26,20,15,0.5)" : CODE_PAPER,
+      textDecoration: isDead ? "line-through" : undefined,
+      boxShadow: isKnown ? `inset 0 -4px 0 ${CODE_RED}` : undefined,
+      fontWeight: 700,
+      fontSize,
+      fontFamily: CODE_MONO,
+      cursor: disabled ? "default" : "pointer",
+      opacity: disabled ? 0.5 : 1,
+    };
   }
-
-  function erase() {
-    if (disabled) return;
-    if (onDelete) onDelete();
-    else onChange(value.slice(0, -1));
+  function keyLabel(key: string): string {
+    if (key === "⌫") return "Delete";
+    if (dead && dead.has(key)) return `${key}, not in the code`;
+    if (known && known.has(key)) return `${key}, in the code`;
+    return key;
   }
-
-  const keyH = compact ? 34 : 42;
-  const dossier = look === "dossier";
-  const keyStyle: CSSProperties = {
-    borderRadius: dossier ? 2 : compact ? 8 : 10,
-    border: dossier ? "none" : "1px solid rgba(255,255,255,0.16)",
-    background: dossier ? "#1a140f" : "rgba(0,0,0,0.35)",
-    color: dossier ? "#efe6d6" : "#f5f0e6",
-    fontWeight: 700,
-    fontFamily: dossier ? CODE_DIGIT_FONT : undefined,
-    cursor: disabled ? "default" : "pointer",
-  };
+  function press(key: string) {
+    if (disabled) return;
+    if (key === "⌫") onDelete();
+    else onDigit(key);
+  }
+  const submit = (
+    <button
+      type="button"
+      className="code-press"
+      disabled={disabled}
+      onClick={onSubmit}
+      style={codeBtn("red", { maxWidth: "none", width: compact ? 92 : "100%", height: compact ? 38 : tight ? 40 : 46, flexShrink: 0, opacity: ready ? 1 : 0.45 })}
+    >
+      {submitLabel}
+    </button>
+  );
   if (compact) {
     const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "⌫"];
     return (
-      <div style={{ width: "100%", display: "flex", alignItems: "center", gap: 8 }}>
-        {slots ? (
-          <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-            {[0, 1, 2, 3].map((i) => (
-              <CodeTile key={i} digit={value[i]} compact look={look} />
-            ))}
-          </div>
-        ) : null}
+      <div data-code-pad="" style={{ width: "100%", display: "flex", alignItems: "center", gap: 8 }}>
+        {slots}
         <div style={{ flex: 1, minWidth: 0, display: "grid", gridTemplateColumns: "repeat(11, minmax(0, 1fr))", gap: 4 }}>
           {keys.map((key) => (
-            <button
-              key={key}
-              type="button"
-              disabled={disabled}
-              onClick={() => {
-                if (key === "⌫") erase();
-                else push(key);
-              }}
-              style={{
-                ...keyStyle,
-                height: 36,
-                fontSize: 15,
-                padding: 0,
-              }}
-            >
+            <button key={key} type="button" className="code-press" disabled={disabled} aria-label={keyLabel(key)} onClick={() => press(key)} style={keyStyle(key, 38, 16)}>
               {key}
             </button>
           ))}
         </div>
-        <button
-          type="button"
-          className="lobby-play-btn"
-          disabled={disabled || value.length !== 4}
-          onClick={onSubmit}
-          style={{ ...codeActionBtn(look), width: 84, maxWidth: "none", height: 36, flexShrink: 0, opacity: value.length === 4 && !disabled ? 1 : 0.45 }}
-        >
-          {submitLabel}
-        </button>
+        {submit}
       </div>
     );
   }
   return (
-    <div style={{ width: "100%", maxWidth: 340, margin: "0 auto", display: "flex", flexDirection: "column", alignItems: "center", gap: compact ? 6 : 8 }}>
-      {slots ? (
-        <div style={{ display: "flex", gap: compact ? 4 : 6 }}>
-          {[0, 1, 2, 3].map((i) => (
-            <CodeTile key={i} digit={value[i]} compact={compact} look={look} />
+    <div data-code-pad="" style={{ width: "100%", maxWidth: 340, margin: "0 auto", display: "flex", flexDirection: "column", alignItems: "center", gap: tight ? 6 : 8 }}>
+      {slots}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: tight ? 5 : 6, width: "100%" }}>
+        {["1", "2", "3", "4", "5", "6", "7", "8", "9", "", "0", "⌫"].map((key, i) =>
+          key ? (
+            <button key={key} type="button" className="code-press" disabled={disabled} aria-label={keyLabel(key)} onClick={() => press(key)} style={keyStyle(key, tight ? 36 : 44, tight ? 18 : 20)}>
+              {key}
+            </button>
+          ) : (
+            <span key={`gap-${i}`} />
+          )
+        )}
+      </div>
+      {submit}
+    </div>
+  );
+}
+
+/** A card that slides up over the paper. The backdrop closes it when onClose is given. */
+function CodeOverlay({ children, onClose, label, fixed }: { children: ReactNode; onClose?: () => void; label: string; fixed?: boolean }) {
+  return (
+    <div
+      className="code-fade"
+      role="dialog"
+      aria-modal="true"
+      aria-label={label}
+      onClick={onClose}
+      style={{
+        position: fixed ? "fixed" : "absolute",
+        inset: 0,
+        zIndex: 20,
+        background: "rgba(20,16,13,0.62)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 14,
+        boxSizing: "border-box",
+        overflow: "hidden",
+      }}
+    >
+      <div
+        className="code-sheet-in"
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "100%",
+          maxWidth: 380,
+          maxHeight: "100%",
+          overflowY: "auto",
+          boxSizing: "border-box",
+          padding: "20px 18px 16px",
+          backgroundColor: CODE_PAPER_LIGHT,
+          backgroundImage: CODE_GRAIN,
+          color: CODE_INK,
+          border: `1px solid ${CODE_INK}`,
+          boxShadow: "0 18px 40px rgba(0,0,0,0.5)",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: 12,
+          textAlign: "center",
+          position: "relative",
+        }}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function CodeHowTo({ onClose, fixed }: { onClose: () => void; fixed?: boolean }) {
+  const step: CSSProperties = { width: "100%", display: "flex", flexDirection: "column", alignItems: "center", gap: 8, paddingBottom: 12, borderBottom: `1px dashed ${CODE_RULE}` };
+  const text: CSSProperties = { fontSize: 14, lineHeight: 1.4, color: CODE_INK, maxWidth: 300 };
+  return (
+    <CodeOverlay onClose={onClose} label="How to play" fixed={fixed}>
+      <div style={{ fontSize: 22, fontWeight: 700, fontFamily: CODE_SERIF }}>How to play</div>
+      <div style={step}>
+        <div style={codeLabel()}>1 · Hide a code</div>
+        <div style={{ display: "flex", gap: 5 }}>
+          {"4047".split("").map((d, i) => (
+            <CodeTile key={i} digit={d} size="sm" />
           ))}
         </div>
-      ) : null}
-      <div style={{ display: "flex", flexDirection: "column", gap: compact ? 4 : 6, width: "100%" }}>
-        {[["1", "2", "3"], ["4", "5", "6"], ["7", "8", "9"], ["", "0", "⌫"]].map((row) => (
-          <div key={row.join("-")} style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: compact ? 4 : 6 }}>
-            {row.map((key) =>
-              key ? (
-                <button
-                  key={key}
-                  type="button"
-                  disabled={disabled}
-                  onClick={() => {
-                    if (key === "⌫") erase();
-                    else push(key);
-                  }}
-                  style={{
-                    ...keyStyle,
-                    height: keyH,
-                    fontSize: compact ? 16 : 20,
-                  }}
-                >
-                  {key}
-                </button>
-              ) : (
-                <span key="spacer" />
-              )
-            )}
-          </div>
-        ))}
+        <div style={text}>Pick any 4 digits. Repeats are fine. Your opponent hides one too.</div>
       </div>
-      <button
-        type="button"
-        className="lobby-play-btn"
-        disabled={disabled || value.length !== 4}
-        onClick={onSubmit}
-        style={{ ...codeActionBtn(look), maxWidth: "none", height: compact ? 34 : 40, opacity: value.length === 4 && !disabled ? 1 : 0.45 }}
-      >
-        {submitLabel}
+      <div style={step}>
+        <div style={codeLabel()}>2 · Read the marks</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ display: "flex", gap: 5 }}>
+            {"4172".split("").map((d, i) => (
+              <CodeTile key={i} digit={d} size="sm" tone={i === 0 ? "ink" : "paper"} />
+            ))}
+          </div>
+          <CodeFeedbackMark feedback={{ kind: "easy", places: [true, false, false, false], extras: ["7"] }} />
+        </div>
+        <div style={text}>
+          A black tile is the right digit in the right place. A red digit is in the code, somewhere else. On Hard you only learn how many are in place.
+        </div>
+      </div>
+      <div style={step}>
+        <div style={codeLabel()}>3 · Lock what you know</div>
+        <div style={{ display: "flex", gap: 5, paddingTop: 6 }}>
+          <CodeTile digit="4" size="sm" live pinned />
+          <CodeTile size="sm" live />
+          <CodeTile size="sm" live />
+          <CodeTile size="sm" live />
+        </div>
+        <div style={text}>Tap a digit in your guess to lock it. It stays put while you retype the rest.</div>
+      </div>
+      <div style={{ ...text, fontWeight: 700 }}>You take turns. There is no clock. The first to crack the other code wins.</div>
+      <button type="button" className="code-press" onClick={onClose} style={codeBtn("solid")}>
+        Got it
       </button>
+    </CodeOverlay>
+  );
+}
+
+function CodeScraps() {
+  const scraps = [];
+  for (let i = 0; i < 16; i++) {
+    const left = 6 + ((i * 53) % 88);
+    scraps.push(
+      <span
+        key={i}
+        className="code-scrap"
+        style={{
+          position: "absolute",
+          top: 0,
+          left: `${left}%`,
+          width: 7 + (i % 3) * 3,
+          height: 10 + (i % 4) * 2,
+          background: i % 3 === 0 ? CODE_RED : i % 3 === 1 ? CODE_INK : "#c9b891",
+          animationDelay: `${(i % 6) * 70}ms`,
+          ["--cx" as string]: `${((i * 37) % 90) - 45}px`,
+          ["--cr" as string]: `${120 + ((i * 71) % 300)}deg`,
+          pointerEvents: "none",
+        }}
+      />
+    );
+  }
+  return (
+    <div aria-hidden="true" style={{ position: "absolute", inset: 0, overflow: "hidden", pointerEvents: "none" }}>
+      {scraps}
     </div>
   );
 }
 
 function CodeGame({ onLeave }: { onLeave: () => void }) {
+  ensureCodeStyles();
   const auth = useClerkAuth();
   const shortLand = useShortLandscape();
+  const vp = useContext(ViewportCtx);
   const [screen, setScreen] = useState<"pick" | "room">("pick");
-  const [view, setView] = useState<CodeRoomView | null>(null);
+  const [mode, setMode] = useState<CodeMode>("online");
+  const [online, setOnline] = useState<CodeRoomView | null>(null);
+  const [bot, setBot] = useState<CodeBotGame | null>(null);
+  const [daily, setDaily] = useState<CodeDailySave>(() => codeDailyLoad());
+  const [dailyStats, setDailyStats] = useState<CodeDailyStats>(() => codeDailyStatsLoad());
   const [lobbies, setLobbies] = useState<CodeLobbyInfo[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [slots, setSlots] = useState<string[]>(["", "", "", ""]);
   const [pins, setPins] = useState<boolean[]>([false, false, false, false]);
   const [dropped, setDropped] = useState(false);
-  const [yoursOpen, setYoursOpen] = useState(false);
-  const [look, setLook] = useState<CodeLook>(() => readCodeLook());
+  const [theirsOpen, setTheirsOpen] = useState(false);
   const [session, setSession] = useState<CodeSession | null>(() => readCodeSession());
+  const [connected, setConnected] = useState(false);
+  const [invite, setInvite] = useState(() => pendingCodeJoin());
+  const [howTo, setHowTo] = useState(() => {
+    try {
+      return !localStorage.getItem(CODE_HOWTO_KEY);
+    } catch {
+      return false;
+    }
+  });
+  const [soundOn, setSoundOn] = useState(() => codeSoundOn());
+  const [toast, setToast] = useState("");
+  const [resultOpen, setResultOpen] = useState(false);
+  const [confirmLeave, setConfirmLeave] = useState(false);
+  const [fresh, setFresh] = useState(-1);
+  const [shake, setShake] = useState(0);
+  const [popAt, setPopAt] = useState(-1);
+  const [signingIn, setSigningIn] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const pingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const toastRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const aliveRef = useRef(true);
   const screenRef = useRef(screen);
   const sessionRef = useRef(session);
+  const onlineRoomRef = useRef(false);
+  const botRef = useRef<CodeBotGame | null>(bot);
+  const botPoolRef = useRef<string[]>([]);
+  const botHistRef = useRef<string[][]>([]);
   const reconnectsRef = useRef(0);
   const nameRef = useRef("");
-  const leaveSentRef = useRef(false);
+  const leavingRef = useRef(false);
+  const inviteTriedRef = useRef(false);
   const boardRef = useRef<HTMLDivElement | null>(null);
+  const prevRef = useRef<{ key: string; yours: number; turn: boolean; phase: string } | null>(null);
   screenRef.current = screen;
   sessionRef.current = session;
+  onlineRoomRef.current = screen === "room" && mode === "online";
+  botRef.current = bot;
 
   function rememberSession(next: CodeSession) {
     writeCodeSession(next);
@@ -14285,6 +14955,18 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
     clearCodeSession();
     sessionRef.current = null;
     setSession(null);
+  }
+
+  function say(text: string) {
+    setToast(text);
+    if (toastRef.current) clearTimeout(toastRef.current);
+    toastRef.current = setTimeout(() => setToast(""), 2600);
+  }
+
+  function clearEntry() {
+    setSlots(["", "", "", ""]);
+    setPins([false, false, false, false]);
+    setPopAt(-1);
   }
 
   async function clerkPayload() {
@@ -14303,7 +14985,6 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
   }
 
   function handleMsg(msg: any) {
-    if (leaveSentRef.current) return;
     if (!msg || typeof msg !== "object") return;
     if (msg.type === "codeLobbies") {
       setLobbies(Array.isArray(msg.lobbies) ? msg.lobbies : []);
@@ -14314,15 +14995,25 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
       // An old card server answers unknown commands with this. It is not a code-game error.
       if (message === "Join a lobby first") return;
       setBusy(false);
-      setError(message);
-      if (msg.message === "Room not found") {
+      const viaLink = inviteTriedRef.current;
+      inviteTriedRef.current = false;
+      // A solo game is on screen: the server has nothing to say about it.
+      const solo = screenRef.current === "room" && !onlineRoomRef.current;
+      if (solo) {
+        /* keep the solo board clean */
+      } else if (viaLink && message === "Room not found") setError("That room has closed. Create your own and send the link.");
+      else if (viaLink && message === "Game already started") setError("That room is already full.");
+      else setError(message);
+      if (message === "Room not found") {
         forgetSession();
-        setView(null);
-        setScreen("pick");
+        setOnline(null);
+        if (onlineRoomRef.current) setScreen("pick");
       }
       return;
     }
     if (msg.type === "codeJoined") {
+      if (leavingRef.current) return;
+      inviteTriedRef.current = false;
       rememberSession({
         code: String(msg.code),
         token: String(msg.token),
@@ -14331,11 +15022,14 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
       });
       reconnectsRef.current = 0;
       setDropped(false);
+      setMode("online");
       setScreen("room");
       return;
     }
     if (msg.type === "codeState") {
-      setView(msg as CodeRoomView);
+      if (leavingRef.current) return;
+      setOnline(msg as CodeRoomView);
+      setMode("online");
       setScreen("room");
       setBusy(false);
       setError("");
@@ -14343,21 +15037,23 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
       return;
     }
     if (msg.type === "codeLeft") {
+      leavingRef.current = false;
       forgetSession();
-      setView(null);
-      setScreen("pick");
-      setSlots(["", "", "", ""]);
-      setPins([false, false, false, false]);
+      setOnline(null);
+      if (onlineRoomRef.current) {
+        setScreen("pick");
+        clearEntry();
+      }
       setBusy(false);
       const ws = wsRef.current;
       if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "codeBrowse" }));
     }
   }
 
-  function connect(mode: "browse" | "rejoin") {
+  function connect(kind: "browse" | "rejoin") {
     const open = wsRef.current;
     if (open && open.readyState === WebSocket.OPEN) {
-      void greet(open, mode);
+      void greet(open, kind);
       return;
     }
     if (open && open.readyState === WebSocket.CONNECTING) return;
@@ -14368,7 +15064,8 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
       pingRef.current = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "ping" }));
       }, 25000);
-      void greet(ws, mode);
+      setConnected(true);
+      void greet(ws, kind);
     };
     ws.onmessage = (ev) => {
       try {
@@ -14380,10 +15077,14 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
     ws.onclose = () => {
       if (pingRef.current) clearInterval(pingRef.current);
       if (wsRef.current === ws) wsRef.current = null;
-      if (leaveSentRef.current) return;
-      if (screenRef.current !== "room") {
+      if (!aliveRef.current) return;
+      setConnected(false);
+      leavingRef.current = false;
+      if (!onlineRoomRef.current) {
+        setBusy(false);
+        // Solo games do not need the socket. It comes back when the list of rooms is on screen again.
         window.setTimeout(() => {
-          if (wsRef.current || screenRef.current !== "pick") return;
+          if (!aliveRef.current || wsRef.current || screenRef.current !== "pick") return;
           connect("browse");
         }, 1200);
         return;
@@ -14391,7 +15092,7 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
       if (reconnectsRef.current < 2 && sessionRef.current) {
         reconnectsRef.current += 1;
         window.setTimeout(() => {
-          if (wsRef.current) return;
+          if (!aliveRef.current || wsRef.current) return;
           connect("rejoin");
         }, 800);
         return;
@@ -14402,11 +15103,12 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
     };
   }
 
-  async function greet(ws: WebSocket, mode: "browse" | "rejoin") {
-    if (mode === "rejoin" && sessionRef.current) {
+  async function greet(ws: WebSocket, kind: "browse" | "rejoin") {
+    if (kind === "rejoin" && sessionRef.current) {
       try {
         const payload = await clerkPayload();
         if (ws.readyState !== WebSocket.OPEN) return;
+        leavingRef.current = false;
         ws.send(JSON.stringify({
           type: "codeRejoin",
           ...payload,
@@ -14434,9 +15136,13 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
   }
 
   useEffect(() => {
-    connect(sessionRef.current ? "rejoin" : "browse");
+    aliveRef.current = true;
+    // A room link wins over an older saved seat.
+    connect(sessionRef.current && !pendingCodeJoin() ? "rejoin" : "browse");
     return () => {
+      aliveRef.current = false;
       if (pingRef.current) clearInterval(pingRef.current);
+      if (toastRef.current) clearTimeout(toastRef.current);
       const ws = wsRef.current;
       wsRef.current = null;
       if (ws) {
@@ -14449,36 +15155,261 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
   }, []);
 
   useEffect(() => {
-    setSlots(["", "", "", ""]);
-    setPins([false, false, false, false]);
-  }, [view?.phase]);
+    if (screen === "pick" && !wsRef.current) connect("browse");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen]);
+
+  function startBot(difficulty: CodeDifficulty) {
+    botPoolRef.current = codeAllCodes();
+    botHistRef.current = [botPoolRef.current];
+    setBot({
+      difficulty,
+      phase: "secrets",
+      yourSecret: null,
+      botSecret: codeRandom(),
+      guesses: [],
+      yourTurn: true,
+      youFirst: true,
+      winner: null,
+      yourWins: 0,
+      theirWins: 0,
+      round: 1,
+    });
+    setMode("bot");
+    setScreen("room");
+    setError("");
+    setTheirsOpen(false);
+    clearEntry();
+  }
+
+  function botAct(msg: any) {
+    const cur = botRef.current;
+    if (!cur) return;
+    if (msg.type === "codeSecret") {
+      const digits = codeParse(msg.secret);
+      if (cur.phase !== "secrets" || !digits) return;
+      setBot({ ...cur, yourSecret: digits, phase: "playing", yourTurn: cur.youFirst });
+      return;
+    }
+    if (msg.type === "codeGuess") {
+      const guess = codeParse(msg.guess);
+      if (cur.phase !== "playing" || !cur.yourTurn || !guess) return;
+      const guesses = [...cur.guesses, { byYou: true, guess, feedback: codeFeedback(cur.difficulty, cur.botSecret, guess) }];
+      if (guess === cur.botSecret) {
+        setBot({ ...cur, guesses, phase: "finished", winner: "you", yourWins: cur.yourWins + 1, yourTurn: false });
+      } else {
+        setBot({ ...cur, guesses, yourTurn: false });
+      }
+      return;
+    }
+    if (msg.type === "codeAgain") {
+      if (cur.phase !== "finished") return;
+      botPoolRef.current = codeAllCodes();
+      botHistRef.current = [botPoolRef.current];
+      // The loser of the last round guesses first, as in online rooms.
+      const youFirst = cur.winner !== "you";
+      setBot({
+        ...cur,
+        phase: "secrets",
+        yourSecret: null,
+        botSecret: codeRandom(),
+        guesses: [],
+        winner: null,
+        yourTurn: youFirst,
+        youFirst,
+        round: cur.round + 1,
+      });
+    }
+  }
 
   useEffect(() => {
-    if (view?.phase === "finished") setYoursOpen(true);
-  }, [view?.phase]);
+    if (screen !== "room" || mode !== "bot" || !bot || bot.phase !== "playing" || bot.yourTurn) return;
+    const timer = window.setTimeout(() => {
+      const cur = botRef.current;
+      if (!cur || cur.phase !== "playing" || cur.yourTurn || !cur.yourSecret) return;
+      const tried = new Set(cur.guesses.filter((g) => !g.byYou).map((g) => g.guess));
+      const sharp = botPoolRef.current.filter((c) => !tried.has(c));
+      // The agent often works from clues that are a few turns old, so a careful player can beat it.
+      // Tuned by simulation: about 7 guesses on Easy and 11 on Hard, against 5 and 10 for perfect play.
+      const hist = botHistRef.current;
+      const lag = cur.difficulty === "hard" ? 2 : 3;
+      const loose = (hist[Math.max(0, hist.length - 1 - lag)] || []).filter((c) => !tried.has(c));
+      const from = loose.length && (Math.random() < (cur.difficulty === "hard" ? 0.5 : 0.7) || !sharp.length) ? loose : sharp;
+      const guess = from.length ? from[Math.floor(Math.random() * from.length)] : codeRandom();
+      const hint = codeFeedback(cur.difficulty, cur.yourSecret, guess);
+      const key = JSON.stringify(hint);
+      botPoolRef.current = botPoolRef.current.filter((c) => JSON.stringify(codeFeedback(cur.difficulty, c, guess)) === key);
+      botHistRef.current = [...hist, botPoolRef.current].slice(-6);
+      const guesses = [...cur.guesses, { byYou: false, guess, feedback: hint }];
+      if (guess === cur.yourSecret) {
+        setBot({ ...cur, guesses, phase: "finished", winner: "them", theirWins: cur.theirWins + 1, yourTurn: false });
+      } else {
+        setBot({ ...cur, guesses, yourTurn: true });
+      }
+    }, 1100 + Math.random() * 1100);
+    return () => window.clearTimeout(timer);
+  }, [screen, mode, bot?.phase, bot?.yourTurn, bot?.guesses.length, bot?.round]);
+
+  function openDaily() {
+    const save = codeDailyLoad();
+    setDaily(save);
+    setDailyStats(codeDailyStatsLoad());
+    setMode("daily");
+    setScreen("room");
+    setError("");
+    setTheirsOpen(false);
+    clearEntry();
+  }
+
+  function dailyAct(msg: any) {
+    if (msg.type !== "codeGuess") return;
+    const guess = codeParse(msg.guess);
+    if (!guess || daily.solved || daily.guesses.length >= CODE_DAILY_MAX_GUESSES) return;
+    const next: CodeDailySave = { day: daily.day, guesses: [...daily.guesses, guess], solved: guess === codeDailySecret(daily.day) };
+    codeDailyStore(next);
+    setDaily(next);
+    if (next.solved) setDailyStats(codeDailyNoteSolved(next));
+  }
+
+  function act(msg: any) {
+    if (mode === "bot") botAct(msg);
+    else if (mode === "daily") dailyAct(msg);
+    else send(msg);
+  }
+
+  const dailySecret = codeDailySecret(daily.day);
+  const self = { id: "you", name: "You", connected: true, locked: true, you: true };
+  let view: CodeRoomView | null = null;
+  if (screen === "room") {
+    if (mode === "bot" && bot) {
+      view = {
+        code: "BOT",
+        difficulty: bot.difficulty,
+        phase: bot.phase,
+        host: true,
+        yourSecret: bot.yourSecret,
+        opponentSecret: bot.phase === "finished" ? bot.botSecret : null,
+        yourTurn: bot.phase === "playing" && bot.yourTurn,
+        players: [{ ...self, locked: !!bot.yourSecret }, { id: "bot", name: CODE_BOT_NAME, connected: true, locked: true, you: false }],
+        guesses: bot.guesses,
+        winner: bot.winner,
+        yourWins: bot.yourWins,
+        theirWins: bot.theirWins,
+        status: "",
+      };
+    } else if (mode === "daily") {
+      view = {
+        code: "DAILY",
+        difficulty: "easy",
+        phase: daily.solved ? "finished" : "playing",
+        host: true,
+        yourSecret: null,
+        opponentSecret: daily.solved ? dailySecret : null,
+        yourTurn: !daily.solved,
+        players: [self],
+        guesses: daily.guesses.map((guess) => ({ byYou: true, guess, feedback: codeFeedback("easy", dailySecret, guess) })),
+        winner: daily.solved ? "you" : null,
+        status: "",
+      };
+    } else if (mode === "online") {
+      view = online;
+    }
+  }
+
+  const opponent = view?.players.find((p) => !p.you) || null;
+  const yourGuesses = (view?.guesses || []).filter((g) => g.byYou);
+  const theirGuesses = (view?.guesses || []).filter((g) => !g.byYou);
+  const showPad = !!view && !dropped && ((view.phase === "secrets" && !view.yourSecret) || (view.phase === "playing" && view.yourTurn));
+  const viewKey = view ? `${mode}:${view.code}` : "";
+
+  useEffect(() => {
+    clearEntry();
+  }, [viewKey, view?.phase]);
 
   useEffect(() => {
     const el = boardRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [view?.guesses.length, view?.phase]);
+  }, [view?.guesses.length, view?.phase, showPad]);
 
-  async function createRoom(asTournament: boolean) {
+  // Decide which row flips, and play the cues, before the new row is painted.
+  useLayoutEffect(() => {
+    if (!view) {
+      prevRef.current = null;
+      setFresh(-1);
+      return;
+    }
+    const prev = prevRef.current;
+    const cur = { key: viewKey, yours: yourGuesses.length, turn: view.phase === "playing" && view.yourTurn, phase: view.phase };
+    prevRef.current = cur;
+    if (!prev || prev.key !== cur.key) {
+      setFresh(-1);
+      return;
+    }
+    if (cur.yours === prev.yours + 1) {
+      setFresh(cur.yours - 1);
+      codeSfx("reveal");
+    } else if (cur.yours !== prev.yours) {
+      setFresh(-1);
+    }
+    if (cur.phase === "finished" && prev.phase !== "finished") {
+      const won = view.winner === "you";
+      window.setTimeout(() => {
+        codeSfx("stamp");
+        codeSfx(won ? "win" : "lose");
+        codeBuzz(won ? [30, 60, 30, 60, 80] : [120]);
+      }, cur.yours === prev.yours + 1 ? 900 : 200);
+    } else if (cur.turn && !prev.turn && mode !== "daily") {
+      window.setTimeout(() => {
+        codeSfx("turn");
+        codeBuzz(25);
+      }, 150);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewKey, view?.phase, view?.yourTurn, yourGuesses.length]);
+
+  useEffect(() => {
+    if (!view || view.phase !== "finished") {
+      setResultOpen(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setResultOpen(true), 1000);
+    return () => window.clearTimeout(timer);
+  }, [viewKey, view?.phase]);
+
+  // A hidden tab says so in its title when it is your move.
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    if (!view || mode === "daily" || view.phase !== "playing" || !view.yourTurn) return;
+    const original = document.title;
+    const sync = () => {
+      document.title = document.hidden ? "● Your turn · Citrons" : original;
+    };
+    sync();
+    document.addEventListener("visibilitychange", sync);
+    return () => {
+      document.removeEventListener("visibilitychange", sync);
+      document.title = original;
+    };
+  }, [mode, view?.phase, view?.yourTurn]);
+
+  async function createRoom() {
     if (!auth.user) {
       setError("Sign in with Google first");
       return;
     }
     setBusy(true);
     setError("");
+    leavingRef.current = false;
     try {
       const payload = await clerkPayload();
-      send({ type: "codeCreate", ...payload, difficulty: "easy", tournament: asTournament });
+      send({ type: "codeCreate", ...payload, difficulty: "easy", tournament: false });
     } catch (err) {
       setBusy(false);
       setError(clerkErrorText(err));
     }
   }
 
-  async function joinRoom(code: string) {
+  async function joinRoom(code: string, viaLink?: boolean) {
     const c = String(code || "").trim().toUpperCase();
     if (!c) return;
     if (!auth.user) {
@@ -14487,6 +15418,8 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
     }
     setBusy(true);
     setError("");
+    leavingRef.current = false;
+    inviteTriedRef.current = !!viaLink;
     try {
       const payload = await clerkPayload();
       send({ type: "codeJoin", ...payload, code: c });
@@ -14496,313 +15429,749 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
     }
   }
 
+  useEffect(() => {
+    if (!invite) return;
+    if (invite === "DAILY") {
+      clearCodeJoin();
+      setInvite("");
+      openDaily();
+      return;
+    }
+    if (!auth.user || !connected || screen !== "pick" || busy) return;
+    clearCodeJoin();
+    setInvite("");
+    void joinRoom(invite, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [invite, auth.user, connected, screen, busy]);
+
+  async function signIn() {
+    setSigningIn(true);
+    setError("");
+    try {
+      await signInWithGoogle();
+      window.setTimeout(() => {
+        if (aliveRef.current) setSigningIn(false);
+      }, 8000);
+    } catch (err) {
+      setSigningIn(false);
+      setError(clerkErrorText(err));
+    }
+  }
+
   function leaveRoom() {
-    leaveSentRef.current = true;
-    send({ type: "codeLeave" });
-    forgetSession();
-    setView(null);
+    setConfirmLeave(false);
+    setResultOpen(false);
+    if (mode === "online") {
+      const ws = wsRef.current;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        leavingRef.current = true;
+        ws.send(JSON.stringify({ type: "codeLeave" }));
+      }
+      forgetSession();
+      setOnline(null);
+      setDropped(false);
+    } else if (mode === "bot") {
+      setBot(null);
+    }
     setScreen("pick");
-    setSlots(["", "", "", ""]);
-    setPins([false, false, false, false]);
+    setError("");
     setBusy(false);
-    onLeave();
+    setTheirsOpen(false);
+    clearEntry();
+  }
+
+  function askLeave() {
+    const midGame = !!view && mode !== "daily" && (view.phase === "secrets" || view.phase === "playing") && view.players.length === 2;
+    if (midGame) setConfirmLeave(true);
+    else leaveRoom();
+  }
+
+  function nudge() {
+    setShake((n) => n + 1);
+    codeSfx("deny");
+    codeBuzz([20, 40, 20]);
   }
 
   function typeDigit(digit: string) {
-    setSlots((prev) => {
-      const next = prev.slice();
-      const index = next.findIndex((cell, i) => !cell && !pins[i]);
-      if (index < 0) return prev;
-      next[index] = digit;
-      return next;
-    });
+    if (howTo || confirmLeave) return;
+    const index = slots.findIndex((cell, i) => !cell && !pins[i]);
+    if (index < 0) {
+      nudge();
+      return;
+    }
+    codeSfx("key");
+    codeBuzz(8);
+    setPopAt(index);
+    setSlots(slots.map((cell, i) => (i === index ? digit : cell)));
   }
 
   function eraseDigit() {
-    setSlots((prev) => {
-      const next = prev.slice();
-      for (let i = next.length - 1; i >= 0; i--) {
-        if (next[i] && !pins[i]) {
-          next[i] = "";
-          return next;
-        }
+    if (howTo || confirmLeave) return;
+    for (let i = slots.length - 1; i >= 0; i--) {
+      if (slots[i] && !pins[i]) {
+        codeSfx("erase");
+        setPopAt(-1);
+        setSlots(slots.map((cell, j) => (j === i ? "" : cell)));
+        return;
       }
-      return prev;
-    });
+    }
   }
 
   function togglePin(index: number) {
     if (!slots[index]) return;
-    setPins((prev) => prev.map((on, i) => (i === index ? !on : on)));
+    codeSfx("pin");
+    codeBuzz(12);
+    setPins(pins.map((on, i) => (i === index ? !on : on)));
   }
 
   function submitEntry() {
+    if (!view || howTo || confirmLeave) return;
     const guess = slots.join("");
-    if (!view || guess.length !== 4) return;
+    if (guess.length !== 4) {
+      nudge();
+      return;
+    }
     if (view.phase === "secrets" && !view.yourSecret) {
-      send({ type: "codeSecret", secret: guess });
-      setSlots(["", "", "", ""]);
-      setPins([false, false, false, false]);
+      act({ type: "codeSecret", secret: guess });
+      clearEntry();
       return;
     }
     if (view.phase === "playing" && view.yourTurn) {
-      send({ type: "codeGuess", guess });
-      setSlots((prev) => prev.map((digit, i) => (pins[i] ? digit : "")));
+      act({ type: "codeGuess", guess });
+      setPopAt(-1);
+      setSlots(slots.map((digit, i) => (pins[i] ? digit : "")));
     }
   }
 
-  function chooseLook(next: CodeLook) {
-    writeCodeLook(next);
-    setLook(next);
+  function toggleSound() {
+    const next = !soundOn;
+    try {
+      localStorage.setItem(CODE_SOUND_KEY, next ? "on" : "off");
+    } catch {
+      /* ignore */
+    }
+    setSoundOn(next);
+    if (next) codeSfx("turn");
   }
 
-  const dossier = look === "dossier";
-  const opponent = view?.players.find((p) => !p.you) || null;
-  const yourGuesses = (view?.guesses || []).filter((g) => g.byYou);
-  const theirGuesses = (view?.guesses || []).filter((g) => !g.byYou);
-  const showPad = !!view && ((view.phase === "secrets" && !view.yourSecret) || (view.phase === "playing" && view.yourTurn));
+  function closeHowTo() {
+    try {
+      localStorage.setItem(CODE_HOWTO_KEY, "1");
+    } catch {
+      /* ignore */
+    }
+    setHowTo(false);
+  }
 
+  async function shareInvite(code: string) {
+    const url = codeInviteUrl(code);
+    const how = await codeShare("Crack my code on Citrons — Secret code:", url);
+    if (how === "copied") say("Link copied");
+    else if (how === "failed") say(url);
+  }
+
+  async function shareResult() {
+    if (!view) return;
+    let text = "";
+    let url = appUrl() || "https://citrons.lat/";
+    if (mode === "daily") {
+      text = codeDailyShareText(daily);
+      url = codeInviteUrl("daily");
+    } else if (view.winner === "you") {
+      text = `I cracked ${opponent ? opponent.name : "the"}'s code in ${codeGuessCount(yourGuesses.length)} — Secret code on Citrons`;
+    } else {
+      text = `${opponent ? opponent.name : "My opponent"} cracked my code in ${codeGuessCount(theirGuesses.length)} — Secret code on Citrons`;
+    }
+    const how = await codeShare(text, url);
+    if (how === "copied") say("Result copied");
+    else if (how === "failed") say("Could not share from this device");
+  }
+
+  const youWins = view?.yourWins || 0;
+  const themWins = view?.theirWins || 0;
+  const opponentName = opponent ? opponent.name : "Opponent";
+  const waitingOnThem = !!view && view.phase === "playing" && !view.yourTurn;
   let statusLine = "";
   if (view) {
-    if (view.status) statusLine = view.status;
-    else if (dropped) statusLine = "Connection lost — you can rejoin.";
+    if (dropped) statusLine = "Connection lost";
+    else if (view.status) statusLine = view.status;
     else if (view.phase === "waiting") statusLine = "Waiting for an opponent";
-    else if (view.phase === "secrets") statusLine = view.yourSecret ? "Waiting for the other code" : "Hide a 4-digit code. Repeats are allowed.";
+    else if (view.phase === "secrets") statusLine = view.yourSecret ? "Waiting" : "Hide your code";
     else if (view.phase === "playing") {
-      if (opponent && !opponent.connected) statusLine = "Opponent reconnecting…";
-      else statusLine = view.yourTurn ? "Your turn" : "Opponent's turn";
-    } else if (view.tournamentOver) {
-      if (view.winner === "you") statusLine = "You won the tournament";
-      else statusLine = `${opponent ? opponent.name : "Opponent"} won the tournament`;
-    } else if (view.winner === "you") statusLine = view.tournament ? `Round won · ${view.yourWins || 0}–${view.theirWins || 0}` : "You cracked the code";
-    else statusLine = view.tournament ? `Round lost · ${view.yourWins || 0}–${view.theirWins || 0}` : "Your code was cracked";
+      if (mode === "daily") statusLine = yourGuesses.length ? codeGuessCount(yourGuesses.length) : "Same code for everyone today";
+      else if (view.yourTurn) statusLine = "Your turn";
+      else statusLine = opponent && !opponent.connected ? "Opponent offline" : "Their turn";
+    } else if (mode === "daily") statusLine = `Cracked in ${codeGuessCount(yourGuesses.length)}`;
+    else if (view.tournamentOver) statusLine = view.winner === "you" ? "Tournament won" : "Tournament lost";
+    else if (view.winner === "you") statusLine = view.tournament ? `Round won · ${youWins}–${themWins}` : "You cracked it";
+    else statusLine = view.tournament ? `Round lost · ${youWins}–${themWins}` : "They cracked yours";
   }
 
-  const shell = (children: ReactNode) => (
-    <FeltShell
-      center={false}
-      glow={!dossier}
-      plain={codeDeskPlain(look)}
-      overlay={
-        <>
-          <WindowButton />
-          <ProfileButton />
-          <LobbyBack onClick={screen === "room" ? leaveRoom : onLeave} label="← More games" />
-        </>
-      }
-      style={{
-        padding: shortLand
-          ? `${safeTop(8, 4)} 16px ${safeBottom(8, 8)}`
-          : `${safeTop(dossier ? 72 : 16, dossier ? 56 : 12)} 16px ${safeBottom(72, 64)}`,
-        justifyContent: "flex-start",
-      }}
-    >
-      <div
-        style={{
-          width: "100%",
-          maxWidth: 420,
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          gap: shortLand ? 6 : 12,
-          textAlign: "center",
-          paddingTop: shortLand ? 0 : 8,
-          paddingBottom: shortLand ? 44 : 0,
-          ...codeSheetStyle(look),
-          ...(dossier ? { flex: shortLand ? undefined : 1, padding: shortLand ? "10px 12px" : "18px 16px 16px" } : {}),
-        }}
-      >
-        {children}
-      </div>
-    </FeltShell>
+  const iconBtn: CSSProperties = {
+    width: 38,
+    height: 38,
+    padding: 0,
+    flexShrink: 0,
+    borderRadius: 2,
+    border: `1px solid ${CODE_RULE}`,
+    background: "transparent",
+    color: CODE_INK,
+    fontFamily: CODE_MONO,
+    fontSize: 16,
+    fontWeight: 700,
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  };
+
+  const soundBtn = (
+    <button type="button" className="code-press" onClick={toggleSound} aria-label={soundOn ? "Mute sound" : "Turn sound on"} aria-pressed={soundOn} style={iconBtn}>
+      <svg width="18" height="18" viewBox="0 0 20 20" aria-hidden="true">
+        <path d="M3 7.5h3l4-3.5v12l-4-3.5H3z" fill={CODE_INK} />
+        {soundOn ? (
+          <path d="M13 7a4.2 4.2 0 0 1 0 6M15.2 4.8a7.4 7.4 0 0 1 0 10.4" fill="none" stroke={CODE_INK} strokeWidth="1.6" strokeLinecap="round" />
+        ) : (
+          <path d="M13 7.5l5 5M18 7.5l-5 5" fill="none" stroke={CODE_RED} strokeWidth="1.8" strokeLinecap="round" />
+        )}
+      </svg>
+    </button>
   );
 
+  const helpBtn = (
+    <button type="button" className="code-press" onClick={() => setHowTo(true)} aria-label="How to play" style={iconBtn}>
+      ?
+    </button>
+  );
+
+  const toastNode = toast ? (
+    <div style={{ position: "absolute", left: 0, right: 0, bottom: 18, zIndex: 30, display: "flex", justifyContent: "center", pointerEvents: "none" }}>
+      <div
+        className="code-rise"
+        role="status"
+        style={{
+          maxWidth: "88%",
+          padding: "10px 14px",
+          background: CODE_INK,
+          color: CODE_PAPER,
+          fontFamily: CODE_MONO,
+          fontSize: 13,
+          fontWeight: 600,
+          boxShadow: "0 8px 20px rgba(0,0,0,0.4)",
+          wordBreak: "break-all",
+          textAlign: "center",
+        }}
+      >
+        {toast}
+      </div>
+    </div>
+  ) : null;
+
   if (screen === "room" && !view) {
-    return shell(<div style={{ fontSize: 15, color: dossier ? "#6d5c49" : "rgba(255,255,255,0.75)" }}>Connecting…</div>);
+    return (
+      <FeltShell center glow={false} plain={CODE_DESK} overlay={<WindowButton />}>
+        <div style={{ fontSize: 15, color: "rgba(239,230,214,0.8)", fontFamily: CODE_MONO }}>
+          Connecting
+          <CodeDots />
+        </div>
+      </FeltShell>
+    );
   }
 
   if (screen === "room" && view) {
+    const size = shortLand || vp.h < 640 ? "sm" : "md";
     const bothHere = view.players.length === 2 && view.players.every((p) => p.connected);
-    const split = shortLand && (view.phase === "playing" || view.phase === "finished");
-    const showHint = view.phase === "playing" && yourGuesses.length === 0;
-    const turnLine =
-      opponent && !opponent.connected
-        ? "Opponent reconnecting…"
-        : `${opponent ? opponent.name : "Opponent"} is guessing`;
-    const yourPanel = view.yourSecret ? (
-      <div style={{ width: "100%", borderBottom: dossier ? "1px solid rgba(26,20,15,0.16)" : "1px solid rgba(255,255,255,0.1)", background: dossier ? "rgba(26,20,15,0.04)" : "rgba(0,0,0,0.16)" }}>
-        <button
-          type="button"
-          onClick={() => {
-            if (!split) setYoursOpen((open) => !open);
-          }}
-          style={{
-            width: "100%",
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            padding: "8px 12px",
-            border: "none",
-            background: "transparent",
-            color: dossier ? "#1a140f" : "#f5f0e6",
-            cursor: split ? "default" : "pointer",
-            textAlign: "left",
-            fontFamily: dossier ? CODE_DIGIT_FONT : undefined,
-          }}
-        >
-          <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.8, color: dossier ? "#6d5c49" : "rgba(255,255,255,0.55)" }}>YOUR CODE</span>
-          <span style={{ letterSpacing: 3, fontWeight: 800 }}>{view.yourSecret.split("").join(" ")}</span>
-          <span style={{ marginLeft: "auto", fontSize: 12, color: dossier ? "#6d5c49" : "rgba(255,255,255,0.6)" }}>
-            {theirGuesses.length ? theirGuesses.length : ""} {split || yoursOpen ? "▾" : "▸"}
-          </span>
+    // Side-by-side boards need a wide phone. The sheet also stays clear of the corner buttons.
+    const split = shortLand && vp.w >= 780 && mode !== "daily" && (view.phase === "playing" || view.phase === "finished");
+    const sheetMax = shortLand ? Math.max(320, Math.min(split ? 780 : 560, vp.w - 190)) : 440;
+    // Short portrait phones get a smaller keypad so a few guesses stay on screen.
+    const tight = !shortLand && vp.h < 640;
+    const notes = codeDigitNotes(yourGuesses);
+    const title = mode === "daily" ? `Daily code #${codeDailyNumber(daily.day)}` : opponent ? opponent.name : "Your room";
+    const myTurn = view.phase === "playing" && view.yourTurn && mode !== "daily";
+    const canRematch = mode === "bot" || (mode === "online" && bothHere && !view.tournamentOver && !dropped);
+    const againLabel = mode === "bot" ? "Play again" : view.tournament ? "Next round" : "Rematch";
+    const liveStreak = codeDailyLiveStreak(dailyStats, daily.day);
+
+    const header = (
+      <div style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 10, padding: shortLand ? "6px 12px" : "12px 12px 10px", borderBottom: `1px solid ${CODE_RULE}` }}>
+        <button type="button" className="code-press" onClick={askLeave} aria-label="Leave" style={iconBtn}>
+          ←
         </button>
-        {split || yoursOpen ? (
-          <div style={{ padding: "0 12px 8px", maxHeight: split ? undefined : 168, overflowY: "auto" }}>
-            {view.phase === "secrets" ? (
-              <button
-                type="button"
-                onClick={() => {
-                  const next = (view.yourSecret || "").split("").slice(0, 4);
-                  while (next.length < 4) next.push("");
-                  setSlots(next);
-                  setPins([false, false, false, false]);
-                  send({ type: "codeSecret", clear: true });
-                }}
-                style={{ ...codeGhostBtn(look), width: "auto", height: 28, padding: "0 10px", fontSize: 12, marginBottom: 6 }}
-              >
-                Change
-              </button>
-            ) : null}
-            {theirGuesses.length === 0 ? (
-              <div style={{ fontSize: 12, color: dossier ? "#6d5c49" : "rgba(255,255,255,0.5)", textAlign: "left" }}>No guesses yet</div>
-            ) : (
-              theirGuesses.map((row, i) => (
-                <CodeGuessRow
-                  key={i}
-                  guess={row.guess}
-                  feedback={row.feedback}
-                  compact={shortLand}
-                  look={look}
-                  solved={view.phase === "finished" && view.winner === "them" && i === theirGuesses.length - 1}
-                />
-              ))
-            )}
+        {opponent ? <AvatarBubble src={opponent.avatar} name={opponent.name} size={32} /> : null}
+        <div style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
+          <div style={{ fontSize: 16, fontWeight: 700, fontFamily: CODE_SERIF, color: CODE_INK, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{title}</div>
+          <div
+            role="status"
+            style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 700, fontFamily: CODE_MONO, color: myTurn || dropped ? CODE_RED : CODE_MUTED, whiteSpace: "nowrap", overflow: "hidden" }}
+          >
+            {myTurn ? <span className="code-turn-dot" style={{ width: 8, height: 8, borderRadius: 4, background: CODE_RED, flexShrink: 0 }} /> : null}
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{statusLine}</span>
+            {waitingOnThem || view.phase === "waiting" || (view.phase === "secrets" && !!view.yourSecret) ? <CodeDots /> : null}
           </div>
-        ) : null}
+        </div>
+        {helpBtn}
+        {soundBtn}
       </div>
-    ) : null;
-    const history = (
-      <div ref={boardRef} style={{ flex: 1, minHeight: 0, overflowY: "auto", width: "100%", padding: "2px 12px 8px", boxSizing: "border-box" }}>
-        <div style={{ minHeight: "100%", display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
-        {view.phase === "playing" || view.phase === "finished" ? (
-          <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 1.1, color: dossier ? "#6d5c49" : "rgba(255,255,255,0.45)", textAlign: "left", paddingBottom: 4, fontFamily: dossier ? CODE_DIGIT_FONT : undefined }}>
-            THEIR CODE
+    );
+
+    function raceCell(label: string, guesses: CodeGuess[], locked: boolean, onClick?: () => void, open?: boolean) {
+      const best = codeBestInPlace(guesses);
+      const sub =
+        view && view.phase === "secrets"
+          ? locked
+            ? "ready"
+            : "choosing"
+          : guesses.length
+            ? codeGuessCount(guesses.length)
+            : "no guesses yet";
+      const inner = (
+        <>
+          <div style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
+            <div style={codeLabel({ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: CODE_INK })}>{label}</div>
+            <div style={{ fontSize: 12, color: CODE_MUTED, fontFamily: CODE_MONO, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{sub}</div>
           </div>
-        ) : null}
-        {view.phase === "finished" && view.opponentSecret ? (
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "2px 0 8px" }}>
-            <div style={{ display: "flex", gap: shortLand ? 4 : 6 }}>
-              {view.opponentSecret.split("").map((digit, i) => (
-                <CodeTile key={i} digit={digit} gold compact={shortLand} look={look} />
+          {view && view.phase === "secrets" ? null : <CodePips n={best} label={`Best so far: ${best} of 4 in place`} />}
+          {onClick ? <span aria-hidden="true" style={{ fontSize: 12, color: CODE_MUTED, width: 10 }}>{open ? "▾" : "▸"}</span> : null}
+        </>
+      );
+      const style: CSSProperties = {
+        flex: 1,
+        minWidth: 0,
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "8px 12px",
+        border: "none",
+        background: "transparent",
+        color: CODE_INK,
+        fontFamily: CODE_MONO,
+        minHeight: 48,
+        boxSizing: "border-box",
+      };
+      if (onClick) {
+        return (
+          <button type="button" className="code-press" onClick={onClick} aria-expanded={!!open} style={{ ...style, cursor: "pointer" }}>
+            {inner}
+          </button>
+        );
+      }
+      return <div style={style}>{inner}</div>;
+    }
+
+    const race =
+      view.phase === "waiting" ? null : mode === "daily" ? (
+        <div style={{ flexShrink: 0, display: "flex", alignItems: "stretch", borderBottom: `1px solid ${CODE_RULE}`, background: "rgba(26,20,15,0.04)" }}>
+          {raceCell("You", yourGuesses, true)}
+          <div style={{ display: "flex", flexDirection: "column", justifyContent: "center", padding: "0 12px", borderLeft: `1px solid ${CODE_RULE}`, textAlign: "right" }}>
+            <div style={codeLabel({ color: CODE_INK })}>Streak {liveStreak}</div>
+            <div style={{ fontSize: 12, color: CODE_MUTED, fontFamily: CODE_MONO }}>{dailyStats.best ? `best ${dailyStats.best}` : "no record yet"}</div>
+          </div>
+        </div>
+      ) : (
+        <div style={{ flexShrink: 0, display: "flex", alignItems: "stretch", borderBottom: `1px solid ${CODE_RULE}`, background: "rgba(26,20,15,0.04)" }}>
+          {raceCell("You", yourGuesses, !!view.yourSecret)}
+          {view.tournament || (mode === "bot" && youWins + themWins > 0) ? (
+            <div
+              aria-label={`Score ${youWins} to ${themWins}`}
+              style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "0 8px", borderLeft: `1px solid ${CODE_RULE}`, fontFamily: CODE_MONO }}
+            >
+              <div style={{ fontSize: 16, fontWeight: 700, color: CODE_INK, lineHeight: 1.1 }}>
+                {youWins}–{themWins}
+              </div>
+              {view.tournament ? <div style={{ fontSize: 10, color: CODE_MUTED, letterSpacing: 0.6 }}>TO 3</div> : null}
+            </div>
+          ) : null}
+          <div style={{ flex: 1, minWidth: 0, display: "flex", borderLeft: `1px solid ${CODE_RULE}` }}>
+            {raceCell(opponentName, theirGuesses, !!opponent && opponent.locked, split ? undefined : () => setTheirsOpen((open) => !open), theirsOpen)}
+          </div>
+        </div>
+      );
+
+    const theirsPanel =
+      mode !== "daily" && view.phase !== "waiting" && (split || theirsOpen) ? (
+        <div
+          className={split ? undefined : "code-rise"}
+          style={{ flexShrink: 0, padding: "8px 12px 10px", borderBottom: split ? undefined : `1px solid ${CODE_RULE}`, background: "rgba(26,20,15,0.06)", maxHeight: split ? undefined : 190, overflowY: "auto" }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 10, paddingBottom: 6 }}>
+            <span style={codeLabel({ whiteSpace: "nowrap" })}>Your code</span>
+            <div style={{ display: "flex", gap: 4 }}>
+              {(view.yourSecret || "    ").split("").map((digit, i) => (
+                <CodeTile key={i} digit={view && view.yourSecret ? digit : undefined} size="sm" />
               ))}
             </div>
           </div>
-        ) : null}
-        {showHint ? (
-          <div style={{ fontSize: 12, lineHeight: 1.35, color: dossier ? "#6d5c49" : "rgba(255,255,255,0.62)", textAlign: "left", padding: "2px 0 8px" }}>
-            {view.difficulty === "hard"
-              ? dossier
-                ? "Marks show how many digits are in place."
-                : "Dots show how many digits are in place."
-              : dossier
-                ? "Black tiles are in place. Red digits are in the code, somewhere else."
-                : "Gold tiles are in place. Outlined digits are in the code, somewhere else."}
+          {theirGuesses.length === 0 ? (
+            <div style={{ fontSize: 12, color: CODE_MUTED, textAlign: "left", fontFamily: CODE_MONO }}>{opponentName} has not guessed yet</div>
+          ) : (
+            theirGuesses.map((row, i) => (
+              <CodeGuessRow
+                key={i}
+                index={split ? undefined : i}
+                guess={row.guess}
+                feedback={row.feedback}
+                compact
+                solved={view !== null && view.phase === "finished" && view.winner === "them" && i === theirGuesses.length - 1}
+              />
+            ))
+          )}
+        </div>
+      ) : null;
+
+    const showHint = view.phase === "playing" && yourGuesses.length === 0;
+    const showPinTip = view.phase === "playing" && view.yourTurn && yourGuesses.length > 0 && yourGuesses.length < 3 && !pins.some(Boolean);
+    const liveRow =
+      showPad && view.phase === "playing" ? (
+        <div key={`live-${shake}`} data-code-pad="" className={shake ? "code-shake" : undefined} style={{ display: "flex", alignItems: "center", gap: shortLand ? 8 : 10, padding: "10px 0 4px" }}>
+          <span style={{ width: 20, flexShrink: 0, textAlign: "right", fontFamily: CODE_MONO, fontSize: 12, fontWeight: 700, color: CODE_RED }}>{String(yourGuesses.length + 1).padStart(2, "0")}</span>
+          <div style={{ display: "flex", gap: shortLand ? 4 : 5 }}>
+            {[0, 1, 2, 3].map((i) => (
+              <CodeTile
+                key={i}
+                digit={slots[i]}
+                size={size}
+                live
+                pinned={pins[i]}
+                pop={popAt === i}
+                onClick={() => togglePin(i)}
+                label={pins[i] ? `Unlock ${slots[i]}` : slots[i] ? `Lock ${slots[i]}` : "Empty"}
+              />
+            ))}
           </div>
-        ) : null}
-        {yourGuesses.map((row, i) => (
-          <CodeGuessRow
-            key={i}
-            guess={row.guess}
-            feedback={row.feedback}
-            compact={shortLand}
-            look={look}
-            solved={view.phase === "finished" && view.winner === "you" && i === yourGuesses.length - 1}
-          />
+          {showPinTip ? <span style={{ fontSize: 12, lineHeight: 1.3, color: CODE_MUTED, textAlign: "left", fontFamily: CODE_MONO }}>tap a digit to lock it</span> : null}
+        </div>
+      ) : null;
+
+    const secretSlots = (
+      <div key={`slots-${shake}`} className={shake ? "code-shake" : undefined} style={{ display: "flex", gap: shortLand ? 4 : 5, flexShrink: 0 }}>
+        {[0, 1, 2, 3].map((i) => (
+          <CodeTile key={i} digit={slots[i]} size={size} live pop={popAt === i} />
         ))}
-        {showPad && view.phase === "playing" ? (
-          <div style={{ display: "flex", alignItems: "center", gap: shortLand ? 10 : 14, padding: "10px 10px 4px 0" }}>
-            <div style={{ display: "flex", gap: shortLand ? 4 : 6 }}>
-              {[0, 1, 2, 3].map((i) => (
-                <div key={i} style={{ position: "relative" }}>
-                  <CodeTile digit={slots[i]} compact={shortLand} live pinned={pins[i]} look={look} />
-                  <button
-                    type="button"
-                    aria-label={pins[i] ? `Unpin ${slots[i]}` : slots[i] ? `Pin ${slots[i]}` : "Pin digit"}
-                    aria-pressed={pins[i]}
-                    disabled={!slots[i]}
-                    onClick={() => togglePin(i)}
-                    style={{
-                      position: "absolute",
-                      top: -8,
-                      right: -8,
-                      width: 22,
-                      height: 22,
-                      padding: 0,
-                      borderRadius: 11,
-                      border: pins[i] ? "none" : dossier ? "1px solid rgba(26,20,15,0.35)" : "1px solid rgba(255,255,255,0.35)",
-                      background: pins[i] ? (dossier ? "#9d1c1c" : "#f1c40f") : dossier ? "#efe6d6" : "rgba(0,0,0,0.55)",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      cursor: slots[i] ? "pointer" : "default",
-                      opacity: slots[i] ? 1 : 0.7,
-                    }}
-                  >
-                    <PinLock on={pins[i]} look={look} />
-                  </button>
-                </div>
-              ))}
+      </div>
+    );
+
+    const history = (
+      <div ref={boardRef} style={{ flex: 1, minHeight: 0, overflowY: "auto", width: "100%", padding: "6px 12px 8px", boxSizing: "border-box" }}>
+        <div style={{ minHeight: "100%", display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
+          {view.phase === "playing" || view.phase === "finished" ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, paddingBottom: 4 }}>
+              <span style={codeLabel()}>{mode === "daily" ? "Today's code" : "Their code"}</span>
+              <span style={{ flex: 1, height: 1, background: CODE_RULE }} />
+              <span
+                style={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  letterSpacing: 0.8,
+                  fontFamily: CODE_MONO,
+                  color: view.difficulty === "hard" ? CODE_PAPER : CODE_INK,
+                  background: view.difficulty === "hard" ? CODE_RED : "transparent",
+                  border: `1px solid ${view.difficulty === "hard" ? CODE_RED : CODE_INK}`,
+                  padding: "3px 6px",
+                }}
+              >
+                {view.difficulty === "hard" ? "HARD" : "EASY"}
+              </span>
             </div>
-          </div>
-        ) : null}
+          ) : null}
+          {view.phase === "finished" && view.opponentSecret ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "2px 0 8px" }}>
+              <span style={{ width: 20, flexShrink: 0 }} />
+              <div style={{ display: "flex", gap: shortLand ? 4 : 5 }}>
+                {view.opponentSecret.split("").map((digit, i) => (
+                  <CodeTile key={i} digit={digit} tone="ink" size={size} />
+                ))}
+              </div>
+              {view.winner !== "you" ? <span style={codeLabel()}>never cracked</span> : null}
+            </div>
+          ) : null}
+          {showHint ? (
+            <div style={{ fontSize: 13, lineHeight: 1.4, color: CODE_MUTED, textAlign: "left", padding: "2px 0 8px" }}>
+              {view.difficulty === "hard"
+                ? "After each guess you see how many digits are in place."
+                : "Black tiles are in place. Red digits are in the code, somewhere else."}
+            </div>
+          ) : null}
+          {view.phase === "secrets" && !view.yourSecret && shortLand ? (
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, padding: "8px 0" }}>
+              <div style={{ fontSize: 13, color: CODE_MUTED }}>Hide a 4-digit code. Repeats are allowed.</div>
+              {secretSlots}
+            </div>
+          ) : null}
+          {yourGuesses.map((row, i) => (
+            <CodeGuessRow
+              key={i}
+              index={i}
+              guess={row.guess}
+              feedback={row.feedback}
+              compact={shortLand || tight}
+              fresh={fresh === i}
+              solved={view !== null && view.phase === "finished" && view.winner === "you" && i === yourGuesses.length - 1}
+            />
+          ))}
+          {liveRow}
         </div>
       </div>
     );
+
+    const dockNote: CSSProperties = { minHeight: 32, display: "flex", alignItems: "center", justifyContent: "center", color: CODE_MUTED, fontSize: 14, fontWeight: 700, lineHeight: 1.35, textAlign: "center", padding: "4px 8px", fontFamily: CODE_MONO };
     const dock = (
-      <div style={{ flexShrink: 0, width: "100%", padding: shortLand ? "6px 10px 4px" : "8px 12px 6px", boxSizing: "border-box", borderTop: dossier ? "1px solid rgba(26,20,15,0.16)" : "1px solid rgba(255,255,255,0.08)", background: dossier ? "#e7dcc8" : "rgba(0,0,0,0.22)" }}>
-        {error ? <div style={{ color: dossier ? "#9d1c1c" : "#f5b7b1", fontSize: 13, lineHeight: 1.4, textAlign: "center", marginBottom: 6 }}>{error}</div> : null}
+      <div style={{ flexShrink: 0, width: "100%", padding: shortLand ? "6px 10px" : "10px 12px", boxSizing: "border-box", borderTop: `1px solid ${CODE_RULE}`, background: CODE_PAPER_DARK }}>
+        {error ? <div role="alert" style={{ color: CODE_RED, fontSize: 13, lineHeight: 1.4, textAlign: "center", marginBottom: 6 }}>{error}</div> : null}
         {showPad ? (
-          <CodePad value={slots.join("")} onChange={() => undefined} onDigit={typeDigit} onDelete={eraseDigit} onSubmit={submitEntry} submitLabel={view.phase === "secrets" ? "Set code" : "Guess"} compact={shortLand} slots={view.phase !== "playing"} look={look} />
+          <CodePad
+            filled={slots.filter(Boolean).length}
+            onDigit={typeDigit}
+            onDelete={eraseDigit}
+            onSubmit={submitEntry}
+            submitLabel={view.phase === "secrets" ? (shortLand ? "Hide" : "Hide code") : "Guess"}
+            compact={shortLand}
+            tight={tight}
+            slots={view.phase === "secrets" && !shortLand ? secretSlots : undefined}
+            dead={view.phase === "playing" ? notes.dead : undefined}
+            known={view.phase === "playing" ? notes.known : undefined}
+          />
         ) : dropped ? (
-          <button
-            type="button"
-            className="lobby-play-btn"
-            onClick={() => {
-              setDropped(false);
-              setError("");
-              reconnectsRef.current = 0;
-              connect("rejoin");
-            }}
-            style={{ ...codeActionBtn(look), maxWidth: 340 }}
-          >
-            Rejoin
-          </button>
-        ) : view.phase === "finished" && bothHere && !view.tournamentOver ? (
-          <button type="button" className="lobby-play-btn" onClick={() => send({ type: "codeAgain" })} style={{ ...codeActionBtn(look), maxWidth: 340 }}>
-            Play again
-          </button>
+          <div style={{ display: "flex", justifyContent: "center" }}>
+            <button
+              type="button"
+              className="code-press"
+              onClick={() => {
+                setDropped(false);
+                setError("");
+                reconnectsRef.current = 0;
+                connect("rejoin");
+              }}
+              style={codeBtn("solid")}
+            >
+              Rejoin
+            </button>
+          </div>
+        ) : view.phase === "finished" ? (
+          <div style={{ display: "flex", gap: 8, justifyContent: "center", maxWidth: 340, margin: "0 auto" }}>
+            <button type="button" className="code-press" onClick={() => setResultOpen(true)} style={codeBtn("ghost", { flex: 1, maxWidth: "none" })}>
+              Result
+            </button>
+            {canRematch ? (
+              <button type="button" className="code-press" onClick={() => act({ type: "codeAgain" })} style={codeBtn("solid", { flex: 1, maxWidth: "none" })}>
+                {againLabel}
+              </button>
+            ) : null}
+          </div>
+        ) : view.phase === "secrets" && view.yourSecret ? (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, flexWrap: "wrap" }}>
+            <div style={dockNote}>
+              Code hidden. Waiting for {opponentName}
+              <CodeDots />
+            </div>
+            <button
+              type="button"
+              className="code-press"
+              onClick={() => {
+                const next = (view && view.yourSecret ? view.yourSecret : "").split("").slice(0, 4);
+                while (next.length < 4) next.push("");
+                setSlots(next);
+                setPins([false, false, false, false]);
+                act({ type: "codeSecret", clear: true });
+              }}
+              style={codeBtn("ghost", { width: "auto", height: 40, fontSize: 13 })}
+            >
+              Change code
+            </button>
+          </div>
         ) : (
-          <div style={{ minHeight: 28, display: "flex", alignItems: "center", justifyContent: "center", color: view.tournamentOver && view.prize ? (dossier ? "#9d1c1c" : "#f1c40f") : dossier ? "#6d5c49" : "rgba(255,255,255,0.75)", fontSize: 14, fontWeight: 700, lineHeight: 1.35, textAlign: "center", padding: "4px 8px" }}>
-            {view.tournamentOver && view.prize ? "You won the tournament. The prize was sent to your email." : view.phase === "playing" ? turnLine : statusLine}
+          <div style={dockNote}>
+            {waitingOnThem ? (opponent && !opponent.connected ? `${opponentName} is reconnecting` : `${opponentName} is thinking`) : statusLine}
+            {waitingOnThem ? <CodeDots /> : null}
           </div>
         )}
       </div>
     );
+
+    const waitingBody =
+      view.phase === "waiting" ? (
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: shortLand ? 10 : 16, padding: 16 }}>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+            <div style={codeLabel()}>Room</div>
+            <div style={{ display: "flex", gap: 5 }}>
+              {view.code.split("").slice(0, 8).map((ch, i) => (
+                <CodeTile key={i} digit={ch} size={size} tone="ink" />
+              ))}
+            </div>
+          </div>
+          {view.players.length < 2 ? (
+            <>
+              <button type="button" className="code-press" onClick={() => void shareInvite(view ? view.code : "")} style={codeBtn("red")}>
+                Invite a friend
+              </button>
+              <div style={{ fontSize: 13, lineHeight: 1.4, color: CODE_MUTED, maxWidth: 300 }}>
+                Send the link. The game starts when they open it. Your room is also in the public list.
+              </div>
+            </>
+          ) : (
+            <div style={{ fontSize: 14, color: CODE_MUTED }}>{statusLine}</div>
+          )}
+          {view.host && view.players.length < 2 ? (
+            <div style={{ width: "100%", maxWidth: 340, display: "flex", flexDirection: "column", gap: 8, paddingTop: 10, borderTop: `1px dashed ${CODE_RULE}` }}>
+              <div style={codeLabel()}>Match</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                {[false, true].map((asTournament) => {
+                  const on = !!view && !!view.tournament === asTournament;
+                  return (
+                    <button
+                      key={String(asTournament)}
+                      type="button"
+                      className="code-press"
+                      aria-pressed={on}
+                      onClick={() => {
+                        if (!on) send({ type: "codeTournament", tournament: asTournament });
+                      }}
+                      style={codeBtn(on ? "solid" : "ghost", { flex: 1, height: 44, fontSize: 14 })}
+                    >
+                      {asTournament ? "Tournament" : "Duel"}
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                {(["easy", "hard"] as CodeDifficulty[]).map((id) => {
+                  const on = !!view && view.difficulty === id;
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      className="code-press"
+                      aria-pressed={on}
+                      onClick={() => {
+                        if (!on) send({ type: "codeDifficulty", difficulty: id });
+                      }}
+                      style={codeBtn(on ? "solid" : "ghost", { flex: 1, height: 44, fontSize: 14 })}
+                    >
+                      {id === "hard" ? "Hard" : "Easy"}
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{ fontSize: 13, lineHeight: 1.4, color: CODE_MUTED, textAlign: "center" }}>
+                {view.tournament ? "First to 3 rounds. " : "One round. "}
+                {codeDifficultyBlurb(view.difficulty === "hard" ? "hard" : "easy")}
+              </div>
+            </div>
+          ) : null}
+          {error ? <div role="alert" style={{ color: CODE_RED, fontSize: 13 }}>{error}</div> : null}
+        </div>
+      ) : null;
+
+    const won = view.winner === "you";
+    const matchOver = !!view.tournamentOver;
+    const stampText = mode === "daily" ? "CASE CLOSED" : matchOver ? (won ? "MISSION COMPLETE" : "MISSION FAILED") : won ? "CRACKED" : "COMPROMISED";
+    const resultLine =
+      mode === "daily"
+        ? `Daily code #${codeDailyNumber(daily.day)} cracked in ${codeGuessCount(yourGuesses.length)}.`
+        : matchOver
+          ? won
+            ? `You won the tournament ${youWins}–${themWins}.`
+            : `${opponentName} won the tournament ${themWins}–${youWins}.`
+          : won
+            ? `You cracked the code in ${codeGuessCount(yourGuesses.length)}.`
+            : `${opponentName} cracked your code in ${codeGuessCount(theirGuesses.length)}.`;
+    const codeLine = (label: string, digits: string | null, tone: "ink" | "paper") => (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+        <div style={codeLabel()}>{label}</div>
+        <div style={{ display: "flex", gap: 4 }}>
+          {(digits || "????").split("").map((digit, i) => (
+            <CodeTile key={i} digit={digit} size="sm" tone={tone} />
+          ))}
+        </div>
+      </div>
+    );
+    const resultCard =
+      view.phase === "finished" && resultOpen ? (
+        <CodeOverlay onClose={() => setResultOpen(false)} label="Result">
+          {won ? <CodeScraps /> : null}
+          <div style={{ padding: "10px 0 6px" }}>
+            <CodeStamp text={stampText} tone={won ? "red" : "ink"} size={shortLand ? 20 : 26} rotate={-7} slam delay={120} />
+          </div>
+          <div style={{ fontSize: 17, fontWeight: 700, fontFamily: CODE_SERIF, lineHeight: 1.3, maxWidth: 300 }}>{resultLine}</div>
+          <div style={{ display: "flex", gap: 18, justifyContent: "center", flexWrap: "wrap" }}>
+            {codeLine(mode === "daily" ? "Today's code" : "Their code", view.opponentSecret, "ink")}
+            {mode !== "daily" ? codeLine("Your code", view.yourSecret, "paper") : null}
+          </div>
+          {mode === "daily" ? (
+            <div style={{ display: "flex", gap: 18, justifyContent: "center", fontFamily: CODE_MONO }}>
+              {[
+                ["Streak", String(liveStreak)],
+                ["Best", dailyStats.best ? String(dailyStats.best) : "–"],
+                ["Solved", String(dailyStats.solved)],
+              ].map(([label, value]) => (
+                <div key={label}>
+                  <div style={{ fontSize: 22, fontWeight: 700 }}>{value}</div>
+                  <div style={codeLabel()}>{label}</div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ fontSize: 13, color: CODE_MUTED, fontFamily: CODE_MONO }}>
+              You {codeGuessCount(yourGuesses.length)} · {opponentName} {codeGuessCount(theirGuesses.length)}
+            </div>
+          )}
+          {view.tournament ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, fontFamily: CODE_MONO, fontSize: 13, fontWeight: 700 }}>
+              <span>You</span>
+              <CodePips n={youWins} of={3} color={CODE_RED} size={12} label={`You: ${youWins} of 3`} />
+              <span style={{ color: CODE_MUTED }}>first to 3</span>
+              <CodePips n={themWins} of={3} size={12} label={`${opponentName}: ${themWins} of 3`} />
+              <span style={{ maxWidth: 90, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{opponentName}</span>
+            </div>
+          ) : mode === "bot" && youWins + themWins > 1 ? (
+            <div style={{ fontFamily: CODE_MONO, fontSize: 13, fontWeight: 700 }}>
+              Session score {youWins}–{themWins}
+            </div>
+          ) : null}
+          {matchOver && view.prize ? <div style={{ fontSize: 14, fontWeight: 700, color: CODE_RED }}>The prize was sent to your email.</div> : null}
+          {mode === "daily" ? <div style={{ fontSize: 13, color: CODE_MUTED }}>Next code in {codeNextDailyIn()}</div> : null}
+          {mode === "online" && !canRematch && !matchOver ? <div style={{ fontSize: 13, color: CODE_MUTED }}>{dropped ? "Connection lost." : `${opponentName} is away, so there is no rematch yet.`}</div> : null}
+          <div style={{ width: "100%", display: "flex", flexDirection: "column", alignItems: "center", gap: 8, paddingTop: 4 }}>
+            {canRematch ? (
+              <button type="button" className="code-press" onClick={() => act({ type: "codeAgain" })} style={codeBtn("solid")}>
+                {againLabel}
+              </button>
+            ) : null}
+            <button type="button" className="code-press" onClick={() => void shareResult()} style={codeBtn(canRematch ? "ghost" : "solid")}>
+              Share result
+            </button>
+            <div style={{ display: "flex", gap: 8, width: "100%", maxWidth: 340 }}>
+              <button type="button" className="code-press" onClick={() => setResultOpen(false)} style={codeBtn("ghost", { flex: 1, height: 44, fontSize: 13, border: `1px solid ${CODE_RULE}` })}>
+                View board
+              </button>
+              <button type="button" className="code-press" onClick={leaveRoom} style={codeBtn("ghost", { flex: 1, height: 44, fontSize: 13, border: `1px solid ${CODE_RULE}` })}>
+                Leave
+              </button>
+            </div>
+          </div>
+        </CodeOverlay>
+      ) : null;
+
+    const leaveCard = confirmLeave ? (
+      <CodeOverlay onClose={() => setConfirmLeave(false)} label="Leave the game">
+        <div style={{ fontSize: 20, fontWeight: 700, fontFamily: CODE_SERIF }}>Leave this game?</div>
+        <div style={{ fontSize: 14, lineHeight: 1.4, color: CODE_MUTED, maxWidth: 280 }}>
+          {mode === "bot" ? "This round will be thrown away." : `The round ends for ${opponentName} too, and it cannot be resumed.`}
+        </div>
+        <button type="button" className="code-press" onClick={() => setConfirmLeave(false)} style={codeBtn("solid")}>
+          Keep playing
+        </button>
+        <button type="button" className="code-press" onClick={leaveRoom} style={codeBtn("ghost")}>
+          Leave
+        </button>
+      </CodeOverlay>
+    ) : null;
+
     return (
       <FeltShell
         center={false}
-        glow={!dossier}
-        plain={codeDeskPlain(look)}
+        glow={false}
+        plain={CODE_DESK}
         overlay={
           <>
             <WindowButton />
@@ -14810,258 +16179,267 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
           </>
         }
         style={{
-          padding: `${safeTop(78, 64)} 0 ${safeBottom(16, 12)}`,
+          padding: shortLand ? `${safeTop(8, 4)} 0 ${safeBottom(8, 6)}` : `${safeTop(78, 64)} 0 ${safeBottom(16, 12)}`,
           justifyContent: "flex-start",
           alignItems: "stretch",
-          overflow: "hidden",
+          overflowY: "hidden",
         }}
       >
-        <div style={{ flex: 1, minHeight: 0, width: "100%", maxWidth: split ? "none" : 440, margin: "0 auto", display: "flex", flexDirection: "column", ...codeSheetStyle(look) }}>
-          <div style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 8, padding: "0 12px 8px" }}>
-            <button type="button" onClick={leaveRoom} aria-label="More games" style={{ ...codeGhostBtn(look), width: 36, height: 32, maxWidth: "none", padding: 0, fontSize: 16 }}>
-              ←
-            </button>
-            {opponent ? <AvatarBubble src={opponent.avatar} name={opponent.name} size={28} /> : null}
-            <div style={{ flex: 1, minWidth: 0, textAlign: "left", fontSize: 14, fontWeight: 800, color: dossier ? "#9d1c1c" : "#f1c40f", fontFamily: dossier ? "Georgia, serif" : undefined, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-              {statusLine}
-            </div>
-            <button
-              type="button"
-              onClick={() => chooseLook(dossier ? "classic" : "dossier")}
-              style={{
-                border: "none",
-                background: "transparent",
-                color: dossier ? "#6d5c49" : "rgba(255,255,255,0.55)",
-                fontSize: 11,
-                fontWeight: 700,
-                cursor: "pointer",
-                padding: "4px 0",
-                textDecoration: "underline",
-                flexShrink: 0,
-              }}
-            >
-              {dossier ? "Classic" : "Dossier"}
-            </button>
-            {view.tournament ? (
-              <span style={{ fontSize: 12, fontWeight: 800, color: dossier ? "#1a140f" : "#f5f0e6", flexShrink: 0 }}>
-                {view.yourWins || 0}–{view.theirWins || 0}
-              </span>
-            ) : null}
-            <span
-              style={{
-                fontSize: 10,
-                fontWeight: 800,
-                letterSpacing: 0.7,
-                fontFamily: dossier ? CODE_DIGIT_FONT : undefined,
-                color: view.difficulty === "hard" ? (dossier ? "#efe6d6" : "#1a2e1a") : dossier ? "#1a140f" : "#f5f0e6",
-                background: view.difficulty === "hard" ? (dossier ? "#9d1c1c" : "#f1c40f") : "transparent",
-                border: dossier ? "1px solid #1a140f" : "1px solid rgba(241,196,15,0.75)",
-                borderRadius: dossier ? 2 : 6,
-                padding: "4px 6px",
-              }}
-            >
-              {view.difficulty === "hard" ? "HARD" : "EASY"}
-            </span>
-          </div>
-          {view.phase !== "waiting" && !split ? yourPanel : null}
-          {view.phase === "waiting" ? (
-            <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, padding: 16 }}>
-              <div style={{ fontSize: 15, lineHeight: 1.4, color: dossier ? "#6d5c49" : "rgba(255,255,255,0.75)", maxWidth: 280 }}>
-                {view.players.length < 2
-                  ? view.tournament
-                    ? "First to 3 wins. Your room is in the list. The other player joins from there."
-                    : "Your room is in the list. The other player joins from there."
-                  : statusLine}
-              </div>
-              {view.host && view.players.length < 2 ? (
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
-                  <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (!view.tournament) return;
-                        send({ type: "codeTournament", tournament: false });
-                      }}
-                      style={{ ...codeChoiceBtn(look, !view.tournament), width: 120, height: 36 }}
-                    >
-                      Duel
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (view.tournament) return;
-                        send({ type: "codeTournament", tournament: true });
-                      }}
-                      style={{ ...codeChoiceBtn(look, !!view.tournament), width: 140, height: 36 }}
-                    >
-                      Tournament
-                    </button>
-                  </div>
-                  <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
-                    {(["easy", "hard"] as CodeDifficulty[]).map((id) => (
-                      <button
-                        key={id}
-                        type="button"
-                        onClick={() => {
-                          if (view.difficulty === id) return;
-                          send({ type: "codeDifficulty", difficulty: id });
-                        }}
-                        style={{ ...codeChoiceBtn(look, view.difficulty === id), width: 110, height: 36 }}
-                      >
-                        {id === "hard" ? "Hard" : "Easy"}
-                      </button>
-                    ))}
-                  </div>
-                  <div style={{ fontSize: 13, lineHeight: 1.4, color: dossier ? "#6d5c49" : "rgba(255,255,255,0.72)", maxWidth: 280, textAlign: "center" }}>
-                    {codeDifficultyBlurb(view.difficulty === "hard" ? "hard" : "easy")}
-                  </div>
-                </div>
-              ) : null}
-              {error ? <div style={{ color: dossier ? "#9d1c1c" : "#f5b7b1", fontSize: 13 }}>{error}</div> : null}
-            </div>
+        <div style={{ flex: 1, minHeight: 0, width: "100%", maxWidth: sheetMax, margin: "0 auto", display: "flex", flexDirection: "column", ...CODE_SHEET }}>
+          {header}
+          {race}
+          {split ? null : theirsPanel}
+          {waitingBody ? (
+            waitingBody
           ) : (
             <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-            <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: split ? "row" : "column" }}>
-              <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
-                {view.phase === "secrets" && !view.yourSecret ? (
-                  <div style={{ padding: "4px 16px 0", textAlign: "center", color: dossier ? "#6d5c49" : "rgba(255,255,255,0.72)", fontSize: 14 }}>
-                    Hide a 4-digit code. Repeats are allowed.
-                  </div>
-                ) : null}
-                {history}
-                {split ? null : dock}
+              <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: split ? "row" : "column" }}>
+                <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
+                  {history}
+                  {split ? null : dock}
+                </div>
+                {split ? <div style={{ width: 290, flexShrink: 0, minHeight: 0, overflowY: "auto", borderLeft: `1px solid ${CODE_RULE}`, background: "rgba(26,20,15,0.06)" }}>{theirsPanel}</div> : null}
               </div>
-              {split ? (
-                <div style={{ width: 250, minHeight: 0, overflowY: "auto", borderLeft: dossier ? "1px solid rgba(26,20,15,0.16)" : "1px solid rgba(255,255,255,0.1)" }}>{yourPanel}</div>
-              ) : null}
-            </div>
-            {split ? dock : null}
+              {split ? dock : null}
             </div>
           )}
+          {resultCard}
+          {leaveCard}
+          {howTo ? <CodeHowTo onClose={closeHowTo} /> : null}
+          {toastNode}
         </div>
       </FeltShell>
     );
   }
 
+  const dailyNumber = codeDailyNumber(daily.day);
+  const dailyStreak = codeDailyLiveStreak(dailyStats, daily.day);
+  const dailyNote = daily.solved
+    ? `Cracked in ${codeGuessCount(daily.guesses.length)}. Next in ${codeNextDailyIn()}.`
+    : daily.guesses.length
+      ? `In progress · ${codeGuessCount(daily.guesses.length)}`
+      : "A new code is waiting.";
+  const sectionHead = (text: string) => (
+    <div style={{ width: "100%", display: "flex", alignItems: "center", gap: 10 }}>
+      <span style={{ flex: 1, height: 1, background: CODE_RULE }} />
+      <span style={codeLabel()}>{text}</span>
+      <span style={{ flex: 1, height: 1, background: CODE_RULE }} />
+    </div>
+  );
+  const soloCard: CSSProperties = {
+    flex: 1,
+    minWidth: 0,
+    boxSizing: "border-box",
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
+    padding: 12,
+    textAlign: "left",
+    background: CODE_PAPER_LIGHT,
+    border: `1px solid ${CODE_RULE}`,
+    color: CODE_INK,
+  };
+  const linkBtn: CSSProperties = {
+    minHeight: 44,
+    padding: "0 10px",
+    border: "none",
+    background: "transparent",
+    color: CODE_INK,
+    fontFamily: CODE_MONO,
+    fontSize: 13,
+    fontWeight: 700,
+    textDecoration: "underline",
+    cursor: "pointer",
+  };
 
-  return shell(
-    <>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
-        <div style={{ fontSize: shortLand ? 22 : 26, fontWeight: 700, color: dossier ? "#1a140f" : "#f5f0e6", fontFamily: 'Georgia, "Times New Roman", serif' }}>
-          Secret code
-        </div>
-        {dossier ? (
-          <span style={{ border: "2px solid #9d1c1c", color: "#9d1c1c", fontFamily: CODE_DIGIT_FONT, fontSize: 11, fontWeight: 700, letterSpacing: 1, padding: "3px 5px", transform: "rotate(6deg)" }}>
-            EYES ONLY
-          </span>
-        ) : null}
-      </div>
-      {auth.user ? (
-        <div style={{ fontSize: 13, color: dossier ? "#6d5c49" : "rgba(255,255,255,0.7)" }}>Playing as {clerkNickname(auth.user)}</div>
-      ) : (
-        <div style={{ fontSize: 13, color: dossier ? "#6d5c49" : "rgba(255,255,255,0.7)", maxWidth: 300, lineHeight: 1.4 }}>
-          Sign in with Google first — button at the top right.
-        </div>
-      )}
-      <div style={{ display: "flex", gap: 8, width: "100%", maxWidth: 340 }}>
-        <button
-          type="button"
-          className="lobby-play-btn"
-          style={{ ...codeActionBtn(look), flex: 1, width: "auto", maxWidth: "none", height: shortLand ? 40 : 50, fontSize: 15 }}
-          disabled={busy}
-          onClick={() => void createRoom(false)}
-        >
-          Duel
-        </button>
-        <button
-          type="button"
-          className="lobby-play-btn"
-          style={{ ...codeActionBtn(look), flex: 1, width: "auto", maxWidth: "none", height: shortLand ? 40 : 50, fontSize: 15 }}
-          disabled={busy}
-          onClick={() => void createRoom(true)}
-        >
-          Tournament
-        </button>
-      </div>
-      <div style={{ fontSize: 13, lineHeight: 1.4, color: dossier ? "#6d5c49" : "rgba(255,255,255,0.72)", maxWidth: 340 }}>
-        Duel is one round. Tournament is first to 3. Digits may repeat. No time limit.
-      </div>
-      {session ? (
-        <button
-          type="button"
-          className="lobby-play-btn"
-          style={codeActionBtn(look)}
-          disabled={busy}
-          onClick={() => {
-            if (!auth.user) {
-              setError("Sign in with Google first");
-              return;
-            }
-            setBusy(true);
-            setError("");
-            reconnectsRef.current = 0;
-            connect("rejoin");
-          }}
-        >
-          Rejoin game
-        </button>
-      ) : null}
-      <div style={{ width: "100%", maxWidth: 340, textAlign: "left" }}>
-        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.4, textTransform: "uppercase", color: dossier ? "#6d5c49" : "rgba(255,255,255,0.55)", marginBottom: 8, textAlign: "center", fontFamily: dossier ? CODE_DIGIT_FONT : undefined }}>
-          Open rooms
-        </div>
-        {lobbies.length === 0 ? (
-          <div style={{ padding: shortLand ? "8px 12px" : "14px 12px", borderRadius: dossier ? 2 : 10, background: dossier ? "#f7f1e4" : "rgba(0,0,0,0.28)", color: dossier ? "#6d5c49" : "rgba(255,255,255,0.62)", fontSize: 13, textAlign: "center", border: dossier ? "1px solid rgba(26,20,15,0.16)" : undefined }}>
-            No rooms yet
-          </div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {lobbies.map((lobby) => (
-              <div key={lobby.code} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: dossier ? 2 : 10, background: dossier ? "#f7f1e4" : "rgba(0,0,0,0.32)", border: dossier ? "1px solid rgba(26,20,15,0.16)" : "1px solid rgba(255,255,255,0.12)" }}>
-                <AvatarBubble src={lobby.hostAvatar} name={lobby.host} size={32} />
-                <div style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
-                  <div style={{ color: dossier ? "#1a140f" : "#f5f0e6", fontWeight: 700, fontSize: 14 }}>{lobby.host}</div>
-                  <div style={{ fontSize: 11, color: dossier ? "#6d5c49" : "rgba(255,255,255,0.6)" }}>
-                    {lobby.tournament ? "Tournament" : "Duel"} · {lobby.difficulty === "hard" ? "Hard" : "Easy"} · {lobby.count}/{lobby.max}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => void joinRoom(lobby.code)}
-                  style={{ ...codeActionBtn(look), width: 72, height: 36, fontSize: 14 }}
-                >
-                  Join
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-      <button
-        type="button"
-        onClick={() => chooseLook(dossier ? "classic" : "dossier")}
+  return (
+    <FeltShell
+      center={false}
+      glow={false}
+      plain={CODE_DESK}
+      overlay={
+        <>
+          <WindowButton />
+          <ProfileButton />
+        </>
+      }
+      style={{
+        padding: shortLand ? `${safeTop(8, 4)} 16px ${safeBottom(10, 8)}` : `${safeTop(72, 56)} 16px ${safeBottom(18, 14)}`,
+        justifyContent: "flex-start",
+      }}
+    >
+      <div
         style={{
-          border: "none",
-          background: "transparent",
-          color: dossier ? "#6d5c49" : "rgba(255,255,255,0.55)",
-          fontSize: 12,
-          fontWeight: 700,
-          cursor: "pointer",
-          textDecoration: "underline",
-          padding: 0,
+          width: "100%",
+          maxWidth: 420,
+          boxSizing: "border-box",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: shortLand ? 10 : 14,
+          textAlign: "center",
+          flex: shortLand ? undefined : 1,
+          padding: shortLand ? "8px 14px 12px" : "10px 16px 14px",
+          ...CODE_SHEET,
         }}
       >
-        {dossier ? "Classic look" : "Dossier look"}
-      </button>
-      {error ? <div style={{ color: dossier ? "#9d1c1c" : "#f5b7b1", fontSize: 13, lineHeight: 1.4 }}>{error}</div> : null}
-    </>
+        <CodeClip />
+        <div style={{ width: "100%", display: "flex", justifyContent: "flex-start" }}>
+          <button type="button" className="code-press" onClick={onLeave} style={{ ...linkBtn, padding: "0 4px", textDecoration: "none" }}>
+            ← More games
+          </button>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+          <div style={codeLabel({ fontSize: 11 })}>Citrons · case file</div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
+            <div style={{ fontSize: shortLand ? 24 : 30, fontWeight: 700, color: CODE_INK, fontFamily: CODE_SERIF, lineHeight: 1.1 }}>Secret code</div>
+            <CodeStamp text="EYES ONLY" />
+          </div>
+          <div style={{ fontSize: 14, color: CODE_MUTED, lineHeight: 1.4 }}>Hide four digits. Crack theirs first.</div>
+        </div>
+
+        {invite && invite !== "DAILY" ? (
+          <div className="code-rise" style={{ width: "100%", maxWidth: 340, boxSizing: "border-box", padding: 12, border: `1.5px solid ${CODE_RED}`, background: CODE_PAPER_LIGHT, display: "flex", flexDirection: "column", gap: 8, alignItems: "center" }}>
+            <div style={codeLabel({ color: CODE_RED })}>You are invited · room {invite}</div>
+            {auth.user ? (
+              <div style={{ fontSize: 14, color: CODE_MUTED }}>
+                Joining
+                <CodeDots />
+              </div>
+            ) : (
+              <div style={{ fontSize: 14, color: CODE_INK, lineHeight: 1.4 }}>Sign in below and you go straight to the room.</div>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                clearCodeJoin();
+                setInvite("");
+              }}
+              style={{ ...linkBtn, minHeight: 32, fontSize: 12, color: CODE_MUTED }}
+            >
+              Not now
+            </button>
+          </div>
+        ) : null}
+
+        {sectionHead("Play online")}
+        {auth.user ? (
+          <>
+            <button type="button" className="code-press" style={codeBtn("solid", { height: shortLand ? 42 : 50, fontSize: 16 })} disabled={busy} onClick={() => void createRoom()}>
+              {busy ? "Opening…" : "Create a room"}
+            </button>
+            {session ? (
+              <button
+                type="button"
+                className="code-press"
+                style={codeBtn("ghost", { height: 44 })}
+                disabled={busy}
+                onClick={() => {
+                  setBusy(true);
+                  setError("");
+                  reconnectsRef.current = 0;
+                  connect("rejoin");
+                }}
+              >
+                Rejoin your game
+              </button>
+            ) : null}
+            <div style={{ fontSize: 13, color: CODE_MUTED, lineHeight: 1.4, maxWidth: 320 }}>
+              Playing as {clerkNickname(auth.user)}. You pick duel or tournament in the room, then send a link.
+            </div>
+          </>
+        ) : (
+          <>
+            <button type="button" className="code-press" style={codeBtn("solid", { height: shortLand ? 42 : 50, fontSize: 16 })} disabled={signingIn || !auth.loaded} onClick={() => void signIn()}>
+              {signingIn ? "Opening Google…" : "Sign in with Google"}
+            </button>
+            <div style={{ fontSize: 13, color: CODE_MUTED, lineHeight: 1.4, maxWidth: 320 }}>Online duels need a sign-in. The solo games below do not.</div>
+          </>
+        )}
+        {error ? <div role="alert" style={{ color: CODE_RED, fontSize: 13, lineHeight: 1.4 }}>{error}</div> : null}
+
+        <div style={{ width: "100%", maxWidth: 340, textAlign: "left" }}>
+          <div style={codeLabel({ marginBottom: 6 })}>Open rooms</div>
+          {lobbies.length === 0 ? (
+            <div style={{ padding: "12px", background: CODE_PAPER_LIGHT, color: CODE_MUTED, fontSize: 13, lineHeight: 1.4, border: `1px dashed ${CODE_RULE}` }}>
+              Nobody is waiting right now. Create a room, or play solo below.
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {lobbies.map((lobby) => (
+                <div key={lobby.code} className="code-rise" style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", background: CODE_PAPER_LIGHT, border: `1px solid ${CODE_RULE}` }}>
+                  <AvatarBubble src={lobby.hostAvatar} name={lobby.host} size={34} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ color: CODE_INK, fontWeight: 700, fontSize: 15, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{lobby.host}</div>
+                    <div style={{ fontSize: 12, color: CODE_MUTED, fontFamily: CODE_MONO }}>
+                      {lobby.tournament ? "Tournament" : "Duel"} · {lobby.difficulty === "hard" ? "Hard" : "Easy"}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="code-press"
+                    disabled={busy}
+                    onClick={() => {
+                      if (auth.user) void joinRoom(lobby.code);
+                      else setError("Sign in with Google to join a room.");
+                    }}
+                    style={codeBtn("red", { width: 76, height: 44, fontSize: 14 })}
+                  >
+                    Join
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {sectionHead("Play solo")}
+        <div style={{ width: "100%", maxWidth: 340, display: "flex", gap: 8, alignItems: "stretch" }}>
+          <div style={soloCard}>
+            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 6 }}>
+              <span style={codeLabel({ color: CODE_INK })}>Daily code</span>
+              <span style={{ fontFamily: CODE_MONO, fontSize: 12, color: CODE_MUTED }}>#{dailyNumber}</span>
+            </div>
+            <div style={{ fontSize: 13, lineHeight: 1.35, color: CODE_MUTED, flex: 1 }}>
+              {dailyNote}
+              {dailyStreak > 1 ? ` Streak ${dailyStreak}.` : ""}
+            </div>
+            <button type="button" className="code-press" onClick={openDaily} style={codeBtn(daily.solved ? "ghost" : "red", { height: 44, fontSize: 14 })}>
+              {daily.solved ? "See result" : daily.guesses.length ? "Continue" : "Crack it"}
+            </button>
+          </div>
+          <div style={soloCard}>
+            <span style={codeLabel({ color: CODE_INK })}>Vs computer</span>
+            <div style={{ fontSize: 13, lineHeight: 1.35, color: CODE_MUTED, flex: 1 }}>{CODE_BOT_NAME} hides a code and hunts for yours.</div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button type="button" className="code-press" onClick={() => startBot("easy")} style={codeBtn("ghost", { flex: 1, height: 44, fontSize: 14, padding: 0 })}>
+                Easy
+              </button>
+              <button type="button" className="code-press" onClick={() => startBot("hard")} style={codeBtn("ghost", { flex: 1, height: 44, fontSize: 14, padding: 0 })}>
+                Hard
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 4, flexWrap: "wrap" }}>
+          <button type="button" onClick={() => setHowTo(true)} style={linkBtn}>
+            How to play
+          </button>
+          <button type="button" onClick={toggleSound} aria-pressed={soundOn} style={linkBtn}>
+            Sound: {soundOn ? "on" : "off"}
+          </button>
+        </div>
+        {howTo ? <CodeHowTo onClose={closeHowTo} fixed /> : null}
+        {toastNode}
+      </div>
+    </FeltShell>
   );
 }
 
 function CardGame() {
   const [online, setOnline] = useState(() => !!pendingJoinCode());
-  const [codeGame, setCodeGame] = useState(false);
+  const [codeGame, setCodeGame] = useState(() => !!pendingCodeJoin());
   const [phase, setPhase] = useState<Phase>("lobby");
   const [lobbyView, setLobbyView] = useState<LobbyView>("main");
   const [soloSkin, setSoloSkin] = useState<TableSkinId>(() => readSoloLook(SOLO_SKIN_KEY, isTableSkin, "felt"));

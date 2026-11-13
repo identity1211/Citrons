@@ -76,6 +76,7 @@ canvases/card-game.canvas.tsx   # ALL client game + lobby + profile + chat + voi
 scripts/build-site.pl           # canvas → docs/index.html
 docs/                           # GitHub Pages root (CNAME: citrons.lat)
 docs/app/*.apk                  # published sideload APKs (versioned + citrons-android.apk)
+docs/fonts/                     # IBM Plex Mono (OFL) for Secret code, self-hosted so it needs no CDN
 server/index.js                 # HTTP + WebSocket rooms
 server/engine.js                # card game rules
 server/elimination.js           # elimination mode
@@ -130,7 +131,10 @@ Set in the Railway dashboard, not in git:
 - Lobby: solo / multiplayer / leaderboard, table skins, card backs
 - Online rooms: seats, spectators, queue, kick votes, chat, Daily voice
 - Modes: standard + elimination
-- Secret code: 4 digits, repeats allowed, no timer, Easy vs Hard. Looks: dossier (default) and classic. Pick screen: **Duel** (one round) or **Tournament** (first to 3). Difficulty is chosen in the room while the host is alone. One Clerk account cannot sit in a card room and a code room at once
+- Secret code: 4 digits, repeats allowed, no timer, Easy vs Hard. One look, the dossier (the classic felt look was removed). Start screen: **Create a room** for online play, plus two solo modes that need no sign-in. Duel (one round) or Tournament (first to 3) and the difficulty are chosen in the room while the host is alone. One Clerk account cannot sit in a card room and a code room at once
+- Secret code invite link: `https://citrons.lat/?room=CODE` opens Secret code and joins that room after sign-in. `?room=daily` opens the daily code. The code is kept in `sessionStorage` (`citrons-code-join`) so it survives the Google redirect, and the parameter is stripped from the address
+- Secret code solo modes run in the browser only, with a copy of the server's `feedback()` rules (`codeFeedback` in the canvas; keep the two in step). **Vs computer** (Agent Zero) is deliberately imperfect: about 7 guesses on Easy and 11 on Hard. **Daily code** is one code per UTC day derived from the date (`codeDailySecret`), Easy rules, progress and streak in `localStorage` (`citrons-code-daily`, `citrons-code-daily-stats`). Neither mode can win the tournament prize
+- Secret code feedback: tiles flip on a new guess, sounds are synthesized (toggle stored in `citrons-code-sound`), the keypad dims digits that Easy feedback has ruled out, tapping a digit in the live row locks it, a result card closes each round with rematch and share. First visit shows a how-to card (`citrons-code-howto-seen`)
 - Tournament prize: server emails `present.pdf` once, and only when the winner’s Clerk primary email matches `PRIZE_EMAIL`. Do not rehearse that win on the prize account
 - Auth: Clerk (Google) via `clerk.citrons.lat`
 - Plus billing: Stripe checkout + webhook
