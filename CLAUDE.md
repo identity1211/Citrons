@@ -1,6 +1,6 @@
 # Citrons — handoff for Claude Code
 
-Online multiplayer card game (Citron / “lemons”), plus a two-player **Secret code** mini-game. Live site: **https://citrons.lat**  
+Online multiplayer card game (Citron / “lemons”), plus two two-player mini-games under **More games**: **Secret code** and **Higher or lower**. Live site: **https://citrons.lat**  
 Repo: `identity1211/Citrons` · Branch: `main` · public
 
 Owner prefers Russian for chat; code/commits in English. After any gameplay/UI change, do a bug pass (seats, reconnect, spectators, scoring) before stopping.
@@ -72,7 +72,7 @@ Android-only UI: gate with `isCitronsAndroidApp()` (`User-Agent` contains `Citro
 ## Key paths
 
 ```
-canvases/card-game.canvas.tsx   # ALL client game + lobby + profile + chat + voice + Secret code UI
+canvases/card-game.canvas.tsx   # ALL client game + lobby + profile + chat + voice + Secret code + Higher or lower UI
 scripts/build-site.pl           # canvas → docs/index.html
 docs/                           # GitHub Pages root (CNAME: citrons.lat)
 docs/app/*.apk                  # published sideload APKs (versioned + citrons-android.apk)
@@ -81,6 +81,7 @@ server/index.js                 # HTTP + WebSocket rooms
 server/engine.js                # card game rules
 server/elimination.js           # elimination mode
 server/codegame.js              # Secret code rooms, duel / tournament
+server/hilo.js                  # Higher or lower rooms: a real-time race, duel / tournament
 server/prize.js                 # Resend prize letter
 server/leaderboard.js           # stats, achievements, volume JSON
 server/clerk.js                 # Clerk token verify + primary email
@@ -135,6 +136,8 @@ Set in the Railway dashboard, not in git:
 - Secret code invite link: `https://citrons.lat/?room=CODE` opens Secret code and joins that room after sign-in. `?room=daily` opens the daily code. The code is kept in `sessionStorage` (`citrons-code-join`) so it survives the Google redirect, and the parameter is stripped from the address
 - Secret code solo modes run in the browser only, with a copy of the server's `feedback()` rules (`codeFeedback` in the canvas; keep the two in step). **Vs computer** (Agent Zero) is deliberately imperfect: about 7 guesses on Easy and 11 on Hard. **Daily code** is one code per UTC day derived from the date (`codeDailySecret`), Easy rules, progress and streak in `localStorage` (`citrons-code-daily`, `citrons-code-daily-stats`). Neither mode can win the tournament prize
 - Secret code feedback: tiles flip on a new guess, sounds are synthesized soft sine tones and bells, by the owner's choice over 8-bit beeps and typewriter clicks (toggle stored in `citrons-code-sound`), the keypad dims digits that Easy feedback has ruled out, tapping a digit in the live row locks it, a result card closes each round with rematch and share. First visit shows a how-to card (`citrons-code-howto-seen`)
+- Higher or lower (added 14 Nov 2026): each player hides a number from 1 to 9999, then both guess **at the same time** after a 3-2-1 countdown. Every guess is answered higher or lower, and the first exact guess wins. There are no turns, by the owner's choice: with turns the game is solved by halving and comes down to luck. Rooms copy Secret code (Duel or Tournament to 3, Easy or Hard, public list, rejoin). Easy shows your range and every answer. Hard sends only the last answer, and the server enforces that. Each player sees how far the other has narrowed the range, never their guesses. Invite link: `https://citrons.lat/?race=CODE` (kept in `sessionStorage` as `citrons-hilo-join`). **Vs computer** (Pip) runs in the browser with copies of the server's `parseNumber()` and `compare()` (`hiloParse`, `hiloCompare` in the canvas; keep them in step). It has **no prize** and no daily mode. The lobby plaque is an inline SVG (`HiloLogo`), not an image file. Sound uses the Secret code toggle (`citrons-code-sound`)
+- One Clerk account sits in one room at a time across the card game, Secret code and Higher or lower. `server/index.js` wires the three together
 - Tournament prize: server emails `present.pdf` once, and only when the winner’s Clerk primary email matches `PRIZE_EMAIL`. Do not rehearse that win on the prize account
 - Auth: Clerk (Google) via `clerk.citrons.lat`
 - Plus billing: Stripe checkout + webhook
@@ -158,8 +161,9 @@ Set in the Railway dashboard, not in git:
    - The system share sheet, and how loud the sounds are
    - It was tested only in headless Chrome against a local copy of `server/codegame.js` with a fake sign-in. That test rig was not saved in the repo
    - Decisions already made by the owner, do not undo: soft sine tones and bells for sound (no clicks, no 8-bit beeps); the Classic look stays removed; the server was not changed for this work
-3. Android UX polish as needed (lobby spacing / keyboard mostly fixed in 1.0.5–1.0.6)
-4. Do not commit: `.cursor/`, `previews/`, `android/.kotlin/`, canvas status/tsconfig, `server/private/` unless asked
+3. **Higher or lower (14 Nov 2026) is not committed or deployed yet, and online play was not checked with real accounts.** What was checked: `server/hilo.test.js`, two raw WebSocket clients against a local server with the sign-in check switched off, and the game against the computer in a browser at phone size, portrait and landscape. Still to verify by hand after deploy: Google sign-in, two players joined by a `?race=CODE` link, rematch, a tournament to 3, a reconnect mid-race, Safari on iPhone and the Android app
+4. Android UX polish as needed (lobby spacing / keyboard mostly fixed in 1.0.5–1.0.6)
+5. Do not commit: `.claude/`, `.cursor/`, `previews/`, `android/.kotlin/`, canvas status/tsconfig, `server/private/` unless asked
 
 ---
 
@@ -173,7 +177,7 @@ perl scripts/build-site.pl
 npm start   # or node server/index.js
 
 # Tests
-npm test    # elimination.test.js and codegame.test.js
+npm test    # elimination.test.js, codegame.test.js and hilo.test.js
 
 # Android debug APK (JDK 21)
 export JAVA_HOME="$HOME/Library/Java/JavaVirtualMachines/jbr-21.0.11/Contents/Home"
@@ -199,9 +203,10 @@ After native shell fixes: reinstall APK (Profile → **Update app** or versioned
 
 | Change | Touch |
 |--------|--------|
-| Lobby/table/cards/chat/Secret code UI | `canvases/card-game.canvas.tsx` → `build-site.pl` → commit `docs/index.html` |
+| Lobby/table/cards/chat/Secret code/Higher or lower UI | `canvases/card-game.canvas.tsx` → `build-site.pl` → commit `docs/index.html` |
 | Card rules / rooms / scoring | `server/engine.js`, `server/index.js`, maybe `elimination.js` |
 | Secret code rules / tournament | `server/codegame.js`, `server/index.js` |
+| Higher or lower rules / rooms | `server/hilo.js`, `server/index.js` (UI is in the canvas) |
 | Prize email | `server/prize.js` (letter only; PDF stays on the volume) |
 | Stats / achievements | `server/leaderboard.js` + canvas meta |
 | Plus / donations | `server/stripe-billing.js` + canvas Plus UI |

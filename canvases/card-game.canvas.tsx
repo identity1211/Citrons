@@ -7274,6 +7274,7 @@ function Lobby({
   onRules,
   onOnline,
   onCodeGame,
+  onHiloGame,
   soloSkin,
   soloBack,
   onSoloSkin,
@@ -7284,6 +7285,7 @@ function Lobby({
   onRules: () => void;
   onOnline: () => void;
   onCodeGame: () => void;
+  onHiloGame: () => void;
   soloSkin: TableSkinId;
   soloBack: CardBackId;
   onSoloSkin: (id: TableSkinId) => void;
@@ -7588,6 +7590,21 @@ function Lobby({
                     pointerEvents: "none",
                   }}
                 />
+              </button>
+              <button
+                type="button"
+                onClick={onHiloGame}
+                aria-label="Higher or lower"
+                style={{
+                  width: "100%",
+                  maxWidth: 380,
+                  padding: 0,
+                  border: "none",
+                  background: "transparent",
+                  cursor: "pointer",
+                }}
+              >
+                <HiloLogo />
               </button>
             </>
           )}
@@ -16331,9 +16348,1941 @@ function CodeGame({ onLeave }: { onLeave: () => void }) {
   );
 }
 
+/* ───────────────────────── Higher or lower ─────────────────────────
+ * A two-player race. Each player hides a number from 1 to 9999, then both guess at the same time.
+ * Every guess is answered "higher" or "lower". The first exact guess wins.
+ * Rooms and rules live in server/hilo.js. The game against the computer runs in the browser only.
+ */
+
+const HILO_SESSION_KEY = "citrons-hilo-session";
+const HILO_JOIN_KEY = "citrons-hilo-join";
+const HILO_HOWTO_KEY = "citrons-hilo-howto-seen";
+const HILO_MIN = 1;
+const HILO_MAX = 9999;
+const HILO_COUNTDOWN_MS = 3500;
+const HILO_BOT_NAME = "Pip";
+
+type HiloDir = "up" | "down" | "hit";
+
+type HiloGuess = { n: number; dir: HiloDir };
+
+type HiloView = {
+  code: string;
+  difficulty: CodeDifficulty;
+  phase: "waiting" | "secrets" | "playing" | "finished";
+  host: boolean;
+  yourSecret: number | null;
+  opponentSecret: number | null;
+  players: { id: string; name: string; avatar?: string; connected: boolean; locked: boolean; you: boolean }[];
+  startsIn: number | null;
+  elapsed: number | null;
+  guesses: HiloGuess[];
+  yourCount: number;
+  theirCount: number;
+  theirLeft: number | null;
+  theirGuesses: HiloGuess[];
+  winner: "you" | "them" | null;
+  tournament?: boolean;
+  yourWins?: number;
+  theirWins?: number;
+  tournamentOver?: boolean;
+  status: string;
+};
+
+type HiloBot = {
+  difficulty: CodeDifficulty;
+  phase: "secrets" | "playing" | "finished";
+  yourSecret: number | null;
+  botSecret: number;
+  guesses: HiloGuess[];
+  botGuesses: HiloGuess[];
+  botLo: number;
+  botHi: number;
+  startsAt: number;
+  endedAt: number;
+  winner: "you" | "them" | null;
+  yourWins: number;
+  theirWins: number;
+  round: number;
+};
+
+/** A link with ?race=CODE opens Higher or lower and joins that room. */
+function rememberHiloJoinFromUrl() {
+  if (typeof window === "undefined") return;
+  try {
+    const page = new URL(window.location.href);
+    const q = page.searchParams.get("race");
+    if (q == null) return;
+    const code = String(q)
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, "")
+      .slice(0, 12);
+    if (code) sessionStorage.setItem(HILO_JOIN_KEY, code);
+    // Drop the parameter so a reload does not try to join the same room again.
+    page.searchParams.delete("race");
+    window.history.replaceState({}, "", `${page.pathname}${page.search}${page.hash}` || "/");
+  } catch {
+    /* ignore */
+  }
+}
+
+rememberHiloJoinFromUrl();
+
+function pendingHiloJoin(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    return String(sessionStorage.getItem(HILO_JOIN_KEY) || "")
+      .trim()
+      .toUpperCase();
+  } catch {
+    return "";
+  }
+}
+
+function clearHiloJoin() {
+  try {
+    sessionStorage.removeItem(HILO_JOIN_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+function hiloInviteUrl(code: string): string {
+  const base = appUrl() || "https://citrons.lat/";
+  return `${base}?race=${encodeURIComponent(code)}`;
+}
+
+function readHiloSession(): CodeSession | null {
+  try {
+    const raw = localStorage.getItem(HILO_SESSION_KEY) || sessionStorage.getItem(HILO_SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    const savedAt = Number(parsed.savedAt) || 0;
+    if (!parsed.code || !parsed.token || Date.now() - savedAt > 3 * 60 * 60 * 1000) return null;
+    return { code: String(parsed.code), token: String(parsed.token), name: String(parsed.name || "Player"), savedAt };
+  } catch {
+    return null;
+  }
+}
+
+function writeHiloSession(sess: CodeSession) {
+  const raw = JSON.stringify(sess);
+  try {
+    localStorage.setItem(HILO_SESSION_KEY, raw);
+  } catch {
+    /* ignore */
+  }
+  try {
+    sessionStorage.setItem(HILO_SESSION_KEY, raw);
+  } catch {
+    /* ignore */
+  }
+}
+
+function clearHiloSession() {
+  try {
+    localStorage.removeItem(HILO_SESSION_KEY);
+  } catch {
+    /* ignore */
+  }
+  try {
+    sessionStorage.removeItem(HILO_SESSION_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Same rule as parseNumber() in server/hilo.js: 1 to 9999, no leading zero. */
+function hiloParse(raw: unknown): number | null {
+  const s = String(raw == null ? "" : raw).trim();
+  return /^[1-9]\d{0,3}$/.test(s) ? Number(s) : null;
+}
+
+/** Same rule as compare() in server/hilo.js. Keep the two in step. */
+function hiloCompare(secret: number, guess: number): HiloDir {
+  if (guess === secret) return "hit";
+  return secret > guess ? "up" : "down";
+}
+
+/** The numbers a list of answers has not ruled out. Bounds are exclusive. */
+function hiloRange(guesses: HiloGuess[]): { lo: number; hi: number; left: number } {
+  let lo = HILO_MIN - 1;
+  let hi = HILO_MAX + 1;
+  for (const g of guesses) {
+    if (g.dir === "up") lo = Math.max(lo, g.n);
+    else if (g.dir === "down") hi = Math.min(hi, g.n);
+    else {
+      lo = g.n - 1;
+      hi = g.n + 1;
+    }
+  }
+  return { lo, hi, left: Math.max(1, hi - lo - 1) };
+}
+
+/** 0 at the whole range, 1 when one number is left. Each halving moves the bar the same distance. */
+function hiloProgress(left: number | null): number {
+  if (left == null) return 0;
+  return Math.max(0, Math.min(1, 1 - Math.log(Math.max(1, left)) / Math.log(HILO_MAX)));
+}
+
+function hiloClock(ms: number | null): string {
+  const total = Math.max(0, Math.floor((ms || 0) / 1000));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
+function hiloGuessCount(n: number): string {
+  return n === 1 ? "1 guess" : `${n} guesses`;
+}
+
+function hiloLeftText(left: number): string {
+  return left === 1 ? "1 number left" : `${left} numbers left`;
+}
+
+function hiloDifficultyBlurb(difficulty: CodeDifficulty): string {
+  return difficulty === "hard"
+    ? "Hard: you see only the last answer. Keep the range in your head."
+    : "Easy: the screen keeps your range and every answer.";
+}
+
+/** Soft sine cues in the same voice as Secret code. A rising pair means higher, a falling pair means lower. */
+function hiloSfx(kind: "up" | "down" | "tick" | "go") {
+  if (!codeSoundOn()) return;
+  const ctx = codeAudio();
+  if (!ctx) return;
+  try {
+    if (kind === "up") {
+      codeTone(ctx, 440, 0, 0.09, 0.05);
+      codeTone(ctx, 660, 0.08, 0.16, 0.05);
+    } else if (kind === "down") {
+      codeTone(ctx, 520, 0, 0.09, 0.05);
+      codeTone(ctx, 347, 0.08, 0.16, 0.05);
+    } else if (kind === "tick") codeTone(ctx, 587, 0, 0.09, 0.05);
+    else codeBell(ctx, 880, 0, 0.5, 0.06);
+  } catch {
+    /* ignore */
+  }
+}
+
+const HILO_GOLD = "#d9b25f";
+const HILO_CREAM = "#f5f0e6";
+const HILO_MUTED = "rgba(245,240,230,0.64)";
+const HILO_RULE = "rgba(245,240,230,0.14)";
+const HILO_PANEL = "#143524";
+const HILO_PANEL_DARK = "#0f2a1c";
+const HILO_INK = "#1c1608";
+const HILO_GREEN = "#86dc8f";
+const HILO_RED = "#f08a78";
+
+const HILO_DESK: CSSProperties = {
+  background: "#0b1d14",
+  backgroundImage: "radial-gradient(circle at 50% -10%, rgba(217,178,95,0.12), transparent 55%)",
+  boxShadow: "inset 0 0 0 10px #081810",
+};
+
+const HILO_SHEET: CSSProperties = {
+  backgroundColor: HILO_PANEL,
+  backgroundImage: "linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0) 160px)",
+  color: HILO_CREAM,
+  border: "1px solid rgba(217,178,95,0.42)",
+  borderRadius: 10,
+  boxShadow: "0 16px 36px rgba(0,0,0,0.45)",
+  position: "relative",
+  overflow: "hidden",
+};
+
+function ensureHiloStyles() {
+  if (typeof document === "undefined" || document.getElementById("citrons-hilo-style")) return;
+  const style = document.createElement("style");
+  style.id = "citrons-hilo-style";
+  style.textContent = `
+    .hilo-press:focus-visible { outline: 2px solid ${HILO_GOLD}; outline-offset: 2px; }
+    @keyframes hiloCount {
+      0% { opacity: 0; transform: scale(1.7); }
+      30% { opacity: 1; transform: scale(1); }
+      100% { opacity: 1; transform: scale(0.94); }
+    }
+    .hilo-count { animation: hiloCount 0.9s ease-out both; }
+    @keyframes hiloUp {
+      0% { opacity: 0; transform: translateY(14px); }
+      100% { opacity: 1; transform: translateY(0); }
+    }
+    .hilo-up { animation: hiloUp 0.26s cubic-bezier(0.22, 1, 0.36, 1) both; }
+    @keyframes hiloDown {
+      0% { opacity: 0; transform: translateY(-14px); }
+      100% { opacity: 1; transform: translateY(0); }
+    }
+    .hilo-down { animation: hiloDown 0.26s cubic-bezier(0.22, 1, 0.36, 1) both; }
+    .hilo-bar { transition: width 0.35s ease-out, left 0.35s ease-out; }
+    @keyframes hiloCaret {
+      0%, 49% { opacity: 1; }
+      50%, 100% { opacity: 0; }
+    }
+    .hilo-caret { animation: hiloCaret 1s steps(1) infinite; }
+    @media (prefers-reduced-motion: reduce) {
+      .hilo-count, .hilo-up, .hilo-down, .hilo-caret { animation: none !important; }
+      .hilo-bar { transition: none !important; }
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+function hiloBtn(kind: "gold" | "ghost" | "quiet", extra?: CSSProperties): CSSProperties {
+  return {
+    width: "100%",
+    maxWidth: 340,
+    height: 48,
+    boxSizing: "border-box",
+    borderRadius: 8,
+    border: kind === "gold" ? "none" : `1.5px solid ${kind === "ghost" ? HILO_GOLD : HILO_RULE}`,
+    background: kind === "gold" ? HILO_GOLD : "transparent",
+    color: kind === "gold" ? HILO_INK : kind === "ghost" ? HILO_GOLD : HILO_CREAM,
+    fontSize: 15,
+    fontWeight: 700,
+    fontFamily: CODE_MONO,
+    letterSpacing: 0.4,
+    cursor: "pointer",
+    padding: "0 12px",
+    ...extra,
+  };
+}
+
+function hiloLabel(extra?: CSSProperties): CSSProperties {
+  return {
+    fontSize: 12,
+    fontWeight: 700,
+    letterSpacing: 1.2,
+    textTransform: "uppercase",
+    color: HILO_MUTED,
+    fontFamily: CODE_MONO,
+    ...extra,
+  };
+}
+
+/** The lobby plaque. Drawn here so the game needs no image file. */
+function HiloLogo() {
+  return (
+    <svg viewBox="0 0 800 230" role="img" aria-label="Higher or lower" style={{ width: "100%", height: "auto", display: "block", filter: "drop-shadow(0 8px 16px rgba(0,0,0,0.35))" }}>
+      <defs>
+        <linearGradient id="hilo-gold" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#f3dc9a" />
+          <stop offset="0.5" stopColor="#d9b25f" />
+          <stop offset="1" stopColor="#b08a3c" />
+        </linearGradient>
+      </defs>
+      <path d="M30 4h740a26 26 0 0 0 26 26v170a26 26 0 0 0-26 26H30a26 26 0 0 0-26-26V30A26 26 0 0 0 30 4z" fill="#12301f" stroke="url(#hilo-gold)" strokeWidth="5" />
+      <path d="M262 84l34-44 34 44z" fill="url(#hilo-gold)" />
+      <text x="400" y="88" textAnchor="middle" fontFamily='Georgia, "Times New Roman", serif' fontSize="84" fill="url(#hilo-gold)">
+        ?
+      </text>
+      <path d="M470 44l34 44 34-44z" fill="url(#hilo-gold)" />
+      <rect x="150" y="112" width="500" height="3" fill="url(#hilo-gold)" opacity="0.55" />
+      <text x="400" y="186" textAnchor="middle" fontFamily='Georgia, "Times New Roman", serif' fontSize="64" letterSpacing="5" fill="url(#hilo-gold)">
+        HIGHER · LOWER
+      </text>
+    </svg>
+  );
+}
+
+function HiloOverlay({ children, onClose, label, fixed }: { children: ReactNode; onClose?: () => void; label: string; fixed?: boolean }) {
+  return (
+    <div
+      className="code-fade"
+      role="dialog"
+      aria-modal="true"
+      aria-label={label}
+      onClick={onClose}
+      style={{
+        position: fixed ? "fixed" : "absolute",
+        inset: 0,
+        zIndex: 20,
+        background: "rgba(4,12,8,0.72)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 14,
+        boxSizing: "border-box",
+        overflow: "hidden",
+      }}
+    >
+      <div
+        className="code-sheet-in"
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "100%",
+          maxWidth: 380,
+          maxHeight: "100%",
+          overflowY: "auto",
+          boxSizing: "border-box",
+          padding: "20px 18px 16px",
+          backgroundColor: HILO_PANEL,
+          color: HILO_CREAM,
+          border: `1px solid ${HILO_GOLD}`,
+          borderRadius: 10,
+          boxShadow: "0 18px 40px rgba(0,0,0,0.55)",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: 12,
+          textAlign: "center",
+        }}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function HiloHowTo({ onClose, fixed }: { onClose: () => void; fixed?: boolean }) {
+  const step: CSSProperties = { width: "100%", display: "flex", flexDirection: "column", alignItems: "center", gap: 6, paddingBottom: 12, borderBottom: `1px dashed ${HILO_RULE}` };
+  const text: CSSProperties = { fontSize: 14, lineHeight: 1.4, color: HILO_CREAM, maxWidth: 300 };
+  return (
+    <HiloOverlay onClose={onClose} label="How to play" fixed={fixed}>
+      <div style={{ fontSize: 22, fontWeight: 700, fontFamily: CODE_SERIF }}>How to play</div>
+      <div style={step}>
+        <div style={hiloLabel({ color: HILO_GOLD })}>1 · Hide a number</div>
+        <div style={text}>Pick any number from 1 to 9999. Your opponent hides one too.</div>
+      </div>
+      <div style={step}>
+        <div style={hiloLabel({ color: HILO_GOLD })}>2 · Race</div>
+        <div style={text}>After the countdown you both guess at once. Nobody waits for a turn.</div>
+      </div>
+      <div style={step}>
+        <div style={hiloLabel({ color: HILO_GOLD })}>3 · Read the arrow</div>
+        <div style={{ display: "flex", gap: 18, fontFamily: CODE_MONO, fontWeight: 700, fontSize: 15 }}>
+          <span>
+            <span style={{ color: HILO_GOLD }}>▲</span> higher
+          </span>
+          <span>
+            <span style={{ color: HILO_GOLD }}>▼</span> lower
+          </span>
+        </div>
+        <div style={text}>The arrow says where their number is from your guess. You see how fast they close in on yours, but not their guesses.</div>
+      </div>
+      <div style={{ ...text, fontWeight: 700 }}>The first to hit the exact number wins.</div>
+      <button type="button" className="code-press hilo-press" onClick={onClose} style={hiloBtn("gold")}>
+        Got it
+      </button>
+    </HiloOverlay>
+  );
+}
+
+function HiloPad({
+  onDigit,
+  onDelete,
+  onSubmit,
+  ready,
+  submitLabel,
+  compact,
+  tight,
+  display,
+}: {
+  onDigit: (digit: string) => void;
+  onDelete: () => void;
+  onSubmit: () => void;
+  ready: boolean;
+  submitLabel: string;
+  compact?: boolean;
+  tight?: boolean;
+  display?: ReactNode;
+}) {
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key >= "0" && e.key <= "9") onDigit(e.key);
+      else if (e.key === "Backspace") onDelete();
+      else if (e.key === "Enter") {
+        // Enter on a focused button outside the keypad belongs to that button.
+        if (target && target.tagName === "BUTTON" && !target.closest("[data-hilo-pad]")) return;
+        // Otherwise a focused key would also be clicked and type its digit again.
+        e.preventDefault();
+        onSubmit();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onDelete, onDigit, onSubmit]);
+
+  function keyStyle(height: number, fontSize: number): CSSProperties {
+    return {
+      height,
+      padding: 0,
+      borderRadius: 8,
+      border: `1px solid ${HILO_RULE}`,
+      background: "rgba(245,240,230,0.08)",
+      color: HILO_CREAM,
+      fontWeight: 700,
+      fontSize,
+      fontFamily: CODE_MONO,
+      cursor: "pointer",
+    };
+  }
+  function press(key: string) {
+    if (key === "⌫") onDelete();
+    else onDigit(key);
+  }
+  const submit = (
+    <button
+      type="button"
+      className="code-press hilo-press"
+      onClick={onSubmit}
+      style={hiloBtn("gold", { maxWidth: "none", width: compact ? 92 : "100%", height: compact ? 38 : tight ? 40 : 46, flexShrink: 0, opacity: ready ? 1 : 0.45 })}
+    >
+      {submitLabel}
+    </button>
+  );
+  if (compact) {
+    const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "⌫"];
+    return (
+      <div data-hilo-pad="" style={{ width: "100%", display: "flex", alignItems: "center", gap: 8 }}>
+        {display}
+        <div style={{ flex: 1, minWidth: 0, display: "grid", gridTemplateColumns: "repeat(11, minmax(0, 1fr))", gap: 4 }}>
+          {keys.map((key) => (
+            <button key={key} type="button" className="code-press hilo-press" aria-label={key === "⌫" ? "Delete" : key} onClick={() => press(key)} style={keyStyle(38, 16)}>
+              {key}
+            </button>
+          ))}
+        </div>
+        {submit}
+      </div>
+    );
+  }
+  return (
+    <div data-hilo-pad="" style={{ width: "100%", maxWidth: 340, margin: "0 auto", display: "flex", flexDirection: "column", alignItems: "center", gap: tight ? 6 : 8 }}>
+      {display}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: tight ? 5 : 6, width: "100%" }}>
+        {["1", "2", "3", "4", "5", "6", "7", "8", "9", "", "0", "⌫"].map((key, i) =>
+          key ? (
+            <button key={key} type="button" className="code-press hilo-press" aria-label={key === "⌫" ? "Delete" : key} onClick={() => press(key)} style={keyStyle(tight ? 36 : 44, tight ? 18 : 20)}>
+              {key}
+            </button>
+          ) : (
+            <span key={`gap-${i}`} />
+          )
+        )}
+      </div>
+      {submit}
+    </div>
+  );
+}
+
+/** One lane of the race: how far a player has closed in on the other number. */
+function HiloLane({ name, count, left, tone, note }: { name: string; count: number; left: number | null; tone: "gold" | "cream"; note?: string }) {
+  const pct = Math.round(hiloProgress(left) * 100);
+  const sub = note ? note : left == null ? hiloGuessCount(count) : `${hiloGuessCount(count)} · ${left} left`;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8, fontFamily: CODE_MONO }}>
+        <span style={{ minWidth: 0, fontSize: 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: tone === "gold" ? HILO_GOLD : HILO_CREAM, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{name}</span>
+        <span style={{ flexShrink: 0, fontSize: 12, color: HILO_MUTED, whiteSpace: "nowrap" }}>{note ? note : hiloGuessCount(count)}</span>
+      </div>
+      <div
+        role="progressbar"
+        aria-label={`${name}: ${sub}`}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={left == null ? 0 : pct}
+        style={{ height: 8, borderRadius: 4, background: "rgba(245,240,230,0.12)", overflow: "hidden" }}
+      >
+        <div className="hilo-bar" style={{ height: "100%", width: left == null ? "0%" : `${Math.max(2, pct)}%`, borderRadius: 4, background: tone === "gold" ? HILO_GOLD : HILO_CREAM }} />
+      </div>
+      <div style={{ fontFamily: CODE_MONO, fontSize: 11, color: HILO_MUTED, whiteSpace: "nowrap", textAlign: "left" }}>{left == null ? "range hidden" : `${left} left`}</div>
+    </div>
+  );
+}
+
+function HiloChip({ guess, latest }: { guess: HiloGuess; latest?: boolean }) {
+  const hit = guess.dir === "hit";
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        padding: "3px 7px",
+        borderRadius: 6,
+        border: `1px solid ${hit ? HILO_GREEN : latest ? HILO_GOLD : HILO_RULE}`,
+        color: hit ? HILO_GREEN : HILO_CREAM,
+        fontFamily: CODE_MONO,
+        fontSize: 13,
+        fontWeight: 700,
+        whiteSpace: "nowrap",
+      }}
+    >
+      {guess.n}
+      <span aria-label={hit ? "exact" : guess.dir === "up" ? "higher" : "lower"} style={{ color: hit ? HILO_GREEN : HILO_GOLD, fontSize: 11 }}>
+        {hit ? "✓" : guess.dir === "up" ? "▲" : "▼"}
+      </span>
+    </span>
+  );
+}
+
+function HiloGame({ onLeave }: { onLeave: () => void }) {
+  ensureCodeStyles();
+  ensureHiloStyles();
+  const auth = useClerkAuth();
+  const shortLand = useShortLandscape();
+  const vp = useContext(ViewportCtx);
+  const [screen, setScreen] = useState<"pick" | "room">("pick");
+  const [mode, setMode] = useState<"online" | "bot">("online");
+  const [online, setOnline] = useState<HiloView | null>(null);
+  /** Local clock time at which the online race starts, worked out from the server's relative times. */
+  const [onlineStart, setOnlineStart] = useState(0);
+  const [bot, setBot] = useState<HiloBot | null>(null);
+  const [lobbies, setLobbies] = useState<CodeLobbyInfo[]>([]);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [entry, setEntry] = useState("");
+  const [dropped, setDropped] = useState(false);
+  const [session, setSession] = useState<CodeSession | null>(() => readHiloSession());
+  const [connected, setConnected] = useState(false);
+  const [invite, setInvite] = useState(() => pendingHiloJoin());
+  const [howTo, setHowTo] = useState(() => {
+    try {
+      return !localStorage.getItem(HILO_HOWTO_KEY);
+    } catch {
+      return false;
+    }
+  });
+  const [soundOn, setSoundOn] = useState(() => codeSoundOn());
+  const [toast, setToast] = useState("");
+  const [resultOpen, setResultOpen] = useState(false);
+  const [confirmLeave, setConfirmLeave] = useState(false);
+  const [shake, setShake] = useState(0);
+  const [signingIn, setSigningIn] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+  const wsRef = useRef<WebSocket | null>(null);
+  const pingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const toastRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const aliveRef = useRef(true);
+  const screenRef = useRef(screen);
+  const sessionRef = useRef(session);
+  const onlineRoomRef = useRef(false);
+  const botRef = useRef<HiloBot | null>(bot);
+  const reconnectsRef = useRef(0);
+  const nameRef = useRef("");
+  const leavingRef = useRef(false);
+  const inviteTriedRef = useRef(false);
+  const sentAtRef = useRef(0);
+  const prevRef = useRef<{ key: string; count: number; phase: string; beat: number } | null>(null);
+  screenRef.current = screen;
+  sessionRef.current = session;
+  onlineRoomRef.current = screen === "room" && mode === "online";
+  botRef.current = bot;
+
+  function rememberSession(next: CodeSession) {
+    writeHiloSession(next);
+    sessionRef.current = next;
+    setSession(next);
+  }
+
+  function forgetSession() {
+    clearHiloSession();
+    sessionRef.current = null;
+    setSession(null);
+  }
+
+  function say(text: string) {
+    setToast(text);
+    if (toastRef.current) clearTimeout(toastRef.current);
+    toastRef.current = setTimeout(() => setToast(""), 2600);
+  }
+
+  async function clerkPayload() {
+    const clerk = await ensureClerk();
+    const token = await clerkSessionToken(clerk);
+    const u = clerk.user;
+    if (!token || !u) throw billingAuthError(clerk);
+    const nick = clerkNickname(u);
+    nameRef.current = nick;
+    try {
+      localStorage.setItem(NAME_KEY, nick);
+    } catch {
+      /* ignore */
+    }
+    return { name: nick, avatar: u.imageUrl || "", clerkToken: token };
+  }
+
+  function handleMsg(msg: any) {
+    if (!msg || typeof msg !== "object") return;
+    if (msg.type === "hiloLobbies") {
+      setLobbies(Array.isArray(msg.lobbies) ? msg.lobbies : []);
+      return;
+    }
+    if (msg.type === "error") {
+      const message = String(msg.message || "Server error");
+      // An old card server answers unknown commands with this. It is not an error of this game.
+      if (message === "Join a lobby first") return;
+      setBusy(false);
+      const viaLink = inviteTriedRef.current;
+      inviteTriedRef.current = false;
+      // A game against the computer is on screen: the server has nothing to say about it.
+      const solo = screenRef.current === "room" && !onlineRoomRef.current;
+      if (solo) {
+        /* keep the solo board clean */
+      } else if (viaLink && message === "Room not found") setError("That room has closed. Create your own and send the link.");
+      else if (viaLink && message === "Game already started") setError("That room is already full.");
+      else setError(message);
+      if (message === "Room not found") {
+        forgetSession();
+        setOnline(null);
+        if (onlineRoomRef.current) setScreen("pick");
+      }
+      return;
+    }
+    if (msg.type === "hiloJoined") {
+      if (leavingRef.current) return;
+      inviteTriedRef.current = false;
+      rememberSession({
+        code: String(msg.code),
+        token: String(msg.token),
+        name: nameRef.current || sessionRef.current?.name || "Player",
+        savedAt: Date.now(),
+      });
+      reconnectsRef.current = 0;
+      setDropped(false);
+      setMode("online");
+      setScreen("room");
+      return;
+    }
+    if (msg.type === "hiloState") {
+      if (leavingRef.current) return;
+      const view = msg as HiloView;
+      if (view.phase === "playing") {
+        const startsIn = Number(view.startsIn) || 0;
+        setOnlineStart(Date.now() + (startsIn > 0 ? startsIn : -(Number(view.elapsed) || 0)));
+      }
+      setOnline(view);
+      setMode("online");
+      setScreen("room");
+      setBusy(false);
+      setError("");
+      setDropped(false);
+      return;
+    }
+    if (msg.type === "hiloLeft") {
+      leavingRef.current = false;
+      forgetSession();
+      setOnline(null);
+      if (onlineRoomRef.current) {
+        setScreen("pick");
+        setEntry("");
+      }
+      setBusy(false);
+      const ws = wsRef.current;
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "hiloBrowse" }));
+    }
+  }
+
+  function connect(kind: "browse" | "rejoin") {
+    const open = wsRef.current;
+    if (open && open.readyState === WebSocket.OPEN) {
+      void greet(open, kind);
+      return;
+    }
+    if (open && open.readyState === WebSocket.CONNECTING) return;
+    const ws = new WebSocket(defaultWsUrl());
+    wsRef.current = ws;
+    ws.onopen = () => {
+      if (pingRef.current) clearInterval(pingRef.current);
+      pingRef.current = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "ping" }));
+      }, 25000);
+      setConnected(true);
+      void greet(ws, kind);
+    };
+    ws.onmessage = (ev) => {
+      try {
+        handleMsg(JSON.parse(String(ev.data)));
+      } catch {
+        /* ignore */
+      }
+    };
+    ws.onclose = () => {
+      if (pingRef.current) clearInterval(pingRef.current);
+      if (wsRef.current === ws) wsRef.current = null;
+      if (!aliveRef.current) return;
+      setConnected(false);
+      leavingRef.current = false;
+      if (!onlineRoomRef.current) {
+        setBusy(false);
+        // A game against the computer does not need the socket. It comes back with the list of rooms.
+        window.setTimeout(() => {
+          if (!aliveRef.current || wsRef.current || screenRef.current !== "pick") return;
+          connect("browse");
+        }, 1200);
+        return;
+      }
+      if (reconnectsRef.current < 2 && sessionRef.current) {
+        reconnectsRef.current += 1;
+        window.setTimeout(() => {
+          if (!aliveRef.current || wsRef.current) return;
+          connect("rejoin");
+        }, 800);
+        return;
+      }
+      setDropped(true);
+      setBusy(false);
+      setError("Connection lost — you can rejoin.");
+    };
+  }
+
+  async function greet(ws: WebSocket, kind: "browse" | "rejoin") {
+    if (kind === "rejoin" && sessionRef.current) {
+      try {
+        const payload = await clerkPayload();
+        if (ws.readyState !== WebSocket.OPEN) return;
+        leavingRef.current = false;
+        ws.send(JSON.stringify({
+          type: "hiloRejoin",
+          ...payload,
+          code: sessionRef.current.code,
+          token: sessionRef.current.token,
+        }));
+      } catch (err) {
+        setBusy(false);
+        setError(clerkErrorText(err));
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "hiloBrowse" }));
+      }
+      return;
+    }
+    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "hiloBrowse" }));
+  }
+
+  function send(msg: object) {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      setBusy(false);
+      setError("No connection to the server.");
+      return;
+    }
+    ws.send(JSON.stringify(msg));
+  }
+
+  useEffect(() => {
+    aliveRef.current = true;
+    // A room link wins over an older saved seat.
+    connect(sessionRef.current && !pendingHiloJoin() ? "rejoin" : "browse");
+    return () => {
+      aliveRef.current = false;
+      if (pingRef.current) clearInterval(pingRef.current);
+      if (toastRef.current) clearTimeout(toastRef.current);
+      const ws = wsRef.current;
+      wsRef.current = null;
+      if (ws) {
+        ws.onclose = null;
+        ws.close();
+      }
+    };
+    // Mount only: the socket stays up for this screen.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (screen === "pick" && !wsRef.current) connect("browse");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen]);
+
+  function newBotRound(prev: HiloBot | null, difficulty: CodeDifficulty): HiloBot {
+    return {
+      difficulty,
+      phase: "secrets",
+      yourSecret: null,
+      botSecret: HILO_MIN + Math.floor(Math.random() * (HILO_MAX - HILO_MIN + 1)),
+      guesses: [],
+      botGuesses: [],
+      botLo: HILO_MIN - 1,
+      botHi: HILO_MAX + 1,
+      startsAt: 0,
+      endedAt: 0,
+      winner: null,
+      yourWins: prev ? prev.yourWins : 0,
+      theirWins: prev ? prev.theirWins : 0,
+      round: prev ? prev.round + 1 : 1,
+    };
+  }
+
+  function startBot(difficulty: CodeDifficulty) {
+    setBot(newBotRound(null, difficulty));
+    setMode("bot");
+    setScreen("room");
+    setError("");
+    setEntry("");
+  }
+
+  function botAct(msg: any) {
+    if (msg.type === "hiloSecret") {
+      const n = msg.clear ? null : hiloParse(msg.secret);
+      setBot((cur) => {
+        if (!cur || cur.phase !== "secrets" || n == null) return cur;
+        return { ...cur, yourSecret: n, phase: "playing", startsAt: Date.now() + HILO_COUNTDOWN_MS };
+      });
+      return;
+    }
+    if (msg.type === "hiloGuess") {
+      const n = hiloParse(msg.guess);
+      setBot((cur) => {
+        if (!cur || cur.phase !== "playing" || n == null || Date.now() < cur.startsAt) return cur;
+        const dir = hiloCompare(cur.botSecret, n);
+        const guesses = [...cur.guesses, { n, dir }];
+        if (dir === "hit") return { ...cur, guesses, phase: "finished", winner: "you", yourWins: cur.yourWins + 1, endedAt: Date.now() };
+        return { ...cur, guesses };
+      });
+      return;
+    }
+    if (msg.type === "hiloAgain") {
+      setBot((cur) => (cur && cur.phase === "finished" ? newBotRound(cur, cur.difficulty) : cur));
+    }
+  }
+
+  // The computer splits its range near the middle, never exactly, and takes a human pause between guesses.
+  // Hard is quicker and closer to the middle: about 13 guesses in half a minute.
+  useEffect(() => {
+    if (screen !== "room" || mode !== "bot" || !bot || bot.phase !== "playing") return;
+    const hard = bot.difficulty === "hard";
+    const think = hard ? 1700 + Math.random() * 1100 : 2600 + Math.random() * 1800;
+    const timer = window.setTimeout(() => {
+      setBot((cur) => {
+        if (!cur || cur.phase !== "playing" || cur.yourSecret == null) return cur;
+        const span = cur.botHi - cur.botLo - 1;
+        const frac = hard ? 0.4 + Math.random() * 0.2 : 0.25 + Math.random() * 0.5;
+        const n = span <= 1 ? cur.botLo + 1 : Math.min(cur.botHi - 1, cur.botLo + 1 + Math.floor(frac * span));
+        const dir = hiloCompare(cur.yourSecret, n);
+        const botGuesses = [...cur.botGuesses, { n, dir }];
+        if (dir === "hit") {
+          return { ...cur, botGuesses, botLo: n - 1, botHi: n + 1, phase: "finished", winner: "them", theirWins: cur.theirWins + 1, endedAt: Date.now() };
+        }
+        return { ...cur, botGuesses, botLo: dir === "up" ? Math.max(cur.botLo, n) : cur.botLo, botHi: dir === "down" ? Math.min(cur.botHi, n) : cur.botHi };
+      });
+    }, Math.max(0, bot.startsAt - Date.now()) + think);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen, mode, bot?.phase, bot?.botGuesses.length, bot?.round]);
+
+  function act(msg: any) {
+    if (mode === "bot") botAct(msg);
+    else send(msg);
+  }
+
+  let view: HiloView | null = null;
+  if (screen === "room") {
+    if (mode === "bot" && bot) {
+      const racing = bot.phase === "playing";
+      const over = bot.phase === "finished";
+      view = {
+        code: "BOT",
+        difficulty: bot.difficulty,
+        phase: bot.phase,
+        host: true,
+        yourSecret: bot.yourSecret,
+        opponentSecret: over ? bot.botSecret : null,
+        players: [
+          { id: "you", name: "You", connected: true, locked: bot.yourSecret != null, you: true },
+          { id: "bot", name: HILO_BOT_NAME, connected: true, locked: true, you: false },
+        ],
+        startsIn: null,
+        elapsed: over ? Math.max(0, bot.endedAt - bot.startsAt) : null,
+        guesses: racing && bot.difficulty === "hard" ? bot.guesses.slice(-1) : bot.guesses,
+        yourCount: bot.guesses.length,
+        theirCount: bot.botGuesses.length,
+        theirLeft: racing || over ? Math.max(1, bot.botHi - bot.botLo - 1) : null,
+        theirGuesses: over ? bot.botGuesses : [],
+        winner: bot.winner,
+        yourWins: bot.yourWins,
+        theirWins: bot.theirWins,
+        status: "",
+      };
+    } else if (mode === "online") {
+      view = online;
+    }
+  }
+
+  const opponent = view?.players.find((p) => !p.you) || null;
+  const viewKey = view ? `${mode}:${view.code}` : "";
+  const raceStart = mode === "bot" ? (bot ? bot.startsAt : 0) : onlineStart;
+  const playing = !!view && view.phase === "playing";
+  const untilStart = playing ? raceStart - now : 0;
+  const countdown = untilStart > 0 ? Math.min(3, Math.ceil(untilStart / 1000)) : 0;
+  const racing = playing && countdown === 0;
+  const elapsedMs = !view ? 0 : view.phase === "finished" ? view.elapsed || 0 : racing ? Math.max(0, now - raceStart) : 0;
+  const lastGuess = view && view.guesses.length ? view.guesses[view.guesses.length - 1] : null;
+
+  // The race clock and the countdown run off one ticker.
+  useEffect(() => {
+    if (!playing) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 100);
+    return () => window.clearInterval(timer);
+  }, [playing, viewKey, raceStart]);
+
+  useEffect(() => {
+    setEntry("");
+  }, [viewKey, view?.phase]);
+
+  // Cues for the countdown, each answer, and the finish.
+  useLayoutEffect(() => {
+    if (!view) {
+      prevRef.current = null;
+      return;
+    }
+    const prev = prevRef.current;
+    const beat = playing ? countdown : -1;
+    const cur = { key: viewKey, count: view.yourCount, phase: view.phase, beat };
+    prevRef.current = cur;
+    if (!prev || prev.key !== cur.key) return;
+    if (playing && prev.phase === "playing" && beat !== prev.beat) {
+      if (beat > 0) hiloSfx("tick");
+      else if (prev.beat > 0) {
+        hiloSfx("go");
+        codeBuzz(40);
+      }
+    } else if (playing && prev.phase !== "playing" && beat > 0) hiloSfx("tick");
+    if (cur.phase === "finished" && prev.phase !== "finished") {
+      const won = view.winner === "you";
+      window.setTimeout(() => {
+        codeSfx(won ? "win" : "lose");
+        codeBuzz(won ? [30, 60, 30, 60, 80] : [120]);
+      }, 150);
+    } else if (cur.count === prev.count + 1 && lastGuess && lastGuess.dir !== "hit") {
+      hiloSfx(lastGuess.dir === "up" ? "up" : "down");
+      codeBuzz(12);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewKey, view?.phase, view?.yourCount, countdown]);
+
+  useEffect(() => {
+    if (!view || view.phase !== "finished") {
+      setResultOpen(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setResultOpen(true), 700);
+    return () => window.clearTimeout(timer);
+  }, [viewKey, view?.phase]);
+
+  async function createRoom() {
+    if (!auth.user) {
+      setError("Sign in with Google first");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    leavingRef.current = false;
+    try {
+      const payload = await clerkPayload();
+      send({ type: "hiloCreate", ...payload, difficulty: "easy", tournament: false });
+    } catch (err) {
+      setBusy(false);
+      setError(clerkErrorText(err));
+    }
+  }
+
+  async function joinRoom(code: string, viaLink?: boolean) {
+    const c = String(code || "").trim().toUpperCase();
+    if (!c) return;
+    if (!auth.user) {
+      setError("Sign in with Google first");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    leavingRef.current = false;
+    inviteTriedRef.current = !!viaLink;
+    try {
+      const payload = await clerkPayload();
+      send({ type: "hiloJoin", ...payload, code: c });
+    } catch (err) {
+      setBusy(false);
+      setError(clerkErrorText(err));
+    }
+  }
+
+  useEffect(() => {
+    if (!invite) return;
+    if (!auth.user || !connected || screen !== "pick" || busy) return;
+    clearHiloJoin();
+    setInvite("");
+    void joinRoom(invite, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [invite, auth.user, connected, screen, busy]);
+
+  async function signIn() {
+    setSigningIn(true);
+    setError("");
+    try {
+      await signInWithGoogle();
+      window.setTimeout(() => {
+        if (aliveRef.current) setSigningIn(false);
+      }, 8000);
+    } catch (err) {
+      setSigningIn(false);
+      setError(clerkErrorText(err));
+    }
+  }
+
+  function leaveRoom() {
+    setConfirmLeave(false);
+    setResultOpen(false);
+    if (mode === "online") {
+      const ws = wsRef.current;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        leavingRef.current = true;
+        ws.send(JSON.stringify({ type: "hiloLeave" }));
+      }
+      forgetSession();
+      setOnline(null);
+      setDropped(false);
+    } else {
+      setBot(null);
+    }
+    setScreen("pick");
+    setError("");
+    setBusy(false);
+    setEntry("");
+  }
+
+  function askLeave() {
+    const midGame = !!view && (view.phase === "secrets" || view.phase === "playing") && view.players.length === 2;
+    if (midGame) setConfirmLeave(true);
+    else leaveRoom();
+  }
+
+  function nudge(text?: string) {
+    setShake((n) => n + 1);
+    codeSfx("deny");
+    codeBuzz([20, 40, 20]);
+    if (text) say(text);
+  }
+
+  const entryOpen = !!view && !dropped && ((view.phase === "secrets" && view.yourSecret == null) || view.phase === "playing");
+
+  function typeDigit(digit: string) {
+    if (!entryOpen || howTo || confirmLeave) return;
+    // No leading zero: the numbers start at 1.
+    if (entry.length >= 4 || (!entry && digit === "0")) {
+      nudge();
+      return;
+    }
+    codeSfx("key");
+    codeBuzz(8);
+    setEntry(entry + digit);
+  }
+
+  function eraseDigit() {
+    if (!entryOpen || howTo || confirmLeave || !entry) return;
+    codeSfx("erase");
+    setEntry(entry.slice(0, -1));
+  }
+
+  function submitEntry() {
+    if (!view || !entryOpen || howTo || confirmLeave) return;
+    const n = hiloParse(entry);
+    if (n == null) {
+      nudge();
+      return;
+    }
+    if (view.phase === "secrets") {
+      act({ type: "hiloSecret", secret: String(n) });
+      setEntry("");
+      return;
+    }
+    if (!racing) {
+      nudge("Wait for the start");
+      return;
+    }
+    // The server drops a second guess sent within a quarter of a second, so the number stays typed.
+    if (Date.now() - sentAtRef.current < 300) return;
+    if (view.difficulty === "easy") {
+      const range = hiloRange(view.guesses);
+      if (n <= range.lo || n >= range.hi) {
+        nudge(`Already ruled out. Try ${range.lo + 1} to ${range.hi - 1}.`);
+        return;
+      }
+    }
+    sentAtRef.current = Date.now();
+    act({ type: "hiloGuess", guess: String(n) });
+    setEntry("");
+  }
+
+  function toggleSound() {
+    const next = !soundOn;
+    try {
+      localStorage.setItem(CODE_SOUND_KEY, next ? "on" : "off");
+    } catch {
+      /* ignore */
+    }
+    setSoundOn(next);
+    if (next) hiloSfx("go");
+  }
+
+  function closeHowTo() {
+    try {
+      localStorage.setItem(HILO_HOWTO_KEY, "1");
+    } catch {
+      /* ignore */
+    }
+    setHowTo(false);
+  }
+
+  async function shareInvite(code: string) {
+    const url = hiloInviteUrl(code);
+    const how = await codeShare("Race me on Citrons — Higher or lower:", url);
+    if (how === "copied") say("Link copied");
+    else if (how === "failed") say(url);
+  }
+
+  async function shareResult() {
+    if (!view) return;
+    const who = opponent ? opponent.name : "My opponent";
+    const text =
+      view.winner === "you"
+        ? `I found ${who}'s number in ${hiloGuessCount(view.yourCount)} (${hiloClock(view.elapsed)}) — Higher or lower on Citrons`
+        : `${who} found my number in ${hiloGuessCount(view.theirCount)} (${hiloClock(view.elapsed)}) — Higher or lower on Citrons`;
+    const how = await codeShare(text, appUrl() || "https://citrons.lat/");
+    if (how === "copied") say("Result copied");
+    else if (how === "failed") say("Could not share from this device");
+  }
+
+  const youWins = view?.yourWins || 0;
+  const themWins = view?.theirWins || 0;
+  const opponentName = opponent ? opponent.name : "Opponent";
+  let statusLine = "";
+  if (view) {
+    if (dropped) statusLine = "Connection lost";
+    else if (view.status) statusLine = view.status;
+    else if (view.phase === "waiting") statusLine = "Waiting for an opponent";
+    else if (view.phase === "secrets") statusLine = view.yourSecret == null ? "Hide your number" : "Waiting";
+    else if (view.phase === "playing") statusLine = countdown > 0 ? "Get ready" : opponent && !opponent.connected ? "Opponent offline" : "Race is on";
+    else if (view.tournamentOver) statusLine = view.winner === "you" ? "Tournament won" : "Tournament lost";
+    else if (view.winner === "you") statusLine = view.tournament ? `Round won · ${youWins}–${themWins}` : "You found it";
+    else statusLine = view.tournament ? `Round lost · ${youWins}–${themWins}` : "They found yours";
+  }
+
+  const iconBtn: CSSProperties = {
+    width: 38,
+    height: 38,
+    padding: 0,
+    flexShrink: 0,
+    borderRadius: 8,
+    border: `1px solid ${HILO_RULE}`,
+    background: "transparent",
+    color: HILO_CREAM,
+    fontFamily: CODE_MONO,
+    fontSize: 16,
+    fontWeight: 700,
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  };
+
+  const soundBtn = (
+    <button type="button" className="code-press hilo-press" onClick={toggleSound} aria-label={soundOn ? "Mute sound" : "Turn sound on"} aria-pressed={soundOn} style={iconBtn}>
+      <svg width="18" height="18" viewBox="0 0 20 20" aria-hidden="true">
+        <path d="M3 7.5h3l4-3.5v12l-4-3.5H3z" fill={HILO_CREAM} />
+        {soundOn ? (
+          <path d="M13 7a4.2 4.2 0 0 1 0 6M15.2 4.8a7.4 7.4 0 0 1 0 10.4" fill="none" stroke={HILO_CREAM} strokeWidth="1.6" strokeLinecap="round" />
+        ) : (
+          <path d="M13 7.5l5 5M18 7.5l-5 5" fill="none" stroke={HILO_RED} strokeWidth="1.8" strokeLinecap="round" />
+        )}
+      </svg>
+    </button>
+  );
+
+  const helpBtn = (
+    <button type="button" className="code-press hilo-press" onClick={() => setHowTo(true)} aria-label="How to play" style={iconBtn}>
+      ?
+    </button>
+  );
+
+  const toastNode = toast ? (
+    <div style={{ position: "absolute", left: 0, right: 0, ...(screen === "room" ? { top: shortLand ? 52 : 70 } : { bottom: 18 }), zIndex: 30, display: "flex", justifyContent: "center", pointerEvents: "none" }}>
+      <div
+        className="code-rise"
+        role="status"
+        style={{
+          maxWidth: "88%",
+          padding: "10px 14px",
+          borderRadius: 8,
+          background: HILO_CREAM,
+          color: HILO_INK,
+          fontFamily: CODE_MONO,
+          fontSize: 13,
+          fontWeight: 600,
+          boxShadow: "0 8px 20px rgba(0,0,0,0.45)",
+          wordBreak: "break-word",
+          textAlign: "center",
+        }}
+      >
+        {toast}
+      </div>
+    </div>
+  ) : null;
+
+  if (screen === "room" && !view) {
+    return (
+      <FeltShell center glow={false} plain={HILO_DESK} overlay={<WindowButton />}>
+        <div style={{ fontSize: 15, color: HILO_MUTED, fontFamily: CODE_MONO }}>
+          Connecting
+          <CodeDots />
+        </div>
+      </FeltShell>
+    );
+  }
+
+  if (screen === "room" && view) {
+    const bothHere = view.players.length === 2 && view.players.every((p) => p.connected);
+    const sheetMax = shortLand ? Math.max(320, Math.min(620, vp.w - 190)) : 440;
+    // Short portrait phones get a smaller keypad so the answer stays on screen.
+    const tight = !shortLand && vp.h < 700;
+    const hard = view.difficulty === "hard";
+    const over = view.phase === "finished";
+    const range = hiloRange(view.guesses);
+    const showRange = !hard || over;
+    const canRematch = mode === "bot" || (mode === "online" && bothHere && !view.tournamentOver && !dropped);
+    const againLabel = mode === "bot" ? "Play again" : view.tournament ? "Next round" : "Rematch";
+    const title = opponent ? opponent.name : "Your room";
+    const live = racing && !dropped;
+
+    const header = (
+      <div style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 10, padding: shortLand ? "6px 12px" : "12px 12px 10px", borderBottom: `1px solid ${HILO_RULE}` }}>
+        <button type="button" className="code-press hilo-press" onClick={askLeave} aria-label="Leave" style={iconBtn}>
+          ←
+        </button>
+        {opponent ? <AvatarBubble src={opponent.avatar} name={opponent.name} size={32} /> : null}
+        <div style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
+          <div style={{ fontSize: 16, fontWeight: 700, fontFamily: CODE_SERIF, color: HILO_CREAM, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{title}</div>
+          <div role="status" style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 700, fontFamily: CODE_MONO, color: dropped ? HILO_RED : live ? HILO_GOLD : HILO_MUTED, whiteSpace: "nowrap", overflow: "hidden" }}>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{statusLine}</span>
+            {view.phase === "waiting" || (view.phase === "secrets" && view.yourSecret != null) ? <CodeDots /> : null}
+          </div>
+        </div>
+        {view.phase === "playing" || over ? (
+          <div aria-label={`Race time ${hiloClock(elapsedMs)}`} style={{ fontFamily: CODE_MONO, fontSize: 18, fontWeight: 700, color: live ? HILO_GOLD : HILO_CREAM, fontVariantNumeric: "tabular-nums", padding: "0 4px" }}>
+            {hiloClock(elapsedMs)}
+          </div>
+        ) : null}
+        {helpBtn}
+        {soundBtn}
+      </div>
+    );
+
+    const lanes =
+      view.phase === "playing" || over ? (
+        <div style={{ flexShrink: 0, display: "flex", alignItems: "stretch", gap: 12, padding: shortLand ? "6px 12px" : "10px 12px", borderBottom: `1px solid ${HILO_RULE}`, background: "rgba(0,0,0,0.16)" }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <HiloLane name="You" count={view.yourCount} left={showRange ? range.left : null} tone="gold" />
+          </div>
+          {view.tournament || (mode === "bot" && youWins + themWins > 0) ? (
+            <div aria-label={`Score ${youWins} to ${themWins}`} style={{ flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", fontFamily: CODE_MONO }}>
+              <div style={{ fontSize: 16, fontWeight: 700, lineHeight: 1.1 }}>
+                {youWins}–{themWins}
+              </div>
+              {view.tournament ? <div style={{ fontSize: 10, color: HILO_MUTED, letterSpacing: 0.6 }}>TO 3</div> : null}
+            </div>
+          ) : null}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <HiloLane name={opponentName} count={view.theirCount} left={view.theirLeft} tone="cream" />
+          </div>
+        </div>
+      ) : null;
+
+    const rangeBlock = showRange ? (
+      <div style={{ width: "100%", maxWidth: 360, display: "flex", flexDirection: "column", gap: 6 }}>
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", fontFamily: CODE_MONO, fontWeight: 700, fontSize: shortLand ? 16 : 20, fontVariantNumeric: "tabular-nums" }}>
+          <span>{range.lo + 1}</span>
+          <span style={hiloLabel({ fontSize: 11 })}>{hiloLeftText(range.left)}</span>
+          <span>{range.hi - 1}</span>
+        </div>
+        <div aria-hidden="true" style={{ position: "relative", height: 10, borderRadius: 5, background: "rgba(245,240,230,0.12)" }}>
+          <div
+            className="hilo-bar"
+            style={{
+              position: "absolute",
+              top: 0,
+              bottom: 0,
+              left: `${(range.lo / HILO_MAX) * 100}%`,
+              width: `max(4px, ${(range.left / HILO_MAX) * 100}%)`,
+              borderRadius: 5,
+              background: over && view.winner === "you" ? HILO_GREEN : HILO_GOLD,
+            }}
+          />
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", fontFamily: CODE_MONO, fontSize: 11, color: HILO_MUTED }}>
+          <span>{HILO_MIN}</span>
+          <span>{HILO_MAX}</span>
+        </div>
+      </div>
+    ) : null;
+
+    const answer = lastGuess ? (
+      <div key={`ans-${view.yourCount}`} className={lastGuess.dir === "up" ? "hilo-up" : lastGuess.dir === "down" ? "hilo-down" : "code-rise"} role="status" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+        <div style={{ fontFamily: CODE_MONO, fontSize: shortLand ? 30 : 44, fontWeight: 700, lineHeight: 1, fontVariantNumeric: "tabular-nums", color: lastGuess.dir === "hit" ? HILO_GREEN : HILO_CREAM }}>{lastGuess.n}</div>
+        <div style={{ fontFamily: CODE_MONO, fontSize: shortLand ? 16 : 20, fontWeight: 700, letterSpacing: 1.5, color: lastGuess.dir === "hit" ? HILO_GREEN : HILO_GOLD }}>
+          {lastGuess.dir === "hit" ? "✓ EXACT" : lastGuess.dir === "up" ? "▲ HIGHER" : "▼ LOWER"}
+        </div>
+        {lastGuess.dir === "hit" ? null : (
+          <div style={{ fontSize: 13, color: HILO_MUTED }}>
+            Their number is {lastGuess.dir === "up" ? "higher" : "lower"} than {lastGuess.n}
+          </div>
+        )}
+      </div>
+    ) : null;
+
+    const chips = (list: HiloGuess[]) => (
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 5, justifyContent: "center", maxWidth: 380 }}>
+        {list.map((g, i) => (
+          <HiloChip key={i} guess={g} latest={i === list.length - 1} />
+        ))}
+      </div>
+    );
+
+    const numberLine = (label: string, n: number | null, tone: "gold" | "cream") => (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+        <div style={hiloLabel()}>{label}</div>
+        <div style={{ fontFamily: CODE_MONO, fontSize: 26, fontWeight: 700, color: tone === "gold" ? HILO_GOLD : HILO_CREAM, fontVariantNumeric: "tabular-nums" }}>{n == null ? "?" : n}</div>
+      </div>
+    );
+
+    let body: ReactNode = null;
+    if (view.phase === "secrets") {
+      body =
+        view.yourSecret == null ? (
+          <>
+            <div style={{ fontSize: 20, fontWeight: 700, fontFamily: CODE_SERIF }}>Hide a number</div>
+            <div style={{ fontSize: 14, lineHeight: 1.4, color: HILO_MUTED, maxWidth: 300 }}>
+              Any number from {HILO_MIN} to {HILO_MAX}. {opponentName} will race to find it while you hunt for theirs.
+            </div>
+            <div style={{ fontSize: 13, color: HILO_MUTED }}>
+              {opponent && opponent.locked ? `${opponentName} is ready.` : `${opponentName} is choosing.`} {hiloDifficultyBlurb(view.difficulty)}
+            </div>
+          </>
+        ) : (
+          <>
+            {numberLine("Your number", view.yourSecret, "gold")}
+            <div style={{ fontSize: 14, color: HILO_MUTED }}>
+              Hidden. Waiting for {opponentName}
+              <CodeDots />
+            </div>
+          </>
+        );
+    } else if (view.phase === "playing" && countdown > 0) {
+      body = (
+        <>
+          <div style={hiloLabel({ color: HILO_GOLD })}>Get ready</div>
+          <div key={countdown} className="hilo-count" aria-live="assertive" style={{ fontFamily: CODE_MONO, fontSize: shortLand ? 64 : 110, fontWeight: 700, lineHeight: 1, color: HILO_GOLD }}>
+            {countdown}
+          </div>
+          <div style={{ fontSize: 13, color: HILO_MUTED }}>You can type your first guess now.</div>
+        </>
+      );
+    } else if (view.phase === "playing") {
+      body = (
+        <>
+          {answer || (
+            <>
+              <div className="code-rise" style={{ fontFamily: CODE_MONO, fontSize: shortLand ? 30 : 44, fontWeight: 700, color: HILO_GOLD, lineHeight: 1 }}>GO</div>
+              <div style={{ fontSize: 14, color: HILO_MUTED }}>
+                Their number is between {HILO_MIN} and {HILO_MAX}.
+              </div>
+            </>
+          )}
+          {rangeBlock}
+          {hard ? (
+            <div style={{ fontSize: 13, color: HILO_MUTED }}>Hard: only the last answer is shown.</div>
+          ) : view.guesses.length > 1 && !shortLand ? (
+            chips(view.guesses.slice(0, -1).slice(-12))
+          ) : null}
+        </>
+      );
+    } else if (over) {
+      body = (
+        <>
+          <div style={{ display: "flex", gap: 28, justifyContent: "center" }}>
+            {numberLine("Their number", view.opponentSecret, "cream")}
+            {numberLine("Your number", view.yourSecret, "gold")}
+          </div>
+          {view.guesses.length ? (
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 5 }}>
+              <div style={hiloLabel()}>Your guesses</div>
+              {chips(view.guesses)}
+            </div>
+          ) : null}
+          {view.theirGuesses.length ? (
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 5 }}>
+              <div style={hiloLabel()}>{opponentName}'s guesses</div>
+              {chips(view.theirGuesses)}
+            </div>
+          ) : null}
+        </>
+      );
+    }
+
+    const entryBox = (
+      <div
+        key={`entry-${shake}`}
+        className={shake ? "code-shake" : undefined}
+        aria-label={entry ? `Typed ${entry}` : "Nothing typed"}
+        style={{
+          width: shortLand ? 96 : "100%",
+          flexShrink: 0,
+          height: shortLand ? 38 : tight ? 42 : 50,
+          boxSizing: "border-box",
+          borderRadius: 8,
+          border: `1.5px solid ${entry ? HILO_GOLD : HILO_RULE}`,
+          background: HILO_PANEL_DARK,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontFamily: CODE_MONO,
+          fontSize: shortLand ? 20 : tight ? 24 : 28,
+          fontWeight: 700,
+          letterSpacing: 3,
+          color: HILO_CREAM,
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        {entry || <span style={{ color: "rgba(245,240,230,0.28)", letterSpacing: 1, fontSize: shortLand ? 13 : 15, fontWeight: 600 }}>{view.phase === "secrets" ? "1 – 9999" : "your guess"}</span>}
+        <span className="hilo-caret" aria-hidden="true" style={{ width: 2, height: "55%", marginLeft: 2, background: HILO_GOLD, display: entry.length < 4 ? "block" : "none" }} />
+      </div>
+    );
+
+    const dockNote: CSSProperties = { minHeight: 32, display: "flex", alignItems: "center", justifyContent: "center", color: HILO_MUTED, fontSize: 14, fontWeight: 700, lineHeight: 1.35, textAlign: "center", padding: "4px 8px", fontFamily: CODE_MONO };
+    const dock = (
+      <div style={{ flexShrink: 0, width: "100%", padding: shortLand ? "6px 10px" : "10px 12px", boxSizing: "border-box", borderTop: `1px solid ${HILO_RULE}`, background: HILO_PANEL_DARK }}>
+        {error ? <div role="alert" style={{ color: HILO_RED, fontSize: 13, lineHeight: 1.4, textAlign: "center", marginBottom: 6 }}>{error}</div> : null}
+        {entryOpen ? (
+          <HiloPad
+            onDigit={typeDigit}
+            onDelete={eraseDigit}
+            onSubmit={submitEntry}
+            ready={!!entry && (view.phase === "secrets" || racing)}
+            submitLabel={view.phase === "secrets" ? (shortLand ? "Hide" : "Hide number") : "Guess"}
+            compact={shortLand}
+            tight={tight}
+            display={entryBox}
+          />
+        ) : dropped ? (
+          <div style={{ display: "flex", justifyContent: "center" }}>
+            <button
+              type="button"
+              className="code-press hilo-press"
+              onClick={() => {
+                setDropped(false);
+                setError("");
+                reconnectsRef.current = 0;
+                connect("rejoin");
+              }}
+              style={hiloBtn("gold")}
+            >
+              Rejoin
+            </button>
+          </div>
+        ) : over ? (
+          <div style={{ display: "flex", gap: 8, justifyContent: "center", maxWidth: 340, margin: "0 auto" }}>
+            <button type="button" className="code-press hilo-press" onClick={() => setResultOpen(true)} style={hiloBtn("ghost", { flex: 1, maxWidth: "none" })}>
+              Result
+            </button>
+            {canRematch ? (
+              <button type="button" className="code-press hilo-press" onClick={() => act({ type: "hiloAgain" })} style={hiloBtn("gold", { flex: 1, maxWidth: "none" })}>
+                {againLabel}
+              </button>
+            ) : null}
+          </div>
+        ) : view.phase === "secrets" && mode === "online" ? (
+          <div style={{ display: "flex", justifyContent: "center" }}>
+            <button
+              type="button"
+              className="code-press hilo-press"
+              onClick={() => {
+                setEntry(view && view.yourSecret != null ? String(view.yourSecret) : "");
+                act({ type: "hiloSecret", clear: true });
+              }}
+              style={hiloBtn("ghost", { width: "auto", height: 40, fontSize: 13 })}
+            >
+              Change number
+            </button>
+          </div>
+        ) : (
+          <div style={dockNote}>{statusLine}</div>
+        )}
+      </div>
+    );
+
+    const waitingBody =
+      view.phase === "waiting" ? (
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: shortLand ? 10 : 16, padding: 16, textAlign: "center" }}>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+            <div style={hiloLabel()}>Room</div>
+            <div style={{ fontFamily: CODE_MONO, fontSize: 34, fontWeight: 700, letterSpacing: 6, color: HILO_GOLD }}>{view.code}</div>
+          </div>
+          {view.players.length < 2 ? (
+            <>
+              <button type="button" className="code-press hilo-press" onClick={() => void shareInvite(view ? view.code : "")} style={hiloBtn("gold")}>
+                Invite a friend
+              </button>
+              <div style={{ fontSize: 13, lineHeight: 1.4, color: HILO_MUTED, maxWidth: 300 }}>
+                {view.status ? `${view.status}. ` : ""}Send the link. The game starts when they open it. Your room is also in the public list.
+              </div>
+            </>
+          ) : (
+            <div style={{ fontSize: 14, color: HILO_MUTED }}>{statusLine}</div>
+          )}
+          {view.host && view.players.length < 2 ? (
+            <div style={{ width: "100%", maxWidth: 340, display: "flex", flexDirection: "column", gap: 8, paddingTop: 10, borderTop: `1px dashed ${HILO_RULE}` }}>
+              <div style={hiloLabel()}>Match</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                {[false, true].map((asTournament) => {
+                  const on = !!view && !!view.tournament === asTournament;
+                  return (
+                    <button
+                      key={String(asTournament)}
+                      type="button"
+                      className="code-press hilo-press"
+                      aria-pressed={on}
+                      onClick={() => {
+                        if (!on) send({ type: "hiloTournament", tournament: asTournament });
+                      }}
+                      style={hiloBtn(on ? "gold" : "quiet", { flex: 1, height: 44, fontSize: 14 })}
+                    >
+                      {asTournament ? "Tournament" : "Duel"}
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                {(["easy", "hard"] as CodeDifficulty[]).map((id) => {
+                  const on = !!view && view.difficulty === id;
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      className="code-press hilo-press"
+                      aria-pressed={on}
+                      onClick={() => {
+                        if (!on) send({ type: "hiloDifficulty", difficulty: id });
+                      }}
+                      style={hiloBtn(on ? "gold" : "quiet", { flex: 1, height: 44, fontSize: 14 })}
+                    >
+                      {id === "hard" ? "Hard" : "Easy"}
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{ fontSize: 13, lineHeight: 1.4, color: HILO_MUTED, textAlign: "center" }}>
+                {view.tournament ? "First to 3 rounds. " : "One round. "}
+                {hiloDifficultyBlurb(view.difficulty === "hard" ? "hard" : "easy")}
+              </div>
+            </div>
+          ) : null}
+          {error ? <div role="alert" style={{ color: HILO_RED, fontSize: 13 }}>{error}</div> : null}
+        </div>
+      ) : null;
+
+    const won = view.winner === "you";
+    const matchOver = !!view.tournamentOver;
+    const resultLine = matchOver
+      ? won
+        ? `You won the tournament ${youWins}–${themWins}.`
+        : `${opponentName} won the tournament ${themWins}–${youWins}.`
+      : won
+        ? `You found the number in ${hiloGuessCount(view.yourCount)}.`
+        : `${opponentName} found your number in ${hiloGuessCount(view.theirCount)}.`;
+    const resultCard =
+      over && resultOpen ? (
+        <HiloOverlay onClose={() => setResultOpen(false)} label="Result">
+          <div style={{ fontFamily: CODE_MONO, fontSize: shortLand ? 22 : 28, fontWeight: 700, letterSpacing: 2, color: won ? HILO_GREEN : HILO_RED }}>
+            {matchOver ? (won ? "CHAMPION" : "DEFEATED") : won ? "YOU WIN" : "TOO SLOW"}
+          </div>
+          <div style={{ fontSize: 17, fontWeight: 700, fontFamily: CODE_SERIF, lineHeight: 1.3, maxWidth: 300 }}>{resultLine}</div>
+          <div style={{ display: "flex", gap: 28, justifyContent: "center" }}>
+            {numberLine("Their number", view.opponentSecret, "cream")}
+            {numberLine("Your number", view.yourSecret, "gold")}
+          </div>
+          <div style={{ fontSize: 13, color: HILO_MUTED, fontFamily: CODE_MONO }}>
+            {hiloClock(view.elapsed)} · You {hiloGuessCount(view.yourCount)} · {opponentName} {hiloGuessCount(view.theirCount)}
+          </div>
+          {!won && showRange ? <div style={{ fontSize: 13, color: HILO_MUTED }}>You had {hiloLeftText(range.left)}.</div> : null}
+          {view.tournament ? (
+            <div style={{ fontFamily: CODE_MONO, fontSize: 14, fontWeight: 700 }}>
+              You {youWins} – {themWins} {opponentName} <span style={{ color: HILO_MUTED, fontWeight: 400 }}>· first to 3</span>
+            </div>
+          ) : mode === "bot" && youWins + themWins > 1 ? (
+            <div style={{ fontFamily: CODE_MONO, fontSize: 13, fontWeight: 700 }}>
+              Session score {youWins}–{themWins}
+            </div>
+          ) : null}
+          {mode === "online" && !canRematch && !matchOver ? <div style={{ fontSize: 13, color: HILO_MUTED }}>{dropped ? "Connection lost." : `${opponentName} is away, so there is no rematch yet.`}</div> : null}
+          <div style={{ width: "100%", display: "flex", flexDirection: "column", alignItems: "center", gap: 8, paddingTop: 4 }}>
+            {canRematch ? (
+              <button type="button" className="code-press hilo-press" onClick={() => act({ type: "hiloAgain" })} style={hiloBtn("gold")}>
+                {againLabel}
+              </button>
+            ) : null}
+            <button type="button" className="code-press hilo-press" onClick={() => void shareResult()} style={hiloBtn(canRematch ? "ghost" : "gold")}>
+              Share result
+            </button>
+            <div style={{ display: "flex", gap: 8, width: "100%", maxWidth: 340 }}>
+              <button type="button" className="code-press hilo-press" onClick={() => setResultOpen(false)} style={hiloBtn("quiet", { flex: 1, height: 44, fontSize: 13 })}>
+                View board
+              </button>
+              <button type="button" className="code-press hilo-press" onClick={leaveRoom} style={hiloBtn("quiet", { flex: 1, height: 44, fontSize: 13 })}>
+                Leave
+              </button>
+            </div>
+          </div>
+        </HiloOverlay>
+      ) : null;
+
+    const leaveCard = confirmLeave ? (
+      <HiloOverlay onClose={() => setConfirmLeave(false)} label="Leave the game">
+        <div style={{ fontSize: 20, fontWeight: 700, fontFamily: CODE_SERIF }}>Leave this game?</div>
+        <div style={{ fontSize: 14, lineHeight: 1.4, color: HILO_MUTED, maxWidth: 280 }}>
+          {mode === "bot" ? "This round will be thrown away." : `The round ends for ${opponentName} too, and it cannot be resumed.`}
+        </div>
+        <button type="button" className="code-press hilo-press" onClick={() => setConfirmLeave(false)} style={hiloBtn("gold")}>
+          Keep playing
+        </button>
+        <button type="button" className="code-press hilo-press" onClick={leaveRoom} style={hiloBtn("quiet")}>
+          Leave
+        </button>
+      </HiloOverlay>
+    ) : null;
+
+    return (
+      <FeltShell
+        center={false}
+        glow={false}
+        plain={HILO_DESK}
+        overlay={
+          <>
+            <WindowButton />
+            <ProfileButton />
+          </>
+        }
+        style={{
+          padding: shortLand ? `${safeTop(8, 4)} 0 ${safeBottom(8, 6)}` : `${safeTop(78, 64)} 0 ${safeBottom(16, 12)}`,
+          justifyContent: "flex-start",
+          alignItems: "stretch",
+          overflowY: "hidden",
+        }}
+      >
+        <div style={{ flex: 1, minHeight: 0, width: "100%", maxWidth: sheetMax, margin: "0 auto", display: "flex", flexDirection: "column", ...HILO_SHEET }}>
+          {header}
+          {lanes}
+          {waitingBody ? (
+            waitingBody
+          ) : (
+            <>
+              <div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", alignItems: "center", padding: shortLand ? "8px 12px" : "14px 12px", boxSizing: "border-box", textAlign: "center" }}>
+                <div style={{ margin: "auto 0", width: "100%", display: "flex", flexDirection: "column", alignItems: "center", gap: shortLand ? 8 : 14 }}>{body}</div>
+              </div>
+              {dock}
+            </>
+          )}
+          {resultCard}
+          {leaveCard}
+          {howTo ? <HiloHowTo onClose={closeHowTo} /> : null}
+          {toastNode}
+        </div>
+      </FeltShell>
+    );
+  }
+
+  const sectionHead = (text: string) => (
+    <div style={{ width: "100%", display: "flex", alignItems: "center", gap: 10 }}>
+      <span style={{ flex: 1, height: 1, background: HILO_RULE }} />
+      <span style={hiloLabel()}>{text}</span>
+      <span style={{ flex: 1, height: 1, background: HILO_RULE }} />
+    </div>
+  );
+  const linkBtn: CSSProperties = {
+    minHeight: 44,
+    padding: "0 10px",
+    border: "none",
+    background: "transparent",
+    color: HILO_CREAM,
+    fontFamily: CODE_MONO,
+    fontSize: 13,
+    fontWeight: 700,
+    textDecoration: "underline",
+    cursor: "pointer",
+  };
+  const card: CSSProperties = { width: "100%", maxWidth: 340, boxSizing: "border-box", padding: 12, borderRadius: 8, background: "rgba(0,0,0,0.18)", border: `1px solid ${HILO_RULE}` };
+
+  return (
+    <FeltShell
+      center={false}
+      glow={false}
+      plain={HILO_DESK}
+      overlay={
+        <>
+          <WindowButton />
+          <ProfileButton />
+        </>
+      }
+      style={{
+        padding: shortLand ? `${safeTop(8, 4)} 16px ${safeBottom(10, 8)}` : `${safeTop(72, 56)} 16px ${safeBottom(18, 14)}`,
+        justifyContent: "flex-start",
+      }}
+    >
+      <div
+        style={{
+          width: "100%",
+          maxWidth: 420,
+          boxSizing: "border-box",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: shortLand ? 10 : 14,
+          textAlign: "center",
+          flex: shortLand ? undefined : 1,
+          padding: shortLand ? "8px 14px 12px" : "10px 16px 14px",
+          ...HILO_SHEET,
+          overflow: "visible",
+        }}
+      >
+        <div style={{ width: "100%", display: "flex", justifyContent: "flex-start" }}>
+          <button type="button" className="code-press hilo-press" onClick={onLeave} style={{ ...linkBtn, padding: "0 4px", textDecoration: "none" }}>
+            ← More games
+          </button>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, color: HILO_GOLD, fontSize: shortLand ? 18 : 22 }}>
+            <span aria-hidden="true">▲</span>
+            <div style={{ fontSize: shortLand ? 24 : 30, fontWeight: 700, color: HILO_CREAM, fontFamily: CODE_SERIF, lineHeight: 1.1 }}>Higher or lower</div>
+            <span aria-hidden="true">▼</span>
+          </div>
+          <div style={{ fontSize: 14, color: HILO_MUTED, lineHeight: 1.4 }}>Hide a number. Find theirs first. No turns: it is a race.</div>
+        </div>
+
+        {invite ? (
+          <div className="code-rise" style={{ ...card, border: `1.5px solid ${HILO_GOLD}`, display: "flex", flexDirection: "column", gap: 8, alignItems: "center" }}>
+            <div style={hiloLabel({ color: HILO_GOLD })}>You are invited · room {invite}</div>
+            {auth.user ? (
+              <div style={{ fontSize: 14, color: HILO_MUTED }}>
+                Joining
+                <CodeDots />
+              </div>
+            ) : (
+              <div style={{ fontSize: 14, lineHeight: 1.4 }}>Sign in below and you go straight to the room.</div>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                clearHiloJoin();
+                setInvite("");
+              }}
+              style={{ ...linkBtn, minHeight: 32, fontSize: 12, color: HILO_MUTED }}
+            >
+              Not now
+            </button>
+          </div>
+        ) : null}
+
+        {sectionHead("Play online")}
+        {auth.user ? (
+          <>
+            <button type="button" className="code-press hilo-press" style={hiloBtn("gold", { height: shortLand ? 42 : 50, fontSize: 16 })} disabled={busy} onClick={() => void createRoom()}>
+              {busy ? "Opening…" : "Create a room"}
+            </button>
+            {session ? (
+              <button
+                type="button"
+                className="code-press hilo-press"
+                style={hiloBtn("ghost", { height: 44 })}
+                disabled={busy}
+                onClick={() => {
+                  setBusy(true);
+                  setError("");
+                  reconnectsRef.current = 0;
+                  connect("rejoin");
+                }}
+              >
+                Rejoin your game
+              </button>
+            ) : null}
+            <div style={{ fontSize: 13, color: HILO_MUTED, lineHeight: 1.4, maxWidth: 320 }}>
+              Playing as {clerkNickname(auth.user)}. You pick duel or tournament in the room, then send a link.
+            </div>
+          </>
+        ) : (
+          <>
+            <button type="button" className="code-press hilo-press" style={hiloBtn("gold", { height: shortLand ? 42 : 50, fontSize: 16 })} disabled={signingIn || !auth.loaded} onClick={() => void signIn()}>
+              {signingIn ? "Opening Google…" : "Sign in with Google"}
+            </button>
+            <div style={{ fontSize: 13, color: HILO_MUTED, lineHeight: 1.4, maxWidth: 320 }}>Online races need a sign-in. The game against the computer below does not.</div>
+          </>
+        )}
+        {error ? <div role="alert" style={{ color: HILO_RED, fontSize: 13, lineHeight: 1.4 }}>{error}</div> : null}
+
+        <div style={{ width: "100%", maxWidth: 340, textAlign: "left" }}>
+          <div style={hiloLabel({ marginBottom: 6 })}>Open rooms</div>
+          {lobbies.length === 0 ? (
+            <div style={{ ...card, borderStyle: "dashed", color: HILO_MUTED, fontSize: 13, lineHeight: 1.4 }}>Nobody is waiting right now. Create a room, or race the computer below.</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {lobbies.map((lobby) => (
+                <div key={lobby.code} className="code-rise" style={{ ...card, padding: "8px 10px", display: "flex", alignItems: "center", gap: 10 }}>
+                  <AvatarBubble src={lobby.hostAvatar} name={lobby.host} size={34} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 15, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{lobby.host}</div>
+                    <div style={{ fontSize: 12, color: HILO_MUTED, fontFamily: CODE_MONO }}>
+                      {lobby.tournament ? "Tournament" : "Duel"} · {lobby.difficulty === "hard" ? "Hard" : "Easy"}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="code-press hilo-press"
+                    disabled={busy}
+                    onClick={() => {
+                      if (auth.user) void joinRoom(lobby.code);
+                      else setError("Sign in with Google to join a room.");
+                    }}
+                    style={hiloBtn("gold", { width: 76, height: 44, fontSize: 14 })}
+                  >
+                    Join
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {sectionHead("Play solo")}
+        <div style={{ ...card, display: "flex", flexDirection: "column", gap: 8, textAlign: "left" }}>
+          <span style={hiloLabel({ color: HILO_CREAM })}>Vs computer</span>
+          <div style={{ fontSize: 13, lineHeight: 1.35, color: HILO_MUTED }}>{HILO_BOT_NAME} hides a number and races you for yours. On Hard it is quicker and you see only the last answer.</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button type="button" className="code-press hilo-press" onClick={() => startBot("easy")} style={hiloBtn("ghost", { flex: 1, height: 44, fontSize: 14, padding: 0 })}>
+              Easy
+            </button>
+            <button type="button" className="code-press hilo-press" onClick={() => startBot("hard")} style={hiloBtn("ghost", { flex: 1, height: 44, fontSize: 14, padding: 0 })}>
+              Hard
+            </button>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 4, flexWrap: "wrap" }}>
+          <button type="button" onClick={() => setHowTo(true)} style={linkBtn}>
+            How to play
+          </button>
+          <button type="button" onClick={toggleSound} aria-pressed={soundOn} style={linkBtn}>
+            Sound: {soundOn ? "on" : "off"}
+          </button>
+        </div>
+        {howTo ? <HiloHowTo onClose={closeHowTo} fixed /> : null}
+        {toastNode}
+      </div>
+    </FeltShell>
+  );
+}
+
 export default function CardGame() {
   const [online, setOnline] = useState(() => !!pendingJoinCode());
   const [codeGame, setCodeGame] = useState(() => !!pendingCodeJoin());
+  const [hiloGame, setHiloGame] = useState(() => !pendingCodeJoin() && !!pendingHiloJoin());
   const [phase, setPhase] = useState<Phase>("lobby");
   const [lobbyView, setLobbyView] = useState<LobbyView>("main");
   const [soloSkin, setSoloSkin] = useState<TableSkinId>(() => readSoloLook(SOLO_SKIN_KEY, isTableSkin, "felt"));
@@ -17740,6 +19689,19 @@ export default function CardGame() {
     );
   }
 
+  if (hiloGame) {
+    return (
+      <VisualFrame>
+        <HiloGame
+          onLeave={() => {
+            setLobbyView("games");
+            setHiloGame(false);
+          }}
+        />
+      </VisualFrame>
+    );
+  }
+
   if (phase === "lobby") {
     return (
       <VisualFrame>
@@ -17753,6 +19715,10 @@ export default function CardGame() {
           onCodeGame={() => {
             setLobbyView("games");
             setCodeGame(true);
+          }}
+          onHiloGame={() => {
+            setLobbyView("games");
+            setHiloGame(true);
           }}
           soloSkin={soloSkin}
           soloBack={soloBack}

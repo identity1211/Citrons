@@ -11,6 +11,7 @@ const daily = require("./daily");
 const stripeBilling = require("./stripe-billing");
 const elimination = require("./elimination");
 const { createCodeGame } = require("./codegame");
+const { createHiloGame } = require("./hilo");
 const prize = require("./prize");
 
 push.init();
@@ -86,9 +87,15 @@ const codeGame = createCodeGame({
   sanitizeName,
   sanitizeAvatar,
   makeId: id,
-  cardCodeTaken: (code) => rooms.has(code),
-  leaveCard: (ws) => leave(ws, true),
-  releaseCardClerk: (clerkUserId) => releaseClerk(clerkUserId, null),
+  cardCodeTaken: (code) => rooms.has(code) || hiloGame.hasCode(code),
+  leaveCard: (ws) => {
+    leave(ws, true);
+    hiloGame.dropSocket(ws, true);
+  },
+  releaseCardClerk: (clerkUserId) => {
+    releaseClerk(clerkUserId, null);
+    hiloGame.dropClerk(clerkUserId);
+  },
   async onTournamentWin(_room, seat) {
     try {
       const email = await clerk.userEmail(seat && seat.clerkUserId);
@@ -98,6 +105,25 @@ const codeGame = createCodeGame({
       console.error("prize", err);
       return false;
     }
+  },
+});
+
+// Higher or lower: a two-player race. It has no prize, so there is no tournament hook.
+const hiloGame = createHiloGame({
+  send,
+  error,
+  identifyClerk,
+  sanitizeName,
+  sanitizeAvatar,
+  makeId: id,
+  codeTaken: (code) => rooms.has(code) || codeGame.hasCode(code),
+  leaveOthers: (ws) => {
+    leave(ws, true);
+    codeGame.dropSocket(ws, true);
+  },
+  releaseOthers: (clerkUserId) => {
+    releaseClerk(clerkUserId, null);
+    codeGame.dropClerk(clerkUserId);
   },
 });
 
@@ -172,7 +198,7 @@ function makeCode() {
 function uniqueCode() {
   for (let i = 0; i < 40; i++) {
     const code = makeCode();
-    if (!rooms.has(code) && !codeGame.hasCode(code)) return code;
+    if (!rooms.has(code) && !codeGame.hasCode(code) && !hiloGame.hasCode(code)) return code;
   }
   return makeCode() + makeCode();
 }
@@ -700,6 +726,7 @@ async function createRoom(ws, name, avatar, clerkToken, title, mode) {
   if (!auth) return;
   const clerkUserId = auth.userId;
   codeGame.dropClerk(clerkUserId);
+  hiloGame.dropClerk(clerkUserId);
   releaseClerk(clerkUserId, null);
   leave(ws, true);
   const code = uniqueCode();
@@ -744,6 +771,7 @@ async function joinRoom(ws, code, name, token, avatar, clerkToken, intent) {
   if (!auth) return;
   const clerkUserId = auth.userId;
   codeGame.dropClerk(clerkUserId);
+  hiloGame.dropClerk(clerkUserId);
   const want = String(intent || "").trim().toLowerCase();
   const elim = roomMode(room) === "elimination";
 
@@ -1615,7 +1643,14 @@ function onMessage(ws, data) {
     void codeGame.handle(ws, msg);
     return;
   }
-  if (type === "create" || type === "join" || type === "rejoin") codeGame.dropSocket(ws, true);
+  if (hiloGame.isHiloMessage(type)) {
+    void hiloGame.handle(ws, msg);
+    return;
+  }
+  if (type === "create" || type === "join" || type === "rejoin") {
+    codeGame.dropSocket(ws, true);
+    hiloGame.dropSocket(ws, true);
+  }
   const room = rooms.get(ws.roomCode);
   const player = room && room.seats.find((p) => p.id === ws.playerId);
   const spectator = room && roomSpectators(room).find((s) => s.id === ws.playerId);
@@ -1746,6 +1781,7 @@ setInterval(() => {
   }
   if (dropped) notifyLobbies();
   codeGame.sweep(now);
+  hiloGame.sweep(now);
 }, 60 * 1000);
 
 const server = http.createServer((req, res) => {
@@ -1948,6 +1984,7 @@ const server = http.createServer((req, res) => {
       service: "citrons",
       rooms: rooms.size,
       codeRooms: codeGame.count(),
+      hiloRooms: hiloGame.count(),
       waiting: [...rooms.values()].filter((r) => r.phase === "waiting").length,
       live: [...rooms.values()].filter((r) => roomLive(r)).length,
       clerk: clerk.clerkConfigured(),
@@ -1999,10 +2036,12 @@ wss.on("connection", (ws) => {
   ws.on("message", (data) => onMessage(ws, data));
   ws.on("close", () => {
     codeGame.dropSocket(ws, false);
+    hiloGame.dropSocket(ws, false);
     leave(ws);
   });
   ws.on("error", () => {
     codeGame.dropSocket(ws, false);
+    hiloGame.dropSocket(ws, false);
     leave(ws);
   });
 });
