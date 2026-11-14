@@ -278,7 +278,88 @@ async function oneRoomPerAccount() {
   console.log("hilo account tests ok");
 }
 
+async function rounds() {
+  const clock = { t: 5000000 };
+  const { game } = makeGame(clock);
+  const { host, guest } = await seated(game, { pace: "rounds", tournament: true });
+  assert(lastState(host).pace === "rounds", "the room keeps its pace");
+  await game.handle(guest, { type: "hiloPace", pace: "race" });
+  assert(lastMsg(guest).type === "error", "the pace is locked once two players sit");
+
+  await game.handle(host, { type: "hiloSecret", secret: "700" });
+  await game.handle(guest, { type: "hiloSecret", secret: "300" });
+  let h = lastState(host);
+  assert(h.phase === "playing" && h.startsIn === 0 && h.round === 1, "rounds start at once, without a countdown");
+
+  await game.handle(host, { type: "hiloGuess", guess: "5000" });
+  h = lastState(host);
+  assert(h.yourPending === 5000 && h.yourCount === 0 && h.guesses.length === 0, "a locked guess waits for the other one");
+  let g = lastState(guest);
+  assert(g.theirPending === true && g.theirCount === 0, "the opponent sees only that it is locked");
+  assert(!JSON.stringify(g).includes("5000"), "the locked number is absent from the other view");
+
+  await game.handle(host, { type: "hiloGuess", clear: true });
+  assert(lastState(host).yourPending == null && lastState(guest).theirPending === false, "a locked guess can be taken back");
+  await game.handle(host, { type: "hiloGuess", guess: "0" });
+  assert(lastMsg(host).type === "error", "a bad number is refused in rounds too");
+  await game.handle(host, { type: "hiloGuess", guess: "5000" });
+  await game.handle(host, { type: "hiloGuess", guess: "4000" });
+  assert(lastState(host).yourPending === 4000, "locking again replaces the guess");
+
+  await game.handle(guest, { type: "hiloGuess", guess: "500" });
+  h = lastState(host);
+  g = lastState(guest);
+  assert(h.round === 2 && h.yourPending == null && !h.theirPending, "both guesses open a new round");
+  assert(h.guesses.length === 1 && h.guesses[0].n === 4000 && h.guesses[0].dir === "down", "host got an answer");
+  assert(g.guesses.length === 1 && g.guesses[0].dir === "up", "guest got an answer in the same step");
+  assert(h.theirLeft === 9499 && g.theirLeft === 3999, "each sees how far the other narrowed the range");
+
+  // One exact guess wins the round.
+  await game.handle(host, { type: "hiloGuess", guess: "300" });
+  assert(lastState(host).phase === "playing", "an exact guess still waits for the other player");
+  await game.handle(guest, { type: "hiloGuess", guess: "600" });
+  h = lastState(host);
+  g = lastState(guest);
+  assert(h.phase === "finished" && h.winner === "you" && !h.draw && h.yourWins === 1, "the exact guess wins");
+  assert(g.winner === "them" && g.opponentSecret === 700 && g.theirGuesses.length === 2, "the loser sees the board");
+
+  // Two exact guesses in one round are a draw, and nobody scores.
+  await game.handle(host, { type: "hiloAgain" });
+  await game.handle(host, { type: "hiloSecret", secret: "10" });
+  await game.handle(guest, { type: "hiloSecret", secret: "20" });
+  assert(lastState(host).round === 1 && lastState(host).guesses.length === 0, "a new round starts clean");
+  await game.handle(guest, { type: "hiloGuess", guess: "10" });
+  await game.handle(host, { type: "hiloGuess", guess: "20" });
+  h = lastState(host);
+  g = lastState(guest);
+  assert(h.phase === "finished" && h.draw === true && h.winner === null, "both exact is a draw");
+  assert(g.draw === true && h.yourWins === 1 && h.theirWins === 0 && !h.tournamentOver, "a draw gives no point");
+  await game.handle(guest, { type: "hiloAgain" });
+  assert(lastState(guest).phase === "secrets" && lastState(guest).draw === false, "a draw can be replayed");
+
+  // Hard still sends only the last answer.
+  const { game: hardGame } = makeGame(clock);
+  const table = await seated(hardGame, { pace: "rounds", difficulty: "hard" });
+  await hardGame.handle(table.host, { type: "hiloSecret", secret: "700" });
+  await hardGame.handle(table.guest, { type: "hiloSecret", secret: "300" });
+  for (const n of ["5000", "2000"]) {
+    await hardGame.handle(table.host, { type: "hiloGuess", guess: n });
+    await hardGame.handle(table.guest, { type: "hiloGuess", guess: n });
+  }
+  h = lastState(table.host);
+  assert(h.yourCount === 2 && h.guesses.length === 1 && h.guesses[0].n === 2000, "hard rounds keep one answer");
+
+  // A seat that reconnects mid-round gets its locked guess back.
+  await hardGame.handle(table.host, { type: "hiloGuess", guess: "1000" });
+  const back = fakeWs();
+  const token = table.host.sent.find((m) => m.type === "hiloJoined").token;
+  await hardGame.handle(back, { type: "hiloRejoin", code: table.created.code, token, clerkToken: "user-a" });
+  assert(lastState(back).yourPending === 1000 && lastState(back).round === 3, "a rejoin keeps the locked guess");
+  console.log("hilo rounds tests ok");
+}
+
 race()
+  .then(rounds)
   .then(hard)
   .then(tournament)
   .then(oneRoomPerAccount)

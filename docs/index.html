@@ -13812,6 +13812,8 @@ type CodeLobbyInfo = {
   hostAvatar?: string;
   difficulty: CodeDifficulty;
   tournament?: boolean;
+  /** Higher or lower only. */
+  pace?: "race" | "rounds";
   count: number;
   max: number;
 };
@@ -16483,9 +16485,13 @@ type HiloDir = "up" | "down" | "hit";
 
 type HiloGuess = { n: number; dir: HiloDir };
 
+/** "race": guess as fast as you can. "rounds": each locks one guess and both answers open together. */
+type HiloPace = "race" | "rounds";
+
 type HiloView = {
   code: string;
   difficulty: CodeDifficulty;
+  pace?: HiloPace;
   phase: "waiting" | "secrets" | "playing" | "finished";
   host: boolean;
   yourSecret: number | null;
@@ -16498,7 +16504,11 @@ type HiloView = {
   theirCount: number;
   theirLeft: number | null;
   theirGuesses: HiloGuess[];
+  round?: number | null;
+  yourPending?: number | null;
+  theirPending?: boolean;
   winner: "you" | "them" | null;
+  draw?: boolean;
   tournament?: boolean;
   yourWins?: number;
   theirWins?: number;
@@ -16508,6 +16518,10 @@ type HiloView = {
 
 type HiloBot = {
   difficulty: CodeDifficulty;
+  pace: HiloPace;
+  /** Rounds only: your locked guess, waiting to be answered. */
+  pending: number | null;
+  draw: boolean;
   phase: "secrets" | "playing" | "finished";
   yourSecret: number | null;
   botSecret: number;
@@ -16660,6 +16674,23 @@ function hiloDifficultyBlurb(difficulty: CodeDifficulty): string {
   return difficulty === "hard"
     ? "Hard: you see only the last answer. Keep the range in your head."
     : "Easy: the screen keeps your range and every answer.";
+}
+
+function hiloPaceBlurb(pace: HiloPace | undefined): string {
+  return pace === "rounds"
+    ? "Rounds: each locks one guess, then both answers open together."
+    : "Race: you both guess as fast as you can.";
+}
+
+function hiloRoundCount(n: number): string {
+  return n === 1 ? "1 round" : `${n} rounds`;
+}
+
+/** The computer splits its range near the middle, never exactly. Hard stays closer to the middle. */
+function hiloBotPick(bot: HiloBot): number {
+  const span = bot.botHi - bot.botLo - 1;
+  const frac = bot.difficulty === "hard" ? 0.4 + Math.random() * 0.2 : 0.25 + Math.random() * 0.5;
+  return span <= 1 ? bot.botLo + 1 : Math.min(bot.botHi - 1, bot.botLo + 1 + Math.floor(frac * span));
 }
 
 /** Soft sine cues in the same voice as Secret code. A rising pair means higher, a falling pair means lower. */
@@ -16861,8 +16892,8 @@ function HiloHowTo({ onClose, fixed }: { onClose: () => void; fixed?: boolean })
         <div style={text}>Pick any number from 1 to 9999. Your opponent hides one too.</div>
       </div>
       <div style={step}>
-        <div style={hiloLabel({ color: HILO_GOLD })}>2 · Race</div>
-        <div style={text}>After the countdown you both guess at once. Nobody waits for a turn.</div>
+        <div style={hiloLabel({ color: HILO_GOLD })}>2 · Race or rounds</div>
+        <div style={text}>Race: after the countdown you both guess as fast as you can. Rounds: each locks one guess, then both answers open together.</div>
       </div>
       <div style={step}>
         <div style={hiloLabel({ color: HILO_GOLD })}>3 · Read the arrow</div>
@@ -16876,7 +16907,7 @@ function HiloHowTo({ onClose, fixed }: { onClose: () => void; fixed?: boolean })
         </div>
         <div style={text}>The arrow says where their number is from your guess. You see how fast they close in on yours, but not their guesses.</div>
       </div>
-      <div style={{ ...text, fontWeight: 700 }}>The first to hit the exact number wins.</div>
+      <div style={{ ...text, fontWeight: 700 }}>The first to hit the exact number wins. In rounds, two exact guesses at once are a draw.</div>
       <button type="button" className="code-press hilo-press" onClick={onClose} style={hiloBtn("gold")}>
         Got it
       </button>
@@ -17048,6 +17079,7 @@ function HiloGame({ onLeave }: { onLeave: () => void }) {
   /** Local clock time at which the online race starts, worked out from the server's relative times. */
   const [onlineStart, setOnlineStart] = useState(0);
   const [bot, setBot] = useState<HiloBot | null>(null);
+  const [botPace, setBotPace] = useState<HiloPace>("race");
   const [lobbies, setLobbies] = useState<CodeLobbyInfo[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -17302,9 +17334,12 @@ function HiloGame({ onLeave }: { onLeave: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screen]);
 
-  function newBotRound(prev: HiloBot | null, difficulty: CodeDifficulty): HiloBot {
+  function newBotRound(prev: HiloBot | null, difficulty: CodeDifficulty, pace: HiloPace): HiloBot {
     return {
       difficulty,
+      pace,
+      pending: null,
+      draw: false,
       phase: "secrets",
       yourSecret: null,
       botSecret: HILO_MIN + Math.floor(Math.random() * (HILO_MAX - HILO_MIN + 1)),
@@ -17322,7 +17357,7 @@ function HiloGame({ onLeave }: { onLeave: () => void }) {
   }
 
   function startBot(difficulty: CodeDifficulty) {
-    setBot(newBotRound(null, difficulty));
+    setBot(newBotRound(null, difficulty, botPace));
     setMode("bot");
     setScreen("room");
     setError("");
@@ -17334,13 +17369,18 @@ function HiloGame({ onLeave }: { onLeave: () => void }) {
       const n = msg.clear ? null : hiloParse(msg.secret);
       setBot((cur) => {
         if (!cur || cur.phase !== "secrets" || n == null) return cur;
-        return { ...cur, yourSecret: n, phase: "playing", startsAt: Date.now() + HILO_COUNTDOWN_MS };
+        // Rounds have nothing to race for, so they skip the 3-2-1.
+        return { ...cur, yourSecret: n, phase: "playing", startsAt: Date.now() + (cur.pace === "rounds" ? 0 : HILO_COUNTDOWN_MS) };
       });
       return;
     }
     if (msg.type === "hiloGuess") {
       const n = hiloParse(msg.guess);
       setBot((cur) => {
+        if (cur && cur.phase === "playing" && cur.pace === "rounds") {
+          if (msg.clear) return { ...cur, pending: null };
+          return n == null ? cur : { ...cur, pending: n };
+        }
         if (!cur || cur.phase !== "playing" || n == null || Date.now() < cur.startsAt) return cur;
         const dir = hiloCompare(cur.botSecret, n);
         const guesses = [...cur.guesses, { n, dir }];
@@ -17350,22 +17390,20 @@ function HiloGame({ onLeave }: { onLeave: () => void }) {
       return;
     }
     if (msg.type === "hiloAgain") {
-      setBot((cur) => (cur && cur.phase === "finished" ? newBotRound(cur, cur.difficulty) : cur));
+      setBot((cur) => (cur && cur.phase === "finished" ? newBotRound(cur, cur.difficulty, cur.pace) : cur));
     }
   }
 
-  // The computer splits its range near the middle, never exactly, and takes a human pause between guesses.
+  // In a race the computer takes a human pause between guesses.
   // Hard is quicker and closer to the middle: about 13 guesses in half a minute.
   useEffect(() => {
-    if (screen !== "room" || mode !== "bot" || !bot || bot.phase !== "playing") return;
+    if (screen !== "room" || mode !== "bot" || !bot || bot.phase !== "playing" || bot.pace === "rounds") return;
     const hard = bot.difficulty === "hard";
     const think = hard ? 1700 + Math.random() * 1100 : 2600 + Math.random() * 1800;
     const timer = window.setTimeout(() => {
       setBot((cur) => {
         if (!cur || cur.phase !== "playing" || cur.yourSecret == null) return cur;
-        const span = cur.botHi - cur.botLo - 1;
-        const frac = hard ? 0.4 + Math.random() * 0.2 : 0.25 + Math.random() * 0.5;
-        const n = span <= 1 ? cur.botLo + 1 : Math.min(cur.botHi - 1, cur.botLo + 1 + Math.floor(frac * span));
+        const n = hiloBotPick(cur);
         const dir = hiloCompare(cur.yourSecret, n);
         const botGuesses = [...cur.botGuesses, { n, dir }];
         if (dir === "hit") {
@@ -17377,6 +17415,41 @@ function HiloGame({ onLeave }: { onLeave: () => void }) {
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screen, mode, bot?.phase, bot?.botGuesses.length, bot?.round]);
+
+  // In rounds the computer answers a moment after you lock, and both guesses are judged together.
+  useEffect(() => {
+    if (screen !== "room" || mode !== "bot" || !bot || bot.phase !== "playing" || bot.pace !== "rounds" || bot.pending == null) return;
+    const timer = window.setTimeout(() => {
+      setBot((cur) => {
+        if (!cur || cur.phase !== "playing" || cur.pace !== "rounds" || cur.pending == null || cur.yourSecret == null) return cur;
+        const mine = cur.pending;
+        const dir = hiloCompare(cur.botSecret, mine);
+        const n = hiloBotPick(cur);
+        const botDir = hiloCompare(cur.yourSecret, n);
+        const next: HiloBot = {
+          ...cur,
+          pending: null,
+          guesses: [...cur.guesses, { n: mine, dir }],
+          botGuesses: [...cur.botGuesses, { n, dir: botDir }],
+          botLo: botDir === "hit" ? n - 1 : botDir === "up" ? Math.max(cur.botLo, n) : cur.botLo,
+          botHi: botDir === "hit" ? n + 1 : botDir === "down" ? Math.min(cur.botHi, n) : cur.botHi,
+        };
+        if (dir !== "hit" && botDir !== "hit") return next;
+        const draw = dir === "hit" && botDir === "hit";
+        return {
+          ...next,
+          phase: "finished",
+          endedAt: Date.now(),
+          draw,
+          winner: draw ? null : dir === "hit" ? "you" : "them",
+          yourWins: next.yourWins + (!draw && dir === "hit" ? 1 : 0),
+          theirWins: next.theirWins + (!draw && botDir === "hit" ? 1 : 0),
+        };
+      });
+    }, 700);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen, mode, bot?.phase, bot?.pending, bot?.round]);
 
   function act(msg: any) {
     if (mode === "bot") botAct(msg);
@@ -17391,6 +17464,7 @@ function HiloGame({ onLeave }: { onLeave: () => void }) {
       view = {
         code: "BOT",
         difficulty: bot.difficulty,
+        pace: bot.pace,
         phase: bot.phase,
         host: true,
         yourSecret: bot.yourSecret,
@@ -17406,7 +17480,11 @@ function HiloGame({ onLeave }: { onLeave: () => void }) {
         theirCount: bot.botGuesses.length,
         theirLeft: racing || over ? Math.max(1, bot.botHi - bot.botLo - 1) : null,
         theirGuesses: over ? bot.botGuesses : [],
+        round: bot.pace === "rounds" ? bot.guesses.length + (over ? 0 : 1) : null,
+        yourPending: racing ? bot.pending : null,
+        theirPending: racing && bot.pace === "rounds",
         winner: bot.winner,
+        draw: over && bot.draw,
         yourWins: bot.yourWins,
         theirWins: bot.theirWins,
         status: "",
@@ -17425,6 +17503,9 @@ function HiloGame({ onLeave }: { onLeave: () => void }) {
   const racing = playing && countdown === 0;
   const elapsedMs = !view ? 0 : view.phase === "finished" ? view.elapsed || 0 : racing ? Math.max(0, now - raceStart) : 0;
   const lastGuess = view && view.guesses.length ? view.guesses[view.guesses.length - 1] : null;
+  const byRounds = !!view && view.pace === "rounds";
+  const roundNo = Math.max(1, (view && view.round) || 1);
+  const pendingGuess = playing && byRounds && view && view.yourPending != null ? view.yourPending : null;
 
   // The race clock and the countdown run off one ticker.
   useEffect(() => {
@@ -17458,9 +17539,11 @@ function HiloGame({ onLeave }: { onLeave: () => void }) {
     } else if (playing && prev.phase !== "playing" && beat > 0) hiloSfx("tick");
     if (cur.phase === "finished" && prev.phase !== "finished") {
       const won = view.winner === "you";
+      const tied = !!view.draw;
       window.setTimeout(() => {
-        codeSfx(won ? "win" : "lose");
-        codeBuzz(won ? [30, 60, 30, 60, 80] : [120]);
+        if (tied) hiloSfx("go");
+        else codeSfx(won ? "win" : "lose");
+        codeBuzz(won || tied ? [30, 60, 30, 60, 80] : [120]);
       }, 150);
     } else if (cur.count === prev.count + 1 && lastGuess && lastGuess.dir !== "hit") {
       hiloSfx(lastGuess.dir === "up" ? "up" : "down");
@@ -17488,7 +17571,7 @@ function HiloGame({ onLeave }: { onLeave: () => void }) {
     leavingRef.current = false;
     try {
       const payload = await clerkPayload();
-      send({ type: "hiloCreate", ...payload, difficulty: "easy", tournament: false });
+      send({ type: "hiloCreate", ...payload, difficulty: "easy", tournament: false, pace: "race" });
     } catch (err) {
       setBusy(false);
       setError(clerkErrorText(err));
@@ -17572,7 +17655,7 @@ function HiloGame({ onLeave }: { onLeave: () => void }) {
     if (text) say(text);
   }
 
-  const entryOpen = !!view && !dropped && ((view.phase === "secrets" && view.yourSecret == null) || view.phase === "playing");
+  const entryOpen = !!view && !dropped && ((view.phase === "secrets" && view.yourSecret == null) || (view.phase === "playing" && pendingGuess == null));
 
   function typeDigit(digit: string) {
     if (!entryOpen || howTo || confirmLeave) return;
@@ -17652,10 +17735,12 @@ function HiloGame({ onLeave }: { onLeave: () => void }) {
   async function shareResult() {
     if (!view) return;
     const who = opponent ? opponent.name : "My opponent";
-    const text =
-      view.winner === "you"
-        ? `I found ${who}'s number in ${hiloGuessCount(view.yourCount)} (${hiloClock(view.elapsed)}) — Higher or lower on Citrons`
-        : `${who} found my number in ${hiloGuessCount(view.theirCount)} (${hiloClock(view.elapsed)}) — Higher or lower on Citrons`;
+    const took = byRounds ? "" : ` (${hiloClock(view.elapsed)})`;
+    const text = view.draw
+      ? `${who} and I found each other's number in the same round, after ${hiloRoundCount(view.yourCount)} — Higher or lower on Citrons`
+      : view.winner === "you"
+        ? `I found ${who}'s number in ${hiloGuessCount(view.yourCount)}${took} — Higher or lower on Citrons`
+        : `${who} found my number in ${hiloGuessCount(view.theirCount)}${took} — Higher or lower on Citrons`;
     const how = await codeShare(text, appUrl() || "https://citrons.lat/");
     if (how === "copied") say("Result copied");
     else if (how === "failed") say("Could not share from this device");
@@ -17670,7 +17755,20 @@ function HiloGame({ onLeave }: { onLeave: () => void }) {
     else if (view.status) statusLine = view.status;
     else if (view.phase === "waiting") statusLine = "Waiting for an opponent";
     else if (view.phase === "secrets") statusLine = view.yourSecret == null ? "Hide your number" : "Waiting";
-    else if (view.phase === "playing") statusLine = countdown > 0 ? "Get ready" : opponent && !opponent.connected ? "Opponent offline" : "Race is on";
+    else if (view.phase === "playing")
+      statusLine =
+        countdown > 0
+          ? "Get ready"
+          : opponent && !opponent.connected
+            ? "Opponent offline"
+            : !byRounds
+              ? "Race is on"
+              : pendingGuess != null
+                ? `Waiting for ${opponentName}`
+                : view.theirPending
+                  ? `${opponentName} is ready`
+                  : `Round ${roundNo}`;
+    else if (view.draw) statusLine = view.tournament ? `Draw · ${youWins}–${themWins}` : "Draw";
     else if (view.tournamentOver) statusLine = view.winner === "you" ? "Tournament won" : "Tournament lost";
     else if (view.winner === "you") statusLine = view.tournament ? `Round won · ${youWins}–${themWins}` : "You found it";
     else statusLine = view.tournament ? `Round lost · ${youWins}–${themWins}` : "They found yours";
@@ -17778,8 +17876,8 @@ function HiloGame({ onLeave }: { onLeave: () => void }) {
           </div>
         </div>
         {view.phase === "playing" || over ? (
-          <div aria-label={`Race time ${hiloClock(elapsedMs)}`} style={{ fontFamily: CODE_MONO, fontSize: 18, fontWeight: 700, color: live ? HILO_GOLD : HILO_CREAM, fontVariantNumeric: "tabular-nums", padding: "0 4px" }}>
-            {hiloClock(elapsedMs)}
+          <div aria-label={byRounds ? `Round ${roundNo}` : `Race time ${hiloClock(elapsedMs)}`} style={{ fontFamily: CODE_MONO, fontSize: 18, fontWeight: 700, color: live ? HILO_GOLD : HILO_CREAM, fontVariantNumeric: "tabular-nums", padding: "0 4px", whiteSpace: "nowrap" }}>
+            {byRounds ? `R${roundNo}` : hiloClock(elapsedMs)}
           </div>
         ) : null}
         {helpBtn}
@@ -17802,7 +17900,7 @@ function HiloGame({ onLeave }: { onLeave: () => void }) {
             </div>
           ) : null}
           <div style={{ flex: 1, minWidth: 0 }}>
-            <HiloLane name={opponentName} count={view.theirCount} left={view.theirLeft} tone="cream" />
+            <HiloLane name={opponentName} count={view.theirCount} left={view.theirLeft} tone="cream" note={byRounds && view.theirPending && pendingGuess == null ? "ready" : undefined} />
           </div>
         </div>
       ) : null;
@@ -17901,9 +17999,9 @@ function HiloGame({ onLeave }: { onLeave: () => void }) {
         <>
           {answer || (
             <>
-              <div className="code-rise" style={{ fontFamily: CODE_MONO, fontSize: shortLand ? 30 : roomy ? 64 : 44, fontWeight: 700, color: HILO_GOLD, lineHeight: 1 }}>GO</div>
-              <div style={{ fontSize: roomy ? 16 : 14, color: HILO_MUTED }}>
-                Their number is between {HILO_MIN} and {HILO_MAX}.
+              <div className="code-rise" style={{ fontFamily: CODE_MONO, fontSize: shortLand ? 30 : roomy ? 64 : 44, fontWeight: 700, color: HILO_GOLD, lineHeight: 1 }}>{byRounds ? "ROUND 1" : "GO"}</div>
+              <div style={{ fontSize: roomy ? 16 : 14, color: HILO_MUTED, maxWidth: 300 }}>
+                Their number is between {HILO_MIN} and {HILO_MAX}.{byRounds ? " Lock one guess. Both answers open together." : ""}
               </div>
             </>
           )}
@@ -17977,7 +18075,7 @@ function HiloGame({ onLeave }: { onLeave: () => void }) {
             onDelete={eraseDigit}
             onSubmit={submitEntry}
             ready={!!entry && (view.phase === "secrets" || racing)}
-            submitLabel={view.phase === "secrets" ? (shortLand ? "Hide" : "Hide number") : "Guess"}
+            submitLabel={view.phase === "secrets" ? (shortLand ? "Hide" : "Hide number") : byRounds ? "Lock" : "Guess"}
             compact={shortLand}
             tight={tight}
             display={entryBox}
@@ -17997,6 +18095,26 @@ function HiloGame({ onLeave }: { onLeave: () => void }) {
             >
               Rejoin
             </button>
+          </div>
+        ) : pendingGuess != null ? (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, flexWrap: "wrap" }}>
+            <div role="status" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, fontFamily: CODE_MONO }}>
+              <span style={hiloLabel({ fontSize: 11 })}>Locked in</span>
+              <span style={{ fontSize: shortLand ? 20 : 26, fontWeight: 700, color: HILO_GOLD, fontVariantNumeric: "tabular-nums", lineHeight: 1.1 }}>{pendingGuess}</span>
+            </div>
+            {mode === "online" ? (
+              <button
+                type="button"
+                className="code-press hilo-press"
+                onClick={() => {
+                  setEntry(String(pendingGuess));
+                  act({ type: "hiloGuess", clear: true });
+                }}
+                style={hiloBtn("ghost", { width: "auto", height: 40, fontSize: 13 })}
+              >
+                Change guess
+              </button>
+            ) : null}
           </div>
         ) : over ? (
           <div style={{ display: "flex", gap: 8, justifyContent: "center", maxWidth: 340, margin: "0 auto" }}>
@@ -18071,6 +18189,25 @@ function HiloGame({ onLeave }: { onLeave: () => void }) {
                 })}
               </div>
               <div style={{ display: "flex", gap: 8 }}>
+                {(["race", "rounds"] as HiloPace[]).map((id) => {
+                  const on = !!view && (view.pace === "rounds" ? "rounds" : "race") === id;
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      className="code-press hilo-press"
+                      aria-pressed={on}
+                      onClick={() => {
+                        if (!on) send({ type: "hiloPace", pace: id });
+                      }}
+                      style={hiloBtn(on ? "gold" : "quiet", { flex: 1, height: 44, fontSize: 14 })}
+                    >
+                      {id === "rounds" ? "Rounds" : "Race"}
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
                 {(["easy", "hard"] as CodeDifficulty[]).map((id) => {
                   const on = !!view && view.difficulty === id;
                   return (
@@ -18090,8 +18227,8 @@ function HiloGame({ onLeave }: { onLeave: () => void }) {
                 })}
               </div>
               <div style={{ fontSize: 13, lineHeight: 1.4, color: HILO_MUTED, textAlign: "center" }}>
-                {view.tournament ? "First to 3 rounds. " : "One round. "}
-                {hiloDifficultyBlurb(view.difficulty === "hard" ? "hard" : "easy")}
+                {view.tournament ? "First to 3 wins. " : "One game. "}
+                {hiloPaceBlurb(view.pace)} {hiloDifficultyBlurb(view.difficulty === "hard" ? "hard" : "easy")}
               </div>
             </div>
           ) : null}
@@ -18101,7 +18238,10 @@ function HiloGame({ onLeave }: { onLeave: () => void }) {
 
     const won = view.winner === "you";
     const matchOver = !!view.tournamentOver;
-    const resultLine = matchOver
+    const tied = !!view.draw;
+    const resultLine = tied
+      ? `You both found the number in round ${roundNo}. Nobody scores.`
+      : matchOver
       ? won
         ? `You won the tournament ${youWins}–${themWins}.`
         : `${opponentName} won the tournament ${themWins}–${youWins}.`
@@ -18111,8 +18251,8 @@ function HiloGame({ onLeave }: { onLeave: () => void }) {
     const resultCard =
       over && resultOpen ? (
         <HiloOverlay onClose={() => setResultOpen(false)} label="Result">
-          <div style={{ fontFamily: CODE_MONO, fontSize: shortLand ? 22 : 28, fontWeight: 700, letterSpacing: 2, color: won ? HILO_GREEN : HILO_RED }}>
-            {matchOver ? (won ? "CHAMPION" : "DEFEATED") : won ? "YOU WIN" : "TOO SLOW"}
+          <div style={{ fontFamily: CODE_MONO, fontSize: shortLand ? 22 : 28, fontWeight: 700, letterSpacing: 2, color: tied ? HILO_GOLD : won ? HILO_GREEN : HILO_RED }}>
+            {tied ? "DRAW" : matchOver ? (won ? "CHAMPION" : "DEFEATED") : won ? "YOU WIN" : byRounds ? "BEATEN" : "TOO SLOW"}
           </div>
           <div style={{ fontSize: 17, fontWeight: 700, fontFamily: CODE_SERIF, lineHeight: 1.3, maxWidth: 300 }}>{resultLine}</div>
           <div style={{ display: "flex", gap: 28, justifyContent: "center" }}>
@@ -18120,9 +18260,9 @@ function HiloGame({ onLeave }: { onLeave: () => void }) {
             {numberLine("Your number", view.yourSecret, "gold")}
           </div>
           <div style={{ fontSize: 13, color: HILO_MUTED, fontFamily: CODE_MONO }}>
-            {hiloClock(view.elapsed)} · You {hiloGuessCount(view.yourCount)} · {opponentName} {hiloGuessCount(view.theirCount)}
+            {byRounds ? hiloRoundCount(roundNo) : `${hiloClock(view.elapsed)} · You ${hiloGuessCount(view.yourCount)} · ${opponentName} ${hiloGuessCount(view.theirCount)}`}
           </div>
-          {!won && showRange ? <div style={{ fontSize: 13, color: HILO_MUTED }}>You had {hiloLeftText(range.left)}.</div> : null}
+          {!won && !tied && showRange ? <div style={{ fontSize: 13, color: HILO_MUTED }}>You had {hiloLeftText(range.left)}.</div> : null}
           {view.tournament ? (
             <div style={{ fontFamily: CODE_MONO, fontSize: 14, fontWeight: 700 }}>
               You {youWins} – {themWins} {opponentName} <span style={{ color: HILO_MUTED, fontWeight: 400 }}>· first to 3</span>
@@ -18276,7 +18416,7 @@ function HiloGame({ onLeave }: { onLeave: () => void }) {
             <div style={{ fontSize: shortLand ? 24 : 30, fontWeight: 700, color: HILO_CREAM, fontFamily: CODE_SERIF, lineHeight: 1.1 }}>Higher or lower</div>
             <span aria-hidden="true">▼</span>
           </div>
-          <div style={{ fontSize: 14, color: HILO_MUTED, lineHeight: 1.4 }}>Hide a number. Find theirs first. No turns: it is a race.</div>
+          <div style={{ fontSize: 14, color: HILO_MUTED, lineHeight: 1.4 }}>Hide a number. Find theirs first. Race in real time, or go round by round.</div>
         </div>
 
         {invite ? (
@@ -18326,7 +18466,7 @@ function HiloGame({ onLeave }: { onLeave: () => void }) {
               </button>
             ) : null}
             <div style={{ fontSize: 13, color: HILO_MUTED, lineHeight: 1.4, maxWidth: 320 }}>
-              Playing as {clerkNickname(auth.user)}. You pick duel or tournament in the room, then send a link.
+              Playing as {clerkNickname(auth.user)}. You pick race or rounds, duel or tournament in the room, then send a link.
             </div>
           </>
         ) : (
@@ -18351,7 +18491,7 @@ function HiloGame({ onLeave }: { onLeave: () => void }) {
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 700, fontSize: 15, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{lobby.host}</div>
                     <div style={{ fontSize: 12, color: HILO_MUTED, fontFamily: CODE_MONO }}>
-                      {lobby.tournament ? "Tournament" : "Duel"} · {lobby.difficulty === "hard" ? "Hard" : "Easy"}
+                      {lobby.tournament ? "Tournament" : "Duel"} · {lobby.pace === "rounds" ? "Rounds" : "Race"} · {lobby.difficulty === "hard" ? "Hard" : "Easy"}
                     </div>
                   </div>
                   <button
@@ -18375,7 +18515,16 @@ function HiloGame({ onLeave }: { onLeave: () => void }) {
         {sectionHead("Play solo")}
         <div style={{ ...card, display: "flex", flexDirection: "column", gap: 8, textAlign: "left" }}>
           <span style={hiloLabel({ color: HILO_CREAM })}>Vs computer</span>
-          <div style={{ fontSize: 13, lineHeight: 1.35, color: HILO_MUTED }}>{HILO_BOT_NAME} hides a number and races you for yours. On Hard it is quicker and you see only the last answer.</div>
+          <div style={{ fontSize: 13, lineHeight: 1.35, color: HILO_MUTED }}>
+            {HILO_BOT_NAME} hides a number and hunts for yours. {hiloPaceBlurb(botPace)} On Hard it plays sharper and you see only the last answer.
+          </div>
+          <div role="group" aria-label="Pace" style={{ display: "flex", gap: 8 }}>
+            {(["race", "rounds"] as HiloPace[]).map((id) => (
+              <button key={id} type="button" className="code-press hilo-press" aria-pressed={botPace === id} onClick={() => setBotPace(id)} style={hiloBtn(botPace === id ? "gold" : "quiet", { flex: 1, height: 40, fontSize: 13, padding: 0 })}>
+                {id === "rounds" ? "Rounds" : "Race"}
+              </button>
+            ))}
+          </div>
           <div style={{ display: "flex", gap: 8 }}>
             <button type="button" className="code-press hilo-press" onClick={() => startBot("easy")} style={hiloBtn("ghost", { flex: 1, height: 44, fontSize: 14, padding: 0 })}>
               Easy

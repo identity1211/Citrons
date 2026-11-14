@@ -23,6 +23,7 @@ const HILO_TYPES = new Set([
   "hiloSecret",
   "hiloGuess",
   "hiloDifficulty",
+  "hiloPace",
   "hiloAgain",
   "hiloTournament",
   "hiloLeave",
@@ -43,6 +44,14 @@ function parseNumber(raw) {
 
 function parseDifficulty(raw) {
   return String(raw || "").trim().toLowerCase() === "hard" ? "hard" : "easy";
+}
+
+/**
+ * "race": both guess as fast as they can. "rounds": each locks one guess, and the
+ * two answers open together, so nobody gains from typing faster.
+ */
+function parsePace(raw) {
+  return String(raw || "").trim().toLowerCase() === "rounds" ? "rounds" : "race";
 }
 
 function parseTournament(raw) {
@@ -112,6 +121,7 @@ function createHiloGame(deps) {
       type: "hiloState",
       code: room.code,
       difficulty: room.difficulty,
+      pace: room.pace,
       phase: room.phase,
       host: room.hostId === seat.id,
       min: MIN_NUMBER,
@@ -133,7 +143,12 @@ function createHiloGame(deps) {
       theirCount: opponent ? opponent.guesses.length : 0,
       theirLeft: opponent && (racing || over) ? left(opponent) : null,
       theirGuesses: over && opponent ? opponent.guesses.map((g) => ({ n: g.n, dir: g.dir })) : [],
+      // Rounds only. The opponent's locked guess stays on the server until both are in.
+      round: room.pace === "rounds" && (racing || over) ? room.round : null,
+      yourPending: racing && seat.pending != null ? seat.pending : null,
+      theirPending: !!(racing && opponent && opponent.pending != null),
       winner: room.winnerId ? (room.winnerId === seat.id ? "you" : "them") : null,
+      draw: over && !!room.draw,
       tournament: !!room.tournament,
       yourWins: seat.wins || 0,
       theirWins: opponent ? opponent.wins || 0 : 0,
@@ -160,6 +175,7 @@ function createHiloGame(deps) {
         host: host.name,
         hostAvatar: host.avatar || "",
         difficulty: room.difficulty,
+        pace: room.pace,
         tournament: !!room.tournament,
         count: room.seats.length,
         max: 2,
@@ -198,11 +214,14 @@ function createHiloGame(deps) {
     seat.lo = MIN_NUMBER - 1;
     seat.hi = MAX_NUMBER + 1;
     seat.lastGuessAt = 0;
+    seat.pending = null;
   }
 
   function startSecrets(room) {
     room.phase = "secrets";
     room.winnerId = null;
+    room.draw = false;
+    room.round = 1;
     room.startsAt = 0;
     room.endedAt = 0;
     room.status = "";
@@ -213,9 +232,47 @@ function createHiloGame(deps) {
     if (room.phase !== "secrets") return;
     if (room.seats.length < 2 || room.seats.some((s) => s.secret == null)) return;
     room.phase = "playing";
-    room.startsAt = now() + countdownMs;
+    // Rounds have nothing to race for, so they skip the 3-2-1.
+    room.startsAt = room.pace === "rounds" ? now() : now() + countdownMs;
     room.endedAt = 0;
     room.status = "";
+  }
+
+  /** Both guesses are in: answer them together. Two exact guesses in one round are a draw. */
+  function resolveRound(room, t) {
+    const hits = [];
+    for (const seat of room.seats) {
+      const opponent = room.seats.find((s) => s.id !== seat.id);
+      const n = seat.pending;
+      const dir = compare(opponent.secret, n);
+      seat.pending = null;
+      seat.guesses.push({ n, dir });
+      if (dir === "up") seat.lo = Math.max(seat.lo, n);
+      else if (dir === "down") seat.hi = Math.min(seat.hi, n);
+      else {
+        seat.lo = n - 1;
+        seat.hi = n + 1;
+        hits.push(seat);
+      }
+    }
+    if (hits.length === 0) {
+      room.round += 1;
+      return;
+    }
+    room.phase = "finished";
+    room.endedAt = t;
+    room.status = "";
+    if (hits.length > 1) {
+      room.winnerId = null;
+      room.draw = true;
+      return;
+    }
+    const winner = hits[0];
+    room.winnerId = winner.id;
+    if (room.tournament && !room.tournamentOver) {
+      winner.wins = (winner.wins || 0) + 1;
+      if (winner.wins >= TOURNAMENT_GOAL) room.tournamentOver = true;
+    }
   }
 
   function removeSeat(room, seat) {
@@ -236,6 +293,8 @@ function createHiloGame(deps) {
     if (room.phase !== "waiting") {
       room.phase = "waiting";
       room.winnerId = null;
+      room.draw = false;
+      room.round = 1;
       room.startsAt = 0;
       room.endedAt = 0;
       room.status = "Opponent left";
@@ -354,10 +413,13 @@ function createHiloGame(deps) {
       const room = {
         code: uniqueCode(),
         difficulty: parseDifficulty(msg.difficulty),
+        pace: parsePace(msg.pace),
         hostId: seat.id,
         phase: "waiting",
         seats: [seat],
         winnerId: null,
+        draw: false,
+        round: 1,
         startsAt: 0,
         endedAt: 0,
         tournament: parseTournament(msg.tournament),
@@ -437,6 +499,16 @@ function createHiloGame(deps) {
       notifyBrowsers();
       return;
     }
+    if (type === "hiloPace") {
+      if (room.hostId !== seat.id) return deps.error(ws, "Only the host can change the pace");
+      if (room.phase !== "waiting" || room.seats.length > 1) {
+        return deps.error(ws, "The pace is locked");
+      }
+      room.pace = parsePace(msg.pace);
+      broadcast(room);
+      notifyBrowsers();
+      return;
+    }
     if (type === "hiloTournament") {
       if (room.hostId !== seat.id) return deps.error(ws, "Only the host can change the match");
       if (room.phase !== "waiting" || room.seats.length > 1) {
@@ -468,6 +540,21 @@ function createHiloGame(deps) {
       const t = now();
       if (t < room.startsAt) return deps.error(ws, "Wait for the start");
       if (seat.guesses.length >= MAX_GUESSES) return deps.error(ws, "Too many guesses");
+      if (room.pace === "rounds") {
+        if (msg.clear) {
+          seat.pending = null;
+          broadcast(room);
+          return;
+        }
+        const locked = parseNumber(msg.guess);
+        if (locked == null) return deps.error(ws, "Pick a number from 1 to 9999");
+        const other = room.seats.find((s) => s.id !== seat.id);
+        if (!other || other.secret == null) return deps.error(ws, "Wait for both numbers");
+        seat.pending = locked;
+        if (other.pending != null) resolveRound(room, t);
+        broadcast(room);
+        return;
+      }
       // A double tap is dropped without a message, so it cannot flash an error mid-race.
       if (t - seat.lastGuessAt < guessGapMs) return;
       const n = parseNumber(msg.guess);
@@ -543,6 +630,7 @@ module.exports = {
   compare,
   parseNumber,
   parseDifficulty,
+  parsePace,
   MIN_NUMBER,
   MAX_NUMBER,
 };
