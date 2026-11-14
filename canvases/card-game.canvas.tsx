@@ -17635,7 +17635,9 @@ function HiloGame({ onLeave }: { onLeave: () => void }) {
     const bothHere = view.players.length === 2 && view.players.every((p) => p.connected);
     const sheetMax = shortLand ? Math.max(320, Math.min(620, vp.w - 190)) : 440;
     // Short portrait phones get a smaller keypad so the answer stays on screen.
-    const tight = !shortLand && vp.h < 700;
+    const tight = !shortLand && vp.h < 640;
+    // Tall phones have room for a bigger board.
+    const roomy = !shortLand && vp.h >= 720;
     const hard = view.difficulty === "hard";
     const over = view.phase === "finished";
     const range = hiloRange(view.guesses);
@@ -17690,12 +17692,12 @@ function HiloGame({ onLeave }: { onLeave: () => void }) {
 
     const rangeBlock = showRange ? (
       <div style={{ width: "100%", maxWidth: 360, display: "flex", flexDirection: "column", gap: 6 }}>
-        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", fontFamily: CODE_MONO, fontWeight: 700, fontSize: shortLand ? 16 : 20, fontVariantNumeric: "tabular-nums" }}>
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", fontFamily: CODE_MONO, fontWeight: 700, fontSize: shortLand ? 16 : roomy ? 28 : 20, fontVariantNumeric: "tabular-nums" }}>
           <span>{range.lo + 1}</span>
-          <span style={hiloLabel({ fontSize: 11 })}>{hiloLeftText(range.left)}</span>
+          <span style={hiloLabel({ fontSize: roomy ? 12 : 11 })}>{hiloLeftText(range.left)}</span>
           <span>{range.hi - 1}</span>
         </div>
-        <div aria-hidden="true" style={{ position: "relative", height: 10, borderRadius: 5, background: "rgba(245,240,230,0.12)" }}>
+        <div aria-hidden="true" style={{ position: "relative", height: roomy ? 14 : 10, borderRadius: 7, background: "rgba(245,240,230,0.12)" }}>
           <div
             className="hilo-bar"
             style={{
@@ -17704,7 +17706,7 @@ function HiloGame({ onLeave }: { onLeave: () => void }) {
               bottom: 0,
               left: `${(range.lo / HILO_MAX) * 100}%`,
               width: `max(4px, ${(range.left / HILO_MAX) * 100}%)`,
-              borderRadius: 5,
+              borderRadius: 7,
               background: over && view.winner === "you" ? HILO_GREEN : HILO_GOLD,
             }}
           />
@@ -17718,12 +17720,12 @@ function HiloGame({ onLeave }: { onLeave: () => void }) {
 
     const answer = lastGuess ? (
       <div key={`ans-${view.yourCount}`} className={lastGuess.dir === "up" ? "hilo-up" : lastGuess.dir === "down" ? "hilo-down" : "code-rise"} role="status" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
-        <div style={{ fontFamily: CODE_MONO, fontSize: shortLand ? 30 : 44, fontWeight: 700, lineHeight: 1, fontVariantNumeric: "tabular-nums", color: lastGuess.dir === "hit" ? HILO_GREEN : HILO_CREAM }}>{lastGuess.n}</div>
-        <div style={{ fontFamily: CODE_MONO, fontSize: shortLand ? 16 : 20, fontWeight: 700, letterSpacing: 1.5, color: lastGuess.dir === "hit" ? HILO_GREEN : HILO_GOLD }}>
+        <div style={{ fontFamily: CODE_MONO, fontSize: shortLand ? 30 : roomy ? 64 : 44, fontWeight: 700, lineHeight: 1, fontVariantNumeric: "tabular-nums", color: lastGuess.dir === "hit" ? HILO_GREEN : HILO_CREAM }}>{lastGuess.n}</div>
+        <div style={{ fontFamily: CODE_MONO, fontSize: shortLand ? 16 : roomy ? 28 : 20, fontWeight: 700, letterSpacing: 1.5, color: lastGuess.dir === "hit" ? HILO_GREEN : HILO_GOLD }}>
           {lastGuess.dir === "hit" ? "✓ EXACT" : lastGuess.dir === "up" ? "▲ HIGHER" : "▼ LOWER"}
         </div>
         {lastGuess.dir === "hit" ? null : (
-          <div style={{ fontSize: 13, color: HILO_MUTED }}>
+          <div style={{ fontSize: roomy ? 16 : 13, color: HILO_MUTED }}>
             Their number is {lastGuess.dir === "up" ? "higher" : "lower"} than {lastGuess.n}
           </div>
         )}
@@ -17782,8 +17784,8 @@ function HiloGame({ onLeave }: { onLeave: () => void }) {
         <>
           {answer || (
             <>
-              <div className="code-rise" style={{ fontFamily: CODE_MONO, fontSize: shortLand ? 30 : 44, fontWeight: 700, color: HILO_GOLD, lineHeight: 1 }}>GO</div>
-              <div style={{ fontSize: 14, color: HILO_MUTED }}>
+              <div className="code-rise" style={{ fontFamily: CODE_MONO, fontSize: shortLand ? 30 : roomy ? 64 : 44, fontWeight: 700, color: HILO_GOLD, lineHeight: 1 }}>GO</div>
+              <div style={{ fontSize: roomy ? 16 : 14, color: HILO_MUTED }}>
                 Their number is between {HILO_MIN} and {HILO_MAX}.
               </div>
             </>
@@ -18055,14 +18057,17 @@ function HiloGame({ onLeave }: { onLeave: () => void }) {
         center={false}
         glow={false}
         plain={HILO_DESK}
+        // Portrait: the corner buttons would cost a whole band above the board, and the header has its own controls.
         overlay={
-          <>
-            <WindowButton />
-            <ProfileButton />
-          </>
+          shortLand ? (
+            <>
+              <WindowButton />
+              <ProfileButton />
+            </>
+          ) : undefined
         }
         style={{
-          padding: shortLand ? `${safeTop(8, 4)} 0 ${safeBottom(8, 6)}` : `${safeTop(78, 64)} 0 ${safeBottom(16, 12)}`,
+          padding: shortLand ? `${safeTop(8, 4)} 0 ${safeBottom(8, 6)}` : `${safeTop(12, 6)} 0 ${safeBottom(10, 4)}`,
           justifyContent: "flex-start",
           alignItems: "stretch",
           overflowY: "hidden",
@@ -18076,7 +18081,7 @@ function HiloGame({ onLeave }: { onLeave: () => void }) {
           ) : (
             <>
               <div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", alignItems: "center", padding: shortLand ? "8px 12px" : "14px 12px", boxSizing: "border-box", textAlign: "center" }}>
-                <div style={{ margin: "auto 0", width: "100%", display: "flex", flexDirection: "column", alignItems: "center", gap: shortLand ? 8 : 14 }}>{body}</div>
+                <div style={{ margin: "auto 0", width: "100%", display: "flex", flexDirection: "column", alignItems: "center", gap: shortLand ? 8 : roomy ? 20 : 14 }}>{body}</div>
               </div>
               {dock}
             </>
